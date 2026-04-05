@@ -1,8 +1,8 @@
 # ui 模块 UML 类图（物理阶段）
 
-**源码根**：[`gis-desktop-win32/src/ui/`](../../../gis-desktop-win32/src/ui/)
+**源码根**：[`gis-desktop-win32/src/ui_engine/`](../../../gis-desktop-win32/src/ui_engine/)
 
-**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。当前仓库实现为**可编译桩**（`exec` 默认 `null` 后端立即返回），与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui/gdiplus_ui.h) 全局绘制 API **并存**，主程序仍可由 Win32 消息泵驱动。
+**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。当前仓库实现为**可编译桩**（`exec` 默认 `null` 后端立即返回），与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui_engine/gdiplus_ui.h) 全局绘制 API **并存**，主程序仍可由 Win32 消息泵驱动。
 
 ---
 
@@ -107,7 +107,7 @@ classDiagram
 
 ## 主窗口已实现区域（widgets_shell.h）
 
-与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型化 Widget（**抽象桩**，尚未接入 `IGuiPlatform` 实现树）。声明见 [`widgets_shell.h`](../../../gis-desktop-win32/src/ui/widgets_shell.h)（依赖 [`widgets.h`](../../../gis-desktop-win32/src/ui/widgets.h) 中的 `Window` 等）；需要一并包含时可使用 [`widgets_all.h`](../../../gis-desktop-win32/src/ui/widgets_all.h)。
+与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型化 Widget（**抽象桩**，尚未接入 `IGuiPlatform` 实现树）。声明见 [`widgets_shell.h`](../../../gis-desktop-win32/src/ui_engine/widgets_shell.h)（依赖 [`widgets.h`](../../../gis-desktop-win32/src/ui_engine/widgets.h) 中的 `Window` 等）；需要一并包含时可使用 [`widgets_all.h`](../../../gis-desktop-win32/src/ui_engine/widgets_all.h)。
 
 ```mermaid
 classDiagram

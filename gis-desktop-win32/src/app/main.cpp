@@ -8,9 +8,9 @@
 #include "app/resource.h"
 #include "app/ui_font.h"
 #include "core/app_log.h"
-#include "map/map_engine.h"
-#include "map/map_projection.h"
-#include "ui/gdiplus_ui.h"
+#include "map_engine/map_engine.h"
+#include "map_engine/map_projection.h"
+#include "ui_engine/gdiplus_ui.h"
 
 #pragma comment(lib, "comctl32.lib")
 

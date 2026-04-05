@@ -79,19 +79,19 @@ endif()
 
 add_executable(agis_desktop WIN32
   src/app/main.cpp
-  src/map/map_layer.cpp
-  src/map/map_layer_driver.cpp
-  src/map/map_layer_driver_gdal.cpp
-  src/map/map_document.cpp
-  src/map/map_engine.cpp
-  src/map/map_gpu.cpp
-  src/map/map_projection.cpp
+  src/map_engine/map_layer.cpp
+  src/map_engine/map_layer_driver.cpp
+  src/map_engine/map_layer_driver_gdal.cpp
+  src/map_engine/map_document.cpp
+  src/map_engine/map_engine.cpp
+  src/map_engine/map_gpu.cpp
+  src/map_engine/map_projection.cpp
   src/core/app_log.cpp
-  src/ui/app.cpp
-  src/ui/widget.cpp
-  src/ui/widgets.cpp
-  src/ui/widgets_shell.cpp
-  src/ui/gdiplus_ui.cpp
+  src/ui_engine/app.cpp
+  src/ui_engine/widget.cpp
+  src/ui_engine/widgets.cpp
+  src/ui_engine/widgets_shell.cpp
+  src/ui_engine/gdiplus_ui.cpp
 )
 
 target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src)

@@ -1,10 +1,10 @@
-#include "map/map_document.h"
-#include "map/map_engine.h"
+#include "map_engine/map_document.h"
+#include "map_engine/map_engine.h"
 
-#include "map/map_engine_internal.h"
-#include "map/map_utf8.h"
+#include "map_engine/map_engine_internal.h"
+#include "map_engine/map_utf8.h"
 
-#include "ui/gdiplus_ui.h"
+#include "ui_engine/gdiplus_ui.h"
 
 #include <algorithm>
 #include <cmath>

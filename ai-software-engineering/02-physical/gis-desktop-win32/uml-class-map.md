@@ -1,8 +1,8 @@
 # map 模块 UML 类图（物理阶段）
 
-**源码根**：[`gis-desktop-win32/src/map/`](../../../gis-desktop-win32/src/map/)（`map_engine.*`、`map_gpu.*`、`map_projection.*`）。
+**源码根**：[`gis-desktop-win32/src/map_engine/`](../../../gis-desktop-win32/src/map_engine/)（`map_engine.*`、`map_gpu.*`、`map_projection.*`）。
 
-**说明**：`MapLayer` 的 GDAL 具体实现类仅在 [`map_engine.cpp`](../../../gis-desktop-win32/src/map/map_engine.cpp) 的 `agis_detail` 命名空间中定义，未暴露在公开头文件中；物理层类图仍列出二者以便与 `std::unique_ptr<MapLayer>` 所有权关系对齐。
+**说明**：`MapLayer` 的 GDAL 具体实现类仅在 [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) 的 `agis_detail` 命名空间中定义，未暴露在公开头文件中；物理层类图仍列出二者以便与 `std::unique_ptr<MapLayer>` 所有权关系对齐。
 
 ---
 
@@ -248,4 +248,4 @@ classDiagram
 
 ## 与 mapping 交叉引用
 
-实现符号 → 源码路径见 [mapping.md](mapping.md) 中 `src/map/` 相关行；本图侧重 **类型关系与模块边界**，字段级行为以 [spec.md](spec.md) 为准。
+实现符号 → 源码路径见 [mapping.md](mapping.md) 中 `src/map_engine/` 相关行；本图侧重 **类型关系与模块边界**，字段级行为以 [spec.md](spec.md) 为准。

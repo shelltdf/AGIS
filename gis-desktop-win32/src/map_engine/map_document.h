@@ -1,7 +1,7 @@
 #pragma once
 
-#include "map/map_layer.h"
-#include "map/map_projection.h"
+#include "map_engine/map_layer.h"
+#include "map_engine/map_projection.h"
 
 #include <memory>
 #include <vector>

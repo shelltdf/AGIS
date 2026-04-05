@@ -4,8 +4,8 @@
 
 #include <string>
 
-#include "map/map_document.h"
-#include "map/map_gpu.h"
+#include "map_engine/map_document.h"
+#include "map_engine/map_gpu.h"
 
 /** 地图引擎：文档、图层列表 UI、地图宿主窗口状态与 GDAL 图层工厂（单例）。 */
 class MapEngine {

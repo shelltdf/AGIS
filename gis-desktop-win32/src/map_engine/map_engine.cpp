@@ -1,7 +1,7 @@
-#include "map/map_engine.h"
+#include "map_engine/map_engine.h"
 
-#include "map/map_engine_internal.h"
-#include "map/map_utf8.h"
+#include "map_engine/map_engine_internal.h"
+#include "map_engine/map_utf8.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,7 +21,7 @@
 #include "app/resource.h"
 #include "app/ui_font.h"
 #include "core/app_log.h"
-#include "ui/gdiplus_ui.h"
+#include "ui_engine/gdiplus_ui.h"
 
 #pragma comment(lib, "comdlg32.lib")
 
@@ -70,7 +70,7 @@ static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
 
 #if GIS_DESKTOP_HAVE_GDAL
 
-#include "map/map_layer_driver_gdal.h"
+#include "map_engine/map_layer_driver_gdal.h"
 
 namespace agis_detail {
 

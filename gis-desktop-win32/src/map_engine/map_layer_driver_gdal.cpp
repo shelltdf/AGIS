@@ -1,10 +1,10 @@
-#include "map/map_layer_driver_gdal.h"
+#include "map_engine/map_layer_driver_gdal.h"
 
 #if GIS_DESKTOP_HAVE_GDAL
 
-#include "map/map_engine_internal.h"
-#include "map/map_layer.h"
-#include "map/map_utf8.h"
+#include "map_engine/map_engine_internal.h"
+#include "map_engine/map_layer.h"
+#include "map_engine/map_utf8.h"
 
 #include "cpl_conv.h"
 #include "gdal_priv.h"
