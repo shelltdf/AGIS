@@ -105,6 +105,119 @@ classDiagram
 
 ---
 
+## 主窗口已实现区域（widgets_shell.h）
+
+与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型化 Widget（**抽象桩**，尚未接入 `IGuiPlatform` 实现树）。声明见 [`widgets_shell.h`](../../../gis-desktop-win32/src/ui/widgets_shell.h)（依赖 [`widgets.h`](../../../gis-desktop-win32/src/ui/widgets.h) 中的 `Window` 等）；需要一并包含时可使用 [`widgets_all.h`](../../../gis-desktop-win32/src/ui/widgets_all.h)。
+
+```mermaid
+classDiagram
+  direction TB
+
+  class Widget {
+    <<abstract>>
+  }
+
+  class Window {
+    +setTitle(title) void
+  }
+
+  class MainFrame
+  class MenuBarWidget
+  class ToolBarWidget
+  class StatusBarWidget
+
+  class DockArea {
+    +dockEdge() DockEdge
+  }
+
+  class DockButtonStrip
+  class DockView
+  class DockPanel
+
+  class LayerDockPanel
+  class PropsDockPanel
+
+  class Splitter {
+    +orientation() SplitterOrientation
+  }
+
+  class Canvas2D
+  class MapCanvas2D
+
+  class ShortcutHelpPanel
+  class LayerVisibilityPanel
+  class MapZoomBar
+  class MapHintOverlay
+  class MapCenterHintOverlay
+
+  class DialogWindow
+  class LayerDriverDialog
+  class LogWindow
+
+  class PopupMenu
+  class LayerListContextMenu
+  class MapContextMenu
+  class LogPanel
+
+  Widget <|-- Window
+  Window <|-- MainFrame
+  Window <|-- DialogWindow
+  DialogWindow <|-- LayerDriverDialog
+  Window <|-- LogWindow
+
+  Widget <|-- MenuBarWidget
+  Widget <|-- ToolBarWidget
+  Widget <|-- StatusBarWidget
+
+  Widget <|-- DockArea
+  Widget <|-- DockButtonStrip
+  Widget <|-- DockView
+  Widget <|-- DockPanel
+  DockPanel <|-- LayerDockPanel
+  DockPanel <|-- PropsDockPanel
+
+  Widget <|-- Splitter
+
+  Widget <|-- Canvas2D
+  Canvas2D <|-- MapCanvas2D
+
+  Widget <|-- ShortcutHelpPanel
+  Widget <|-- LayerVisibilityPanel
+  Widget <|-- MapZoomBar
+  Widget <|-- MapHintOverlay
+  Widget <|-- MapCenterHintOverlay
+
+  Widget <|-- PopupMenu
+  PopupMenu <|-- LayerListContextMenu
+  PopupMenu <|-- MapContextMenu
+  Widget <|-- LogPanel
+```
+
+| `agis::ui` 类型 | 实现侧（当前 Win32） |
+|-----------------|----------------------|
+| `MainFrame` | 主窗口类 `AGISMainFrame`，`g_hwndMain` |
+| `MenuBarWidget` | `BuildMenu()` / `SetMenu` 顶层菜单 |
+| `ToolBarWidget` | `CreateMainToolbar`，`IDC_MAIN_TOOLBAR` |
+| `StatusBarWidget` | 底部 `STATUSCLASSNAME`，`g_hwndStatus` |
+| `DockArea` + `DockButtonStrip` + `DockView` | 左/右 Dock 布局带；缘条按钮 `IDC_LAYER_DOCK_STRIP_BTN` / `IDC_PROPS_DOCK_STRIP_BTN` |
+| `LayerDockPanel` | `AGISLayerPane`，图层列表 `IDC_LAYER_LIST` |
+| `PropsDockPanel` | `AGISPropsPane`，属性 EDIT/按钮 `IDC_PROPS_*` |
+| `Splitter` | `kSplitterW` 拖拽调左右 Dock 与地图宽度 |
+| `MapCanvas2D` | `AGISMapHost`，`g_hwndMap` |
+| `ShortcutHelpPanel` | `IDC_MAP_SHORTCUT_TOGGLE` / `IDC_MAP_SHORTCUT_EDIT` |
+| `LayerVisibilityPanel` | `IDC_MAP_VIS_TOGGLE` / `IDC_MAP_VIS_GRID` |
+| `MapZoomBar` | `IDC_MAP_SCALE_TEXT`、`IDC_MAP_FIT` / `ORIGIN` / `RESET`、缩放 ± |
+| `MapHintOverlay` | `UiPaintMapHintOverlay` 右下提示 |
+| `MapCenterHintOverlay` | `UiPaintMapCenterHint` 中央提示 |
+| `LayerDriverDialog` | `AGISLayerDriverDlg`，`ShowLayerDriverDialog` / `LayerDriverDlgProc` |
+| `LogWindow` | `AGISLogWindow`，`ShowLogDialog` |
+| `LogPanel` | 日志窗内 `IDC_LOG_EDIT` / `IDC_LOG_COPY` |
+| `LayerListContextMenu` | 图层列表 `WM_CONTEXTMENU` → `ID_LAYER_CTX_*` |
+| `MapContextMenu` | 地图区右键占位（`WM_CONTEXTMENU` 当前无菜单） |
+| `PopupMenu` | 右键弹出基类（`CreatePopupMenu` / `TrackPopupMenu`） |
+
+---
+
 ## 过程式 GDI+ API（gdiplus_ui.h）
 
 与 **`agis::ui` 类层次独立**，供当前主窗口自绘 Dock / 地图叠加层等：

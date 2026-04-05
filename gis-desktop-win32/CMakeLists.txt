@@ -90,6 +90,7 @@ add_executable(agis_desktop WIN32
   src/ui/app.cpp
   src/ui/widget.cpp
   src/ui/widgets.cpp
+  src/ui/widgets_shell.cpp
   src/ui/gdiplus_ui.cpp
 )
 
