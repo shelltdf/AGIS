@@ -1,8 +1,8 @@
 # ui 模块 UML 类图（物理阶段）
 
-**源码根**：[`gis-desktop-win32/src/ui_engine/`](../../../gis-desktop-win32/src/ui_engine/)
+**源码根**：[`ui_engine/`](../../../ui_engine/)（仓库根目录，与 `gis-desktop-win32` 并列）
 
-**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。**`App` 为进程内单例**（`App::instance()`），可 **`addRootWidget` 注册多棵顶层根 Widget**；`setPlatform` / `exec()` 均作用于同一实例。**`exec()`** 若**尚未注册任何根 Widget**则返回 **`kExitNoRootWidgets`（错误退出）**；否则内部调用各平台 `runEventLoop`，即**操作系统消息循环封装在 `IGuiPlatform` 实现中**。未设置平台时 `exec` 在通过根 Widget 校验后使用 `null` 后端；`IGuiPlatform::ok()` 可由平台覆盖（如 Win32 演示窗体创建失败）。与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui_engine/gdiplus_ui.h) 全局绘制 API **并存**，主程序也可仍由 Win32 消息泵自管。
+**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。**`App` 为进程内单例**（`App::instance()`），可 **`addRootWidget` 注册多棵顶层根 Widget**；`setPlatform` / `exec()` 均作用于同一实例。**`exec()`** 若**尚未注册任何根 Widget**则返回 **`kExitNoRootWidgets`（错误退出）**；否则内部调用各平台 `runEventLoop`，即**操作系统消息循环封装在 `IGuiPlatform` 实现中**。未设置平台时 `exec` 在通过根 Widget 校验后使用 `null` 后端；`IGuiPlatform::ok()` 可由平台覆盖（如 Win32 演示窗体创建失败）。与现有 [`gdiplus_ui.h`](../../../ui_engine/gdiplus_ui.h) 全局绘制 API **并存**，主程序也可仍由 Win32 消息泵自管。
 
 ---
 
@@ -56,10 +56,10 @@ classDiagram
 
 | 文件 | 平台 | 说明 |
 |------|------|------|
-| [`platform_windows.h` / `platform_windows.cpp`](../../../gis-desktop-win32/src/ui_engine/platform_windows.h) | Windows | `GetMessage` / `DispatchMessage`；演示壳 `PlatformWindows(AppLaunchParams)` |
-| [`platform_xlib.h` / `platform_xlib.cpp`](../../../gis-desktop-win32/src/ui_engine/platform_xlib.h) | Linux（默认） | Xlib `Display*`，轮询 `XPending`（占位，需窗口后补全） |
-| [`platform_xcb.h` / `platform_xcb.cpp`](../../../gis-desktop-win32/src/ui_engine/platform_xcb.h) | Linux（`-DAGIS_UI_USE_XCB=ON`） | `xcb_poll_for_event` 轮询 |
-| [`platform_cocoa.h` / `platform_cocoa.mm`](../../../gis-desktop-win32/src/ui_engine/platform_cocoa.h) | macOS | `NSApplication` 主循环 |
+| [`platform_windows.h` / `platform_windows.cpp`](../../../ui_engine/platform_windows.h) | Windows | `GetMessage` / `DispatchMessage`；演示壳 `PlatformWindows(AppLaunchParams)` |
+| [`platform_xlib.h` / `platform_xlib.cpp`](../../../ui_engine/platform_xlib.h) | Linux（默认） | Xlib `Display*`，轮询 `XPending`（占位，需窗口后补全） |
+| [`platform_xcb.h` / `platform_xcb.cpp`](../../../ui_engine/platform_xcb.h) | Linux（`-DAGIS_UI_USE_XCB=ON`） | `xcb_poll_for_event` 轮询 |
+| [`platform_cocoa.h` / `platform_cocoa.mm`](../../../ui_engine/platform_cocoa.h) | macOS | `NSApplication` 主循环 |
 
 CMake 按 `WIN32` / `APPLE` / `UNIX` 只编译当前平台对应源并链接（Linux X11 需 `FindX11`，XCB 需 `libxcb`）。
 
@@ -74,7 +74,7 @@ CMake 按 `WIN32` / `APPLE` / `UNIX` 只编译当前平台对应源并链接（L
 
 ## 通用 Widget 继承树（widget.h / widget_core.h）
 
-可复用基元；实现见 [`widgets.cpp`](../../../gis-desktop-win32/src/ui_engine/widgets.cpp)。
+可复用基元；实现见 [`widgets.cpp`](../../../ui_engine/widgets.cpp)。
 
 ```mermaid
 classDiagram
@@ -146,7 +146,7 @@ classDiagram
 
 ## AGIS 主框架壳层 + 主程序私有（widgets_mainframe.h / app/ui_private.h）
 
-与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型（**抽象桩**）。声明在 [`widgets_mainframe.h`](../../../gis-desktop-win32/src/ui_engine/widgets_mainframe.h)（内部已 `#include` [`widget_core.h`](../../../gis-desktop-win32/src/ui_engine/widget_core.h)）；与主窗口 HWND 强绑定的类型见 [`ui_private.h`](../../../gis-desktop-win32/src/app/ui_private.h)；实现见 [`widgets_mainframe.cpp`](../../../gis-desktop-win32/src/ui_engine/widgets_mainframe.cpp)。[`widgets_all.h`](../../../gis-desktop-win32/src/ui_engine/widgets_all.h) 一次包含通用 + 主框架 + 私有。
+与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型（**抽象桩**）。声明在 [`widgets_mainframe.h`](../../../ui_engine/widgets_mainframe.h)（内部已 `#include` [`widget_core.h`](../../../ui_engine/widget_core.h)）；与主窗口 HWND 强绑定的类型见 [`ui_private.h`](../../../gis-desktop-win32/src/app/ui_private.h)；实现见 [`widgets_mainframe.cpp`](../../../ui_engine/widgets_mainframe.cpp)。[`widgets_all.h`](../../../ui_engine/widgets_all.h) 一次包含通用 + 主框架 + 私有。
 
 ```mermaid
 classDiagram

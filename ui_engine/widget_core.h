@@ -5,6 +5,7 @@
  * 本工程（AGIS 主窗口、地图、Dock 等）专用类型见 `widgets_mainframe.h`。
  */
 
+#include "ui_engine/export.h"
 #include "ui_engine/widget.h"
 
 #include <functional>
@@ -16,7 +17,7 @@ namespace agis::ui {
 enum class SplitterOrientation { kVertical, kHorizontal };
 
 /** 顶层窗口（类似 QMainWindow / QWidget 窗口顶层）。 */
-class Window : public Widget {
+class AGIS_UI_API Window : public Widget {
  public:
   Window() = default;
 
@@ -30,14 +31,14 @@ class Window : public Widget {
 };
 
 /** 分组框 / 简单容器边框（类似 QGroupBox / QFrame）。 */
-class Frame : public Widget {
+class AGIS_UI_API Frame : public Widget {
  public:
   Frame() = default;
   void paintEvent(PaintContext& ctx) override;
 };
 
 /** 静态文本（类似 QLabel）。 */
-class Label : public Widget {
+class AGIS_UI_API Label : public Widget {
  public:
   Label() = default;
 
@@ -51,7 +52,7 @@ class Label : public Widget {
 };
 
 /** 按钮（类似 QPushButton）。 */
-class PushButton : public Widget {
+class AGIS_UI_API PushButton : public Widget {
  public:
   PushButton() = default;
 
@@ -71,7 +72,7 @@ class PushButton : public Widget {
 };
 
 /** 单行编辑（类似 QLineEdit）。 */
-class LineEdit : public Widget {
+class AGIS_UI_API LineEdit : public Widget {
  public:
   LineEdit() = default;
 
@@ -85,7 +86,7 @@ class LineEdit : public Widget {
 };
 
 /** 可滚动视口容器（类似 QScrollArea 的壳；滚动条与视口内容由后端实现）。 */
-class ScrollArea : public Widget {
+class AGIS_UI_API ScrollArea : public Widget {
  public:
   ScrollArea() = default;
 
@@ -99,7 +100,7 @@ class ScrollArea : public Widget {
 };
 
 /** 分割条（可拖拽调节相邻区域尺寸）。 */
-class Splitter : public Widget {
+class AGIS_UI_API Splitter : public Widget {
  public:
   Splitter() = default;
 
@@ -113,7 +114,7 @@ class Splitter : public Widget {
 };
 
 /** 通用二维画布表面（平移/缩放语义由宿主实现）。 */
-class Canvas2D : public Widget {
+class AGIS_UI_API Canvas2D : public Widget {
  public:
   Canvas2D() = default;
   void paintEvent(PaintContext& ctx) override;
@@ -122,7 +123,7 @@ class Canvas2D : public Widget {
 /**
  * 对话框窗口基类（实现侧：`WS_POPUP` | `WS_CAPTION` | `WS_SYSMENU`，owner 上模态消息循环）。
  */
-class DialogWindow : public Window {
+class AGIS_UI_API DialogWindow : public Window {
  public:
   DialogWindow() = default;
   void paintEvent(PaintContext& ctx) override;
@@ -132,7 +133,7 @@ class DialogWindow : public Window {
  * 弹出菜单抽象（实现侧：`CreatePopupMenu` / `TrackPopupMenu`）。
  * 不具持久矩形，仅占位类型以便与 HMENU 生命周期在设计上对齐。
  */
-class PopupMenu : public Widget {
+class AGIS_UI_API PopupMenu : public Widget {
  public:
   PopupMenu() = default;
   void paintEvent(PaintContext& ctx) override;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui_engine/export.h"
 #include "ui_engine/ui_types.h"
 
 #include <memory>
@@ -15,7 +16,7 @@ class ScrollArea;
  * 绘制与输入由各平台后端在 realize 后对接原生控件或自绘表面。
  * 层次关系：仅通过 parent 的 addChild(std::unique_ptr<Widget>) 建立所有权与 parent 指针。
  */
-class Widget {
+class AGIS_UI_API Widget {
  public:
   Widget() = default;
   virtual ~Widget();

@@ -19,7 +19,7 @@ namespace agis::ui {
  *
  * 可在首次 `exec()` 前调用 `setPlatform` 覆盖默认实现（例如 Windows 演示壳需传入 `HINSTANCE`）。
  */
-class App {
+class AGIS_UI_API App {
  public:
   static App& instance();
 

@@ -19,6 +19,15 @@ endif()
 option(AGIS_USE_GDAL "Link GDAL for raster/vector layers (needs PROJ + GDAL install or bundled GDAL source)" ON)
 option(AGIS_BUNDLE_GDAL "If no GDAL is found, build from ../3rdparty/gdal-3.12.3 (requires PROJ in CMAKE_PREFIX_PATH)" ON)
 
+option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static" OFF)
+option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
+
+# ui_engine 位于仓库根目录，与 gis-desktop-win32 并列（`AGIS/ui_engine/`）
+set(AGIS_UI_ENGINE_DIR "${CMAKE_SOURCE_DIR}/../ui_engine")
+if(NOT EXISTS "${AGIS_UI_ENGINE_DIR}/app.cpp")
+  message(FATAL_ERROR "ui_engine sources not found at ${AGIS_UI_ENGINE_DIR} (expected sibling of gis-desktop-win32).")
+endif()
+
 # 从源码安装后的 GDAL 前缀（与捆绑源码二选一）
 set(AGIS_GDAL_PREFIX "" CACHE PATH
   "GDAL install prefix from a source install (contains lib/cmake/gdal/). Ignored if bundled build is used.")
@@ -81,6 +90,82 @@ if(AGIS_USE_GDAL)
   endif()
 endif()
 
+# --- ui_engine: 独立库（静态 / 动态由 AGIS_UI_ENGINE_SHARED 切换）---
+set(_agis_ui_engine_sources
+  ${AGIS_UI_ENGINE_DIR}/app.cpp
+  ${AGIS_UI_ENGINE_DIR}/widget.cpp
+  ${AGIS_UI_ENGINE_DIR}/widgets.cpp
+  ${AGIS_UI_ENGINE_DIR}/widgets_mainframe.cpp
+)
+if(WIN32)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/gdiplus_ui.cpp)
+endif()
+if(WIN32)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_windows.cpp)
+elseif(APPLE)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_cocoa.mm)
+elseif(UNIX)
+  if(AGIS_UI_USE_XCB)
+    find_path(AGIS_XCB_INCLUDE_DIR NAMES xcb/xcb.h)
+    find_library(AGIS_XCB_LIBRARY NAMES xcb)
+    if(NOT AGIS_XCB_INCLUDE_DIR OR NOT AGIS_XCB_LIBRARY)
+      message(FATAL_ERROR "AGIS_UI_USE_XCB=ON but libxcb not found (set AGIS_XCB_INCLUDE_DIR / AGIS_XCB_LIBRARY)")
+    endif()
+    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_xcb.cpp)
+  else()
+    find_package(X11 REQUIRED)
+    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_xlib.cpp)
+  endif()
+endif()
+
+if(AGIS_UI_ENGINE_SHARED)
+  add_library(agis_ui_engine SHARED ${_agis_ui_engine_sources})
+else()
+  add_library(agis_ui_engine STATIC ${_agis_ui_engine_sources})
+endif()
+
+set_target_properties(agis_ui_engine PROPERTIES OUTPUT_NAME "agis_ui_engine")
+
+# 使 `#include "ui_engine/..."` 生效：包含目录为仓库根（与 `ui_engine/` 目录并列）
+target_include_directories(agis_ui_engine PUBLIC ${CMAKE_SOURCE_DIR}/..)
+# `widgets_mainframe.cpp` 依赖 `app/ui_private.h`（实现仍在 ui_engine 库内）
+target_include_directories(agis_ui_engine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+if(AGIS_UI_ENGINE_SHARED)
+  target_compile_definitions(agis_ui_engine PRIVATE AGIS_UI_EXPORTS)
+else()
+  target_compile_definitions(agis_ui_engine PUBLIC AGIS_UI_STATIC=1)
+endif()
+
+if(WIN32)
+  target_compile_definitions(agis_ui_engine PRIVATE UNICODE _UNICODE NOMINMAX)
+endif()
+
+if(WIN32)
+  # PUBLIC：静态库时使用者需同链 Win32/GDI+；动态库时重复链接通常可接受。
+  target_link_libraries(agis_ui_engine PUBLIC comctl32 user32 gdi32 gdiplus shell32)
+elseif(APPLE)
+  target_link_libraries(agis_ui_engine PUBLIC "-framework" Cocoa)
+elseif(UNIX)
+  if(AGIS_UI_USE_XCB)
+    target_include_directories(agis_ui_engine PUBLIC ${AGIS_XCB_INCLUDE_DIR})
+    target_link_libraries(agis_ui_engine PUBLIC ${AGIS_XCB_LIBRARY})
+    target_compile_definitions(agis_ui_engine PRIVATE AGIS_UI_USE_XCB=1)
+  else()
+    target_link_libraries(agis_ui_engine PUBLIC X11::X11)
+  endif()
+endif()
+
+if(MSVC)
+  target_compile_options(agis_ui_engine PRIVATE /utf-8)
+endif()
+
+if(AGIS_UI_ENGINE_SHARED)
+  message(STATUS "AGIS: agis_ui_engine = SHARED")
+else()
+  message(STATUS "AGIS: agis_ui_engine = STATIC")
+endif()
+
 add_executable(agis_desktop WIN32
   src/app/main.cpp
   src/map_engine/map_layer.cpp
@@ -91,38 +176,9 @@ add_executable(agis_desktop WIN32
   src/map_engine/map_gpu.cpp
   src/map_engine/map_projection.cpp
   src/core/app_log.cpp
-  src/ui_engine/app.cpp
-  src/ui_engine/widget.cpp
-  src/ui_engine/widgets.cpp
-  src/ui_engine/widgets_mainframe.cpp
-  src/ui_engine/gdiplus_ui.cpp
 )
 
-if(WIN32)
-  target_sources(agis_desktop PRIVATE src/ui_engine/platform_windows.cpp)
-elseif(APPLE)
-  target_sources(agis_desktop PRIVATE src/ui_engine/platform_cocoa.mm)
-  target_link_libraries(agis_desktop PRIVATE "-framework" "Cocoa")
-elseif(UNIX)
-  option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
-  if(AGIS_UI_USE_XCB)
-    find_path(AGIS_XCB_INCLUDE_DIR NAMES xcb/xcb.h)
-    find_library(AGIS_XCB_LIBRARY NAMES xcb)
-    if(NOT AGIS_XCB_INCLUDE_DIR OR NOT AGIS_XCB_LIBRARY)
-      message(FATAL_ERROR "AGIS_UI_USE_XCB=ON but libxcb not found (set AGIS_XCB_INCLUDE_DIR / AGIS_XCB_LIBRARY)")
-    endif()
-    target_sources(agis_desktop PRIVATE src/ui_engine/platform_xcb.cpp)
-    target_include_directories(agis_desktop PRIVATE ${AGIS_XCB_INCLUDE_DIR})
-    target_link_libraries(agis_desktop PRIVATE ${AGIS_XCB_LIBRARY})
-    target_compile_definitions(agis_desktop PRIVATE AGIS_UI_USE_XCB=1)
-  else()
-    find_package(X11 REQUIRED)
-    target_sources(agis_desktop PRIVATE src/ui_engine/platform_xlib.cpp)
-    target_link_libraries(agis_desktop PRIVATE X11::X11)
-  endif()
-endif()
-
-target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/..)
 
 set_target_properties(agis_desktop PROPERTIES
   OUTPUT_NAME "AGIS"
@@ -132,6 +188,7 @@ set_target_properties(agis_desktop PROPERTIES
 target_compile_definitions(agis_desktop PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 
 target_link_libraries(agis_desktop PRIVATE
+  agis_ui_engine
   comctl32
   comdlg32
   user32
@@ -164,49 +221,32 @@ if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
   endif()
 endif()
 
+if(WIN32 AND AGIS_UI_ENGINE_SHARED)
+  add_custom_command(TARGET agis_desktop POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:agis_ui_engine>
+      $<TARGET_FILE_DIR:agis_desktop>)
+endif()
+
 if(MSVC)
   target_sources(agis_desktop PRIVATE app.manifest)
   target_compile_options(agis_desktop PRIVATE /utf-8)
 endif()
 
-# 独立演示：仅链接 ui_engine；Windows 下另含 GDI+ 与 Win32 平台实现。
-set(_ui_engine_demo_sources
-  src/app/ui_engine_demo.cpp
-  src/app/ui_engine_demo_main.cpp
-  src/ui_engine/app.cpp
-  src/ui_engine/widget.cpp
-  src/ui_engine/widgets.cpp
-  src/ui_engine/widgets_mainframe.cpp
-)
+# 独立演示：链接 agis_ui_engine（GDI+ / 平台实现已在库内）。
 if(WIN32)
-  list(APPEND _ui_engine_demo_sources src/ui_engine/gdiplus_ui.cpp)
-endif()
-
-if(WIN32)
-  add_executable(ui_engine_demo WIN32 ${_ui_engine_demo_sources})
+  add_executable(ui_engine_demo WIN32
+    src/app/ui_engine_demo.cpp
+    src/app/ui_engine_demo_main.cpp
+  )
 else()
-  add_executable(ui_engine_demo ${_ui_engine_demo_sources})
+  add_executable(ui_engine_demo
+    src/app/ui_engine_demo.cpp
+    src/app/ui_engine_demo_main.cpp
+  )
 endif()
 
-if(WIN32)
-  target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_windows.cpp)
-elseif(APPLE)
-  target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_cocoa.mm)
-  target_link_libraries(ui_engine_demo PRIVATE "-framework" "Cocoa")
-elseif(UNIX)
-  if(AGIS_UI_USE_XCB)
-    target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_xcb.cpp)
-    target_include_directories(ui_engine_demo PRIVATE ${AGIS_XCB_INCLUDE_DIR})
-    target_link_libraries(ui_engine_demo PRIVATE ${AGIS_XCB_LIBRARY})
-    target_compile_definitions(ui_engine_demo PRIVATE AGIS_UI_USE_XCB=1)
-  else()
-    find_package(X11 REQUIRED)
-    target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_xlib.cpp)
-    target_link_libraries(ui_engine_demo PRIVATE X11::X11)
-  endif()
-endif()
-
-target_include_directories(ui_engine_demo PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(ui_engine_demo PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/..)
 if(WIN32)
   set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
 endif()
@@ -217,12 +257,22 @@ endif()
 
 if(WIN32)
   target_link_libraries(ui_engine_demo PRIVATE
+    agis_ui_engine
     comctl32
     user32
     gdi32
     gdiplus
     shell32
   )
+else()
+  target_link_libraries(ui_engine_demo PRIVATE agis_ui_engine)
+endif()
+
+if(WIN32 AND AGIS_UI_ENGINE_SHARED)
+  add_custom_command(TARGET ui_engine_demo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:agis_ui_engine>
+      $<TARGET_FILE_DIR:ui_engine_demo>)
 endif()
 
 if(MSVC)

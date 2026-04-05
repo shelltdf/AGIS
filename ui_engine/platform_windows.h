@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui_engine/export.h"
 #include "ui_engine/app_launch_params.h"
 #include "ui_engine/platform_gui.h"
 
@@ -12,7 +13,7 @@ class PlatformWindows;
  * 演示壳构造 `PlatformWindows(AppLaunchParams)` 仅在定义 `AGIS_BUILD_UI_ENGINE_DEMO` 时于 `platform_windows.cpp` 实现；
  * 进程入口见 `ui_engine_demo_main.cpp`（在 TU 内使用系统入口类型，再填入 `AppLaunchParams`）。
  */
-class PlatformWindows : public IGuiPlatform {
+class AGIS_UI_API PlatformWindows : public IGuiPlatform {
  public:
   PlatformWindows();
   explicit PlatformWindows(const AppLaunchParams& launch);
