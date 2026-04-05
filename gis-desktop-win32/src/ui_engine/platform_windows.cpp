@@ -1,22 +1,19 @@
 #include "ui_engine/platform_windows.h"
 
-#include "ui_engine/app.h"
-
-#include <windows.h>
-
 #if defined(AGIS_BUILD_UI_ENGINE_DEMO)
 #include "app/ui_engine_demo.h"
+#endif
+#include "ui_engine/app.h"
 #include "ui_engine/gdiplus_ui.h"
 
-#include <memory>
 #include <string>
-#endif
+#include <windows.h>
+
 
 namespace agis::ui {
 
 PlatformWindows::PlatformWindows() = default;
 
-#if defined(AGIS_BUILD_UI_ENGINE_DEMO)
 
 namespace {
 
@@ -49,8 +46,12 @@ void DemoPaintClient(HDC hdc, const RECT& client) {
 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, RGB(20, 24, 32));
+#if defined(AGIS_BUILD_UI_ENGINE_DEMO)
   const std::wstring line =
       FormatUiEngineDemoStatusLine(App::instance(), App::instance().primaryRootWidget());
+#else
+  const std::wstring line = L"";
+#endif
   RECT rcText{client.left + 12, client.bottom - 72, client.right - 12, client.bottom - 36};
   DrawTextW(hdc, line.c_str(), static_cast<int>(line.size()), &rcText, DT_LEFT | DT_WORDBREAK);
 }
@@ -109,12 +110,25 @@ PlatformWindows::PlatformWindows(const AppLaunchParams& launch)
   }
 }
 
-#endif  // AGIS_BUILD_UI_ENGINE_DEMO
 
 PlatformWindows::~PlatformWindows() {
-#if defined(_WIN32)
-  detail::PlatformWindowsReleaseDemoResources(this);
-#endif
+  if (!this || this->mode_ != PlatformWindows::Mode::UiEngineDemo) {
+    return;
+  }
+  if (this->main_window_) {
+    const HWND hwnd = static_cast<HWND>(this->main_window_);
+    if (IsWindow(hwnd)) {
+      DestroyWindow(hwnd);
+    }
+  }
+  this->main_window_ = nullptr;
+  if (this->class_registered_ && this->native_instance_) {
+    UnregisterClassW(kDemoClassName, static_cast<HINSTANCE>(this->native_instance_));
+    this->class_registered_ = false;
+  }
+  App::instance().clearRootWidgets();
+  UiGdiplusShutdown();
+  this->mode_ = PlatformWindows::Mode::Basic;
 }
 
 #if defined(_WIN32)
@@ -139,39 +153,5 @@ int PlatformWindows::runEventLoop(App& app) {
 void PlatformWindows::requestExit() { PostQuitMessage(0); }
 
 const char* PlatformWindows::backendId() const { return "win32"; }
-
-namespace detail {
-
-#if defined(AGIS_BUILD_UI_ENGINE_DEMO)
-
-void PlatformWindowsReleaseDemoResources(PlatformWindows* p) {
-  if (!p || p->mode_ != PlatformWindows::Mode::UiEngineDemo) {
-    return;
-  }
-  if (p->main_window_) {
-    const HWND hwnd = static_cast<HWND>(p->main_window_);
-    if (IsWindow(hwnd)) {
-      DestroyWindow(hwnd);
-    }
-  }
-  p->main_window_ = nullptr;
-  if (p->class_registered_ && p->native_instance_) {
-    UnregisterClassW(kDemoClassName, static_cast<HINSTANCE>(p->native_instance_));
-    p->class_registered_ = false;
-  }
-  App::instance().clearRootWidgets();
-  UiGdiplusShutdown();
-  p->mode_ = PlatformWindows::Mode::Basic;
-}
-
-#else
-
-void PlatformWindowsReleaseDemoResources(PlatformWindows* p) {
-  (void)p;
-}
-
-#endif
-
-}  // namespace detail
 
 }  // namespace agis::ui
