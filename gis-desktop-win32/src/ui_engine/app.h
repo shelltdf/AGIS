@@ -7,13 +7,15 @@
 namespace agis::ui {
 
 /**
- * 应用程序对象（类似 QApplication）：单例入口，持有当前 GUI 后端，负责 exec / quit。
- * 具体窗口与控件树由 Widget 子类构成；本类不替代现有 WinMain 消息泵时可仅作类型占位与设计边界。
+ * 应用程序对象（类似 QApplication）：可栈上构造 `App app;`，持有 GUI 后端，统一 `exec()` / `quit`。
+ * **事件循环**：`exec()` 调用 `IGuiPlatform::runEventLoop(*this)`，由各平台实现封装操作系统消息循环
+ *（如 Win32 `GetMessage`、macOS `NSApplication run` 等）；未设置平台时使用空后端并立即返回。
+ *
+ * 具体窗口与控件树由 Widget 子类构成；主程序也可仍用原生 WinMain 自管消息泵，与本类并存。
  */
 class App {
  public:
-  static App& instance();
-
+  App() = default;
   App(const App&) = delete;
   App& operator=(const App&) = delete;
 
@@ -22,7 +24,7 @@ class App {
 
   IGuiPlatform* platform() const { return platform_.get(); }
 
-  /** 委托给 IGuiPlatform::runEventLoop；无后端时返回 0。 */
+  /** 进入主循环：委托 `IGuiPlatform::runEventLoop`（内部即各 OS 的循环）；无后端时安装 null 后端。 */
   int exec();
 
   void requestQuit();
@@ -30,8 +32,6 @@ class App {
   bool quitRequested() const { return quitRequested_; }
 
  private:
-  App() = default;
-
   std::unique_ptr<IGuiPlatform> platform_;
   bool quitRequested_{false};
 };

@@ -12,6 +12,10 @@ project(agis_desktop LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
+
 option(AGIS_USE_GDAL "Link GDAL for raster/vector layers (needs PROJ + GDAL install or bundled GDAL source)" ON)
 option(AGIS_BUNDLE_GDAL "If no GDAL is found, build from ../3rdparty/gdal-3.12.3 (requires PROJ in CMAKE_PREFIX_PATH)" ON)
 
@@ -94,6 +98,29 @@ add_executable(agis_desktop WIN32
   src/ui_engine/gdiplus_ui.cpp
 )
 
+if(WIN32)
+  target_sources(agis_desktop PRIVATE src/ui_engine/platform_windows.cpp)
+elseif(APPLE)
+  target_sources(agis_desktop PRIVATE src/ui_engine/platform_cocoa.mm)
+  target_link_libraries(agis_desktop PRIVATE "-framework" "Cocoa")
+elseif(UNIX)
+  option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
+  if(AGIS_UI_USE_XCB)
+    find_path(AGIS_XCB_INCLUDE_DIR NAMES xcb/xcb.h)
+    find_library(AGIS_XCB_LIBRARY NAMES xcb)
+    if(NOT AGIS_XCB_INCLUDE_DIR OR NOT AGIS_XCB_LIBRARY)
+      message(FATAL_ERROR "AGIS_UI_USE_XCB=ON but libxcb not found (set AGIS_XCB_INCLUDE_DIR / AGIS_XCB_LIBRARY)")
+    endif()
+    target_sources(agis_desktop PRIVATE src/ui_engine/platform_xcb.cpp)
+    target_include_directories(agis_desktop PRIVATE ${AGIS_XCB_INCLUDE_DIR})
+    target_link_libraries(agis_desktop PRIVATE ${AGIS_XCB_LIBRARY})
+  else()
+    find_package(X11 REQUIRED)
+    target_sources(agis_desktop PRIVATE src/ui_engine/platform_xlib.cpp)
+    target_link_libraries(agis_desktop PRIVATE X11::X11)
+  endif()
+endif()
+
 target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 set_target_properties(agis_desktop PROPERTIES
@@ -144,12 +171,30 @@ endif()
 # 独立演示：仅链接 ui_engine + GDI+，不依赖 map_engine / GDAL。
 add_executable(ui_engine_demo WIN32
   src/app/ui_engine_demo.cpp
+  src/app/ui_engine_demo_win32.cpp
   src/ui_engine/app.cpp
   src/ui_engine/widget.cpp
   src/ui_engine/widgets.cpp
   src/ui_engine/widgets_mainframe.cpp
   src/ui_engine/gdiplus_ui.cpp
 )
+
+if(WIN32)
+  target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_windows.cpp)
+elseif(APPLE)
+  target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_cocoa.mm)
+  target_link_libraries(ui_engine_demo PRIVATE "-framework" "Cocoa")
+elseif(UNIX)
+  if(AGIS_UI_USE_XCB)
+    target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_xcb.cpp)
+    target_include_directories(ui_engine_demo PRIVATE ${AGIS_XCB_INCLUDE_DIR})
+    target_link_libraries(ui_engine_demo PRIVATE ${AGIS_XCB_LIBRARY})
+  else()
+    target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_xlib.cpp)
+    target_link_libraries(ui_engine_demo PRIVATE X11::X11)
+  endif()
+endif()
+
 target_include_directories(ui_engine_demo PRIVATE ${CMAKE_SOURCE_DIR}/src)
 set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
 target_compile_definitions(ui_engine_demo PRIVATE UNICODE _UNICODE NOMINMAX)

@@ -21,11 +21,6 @@ class NullGuiPlatform final : public IGuiPlatform {
 
 }  // namespace
 
-App& App::instance() {
-  static App s;
-  return s;
-}
-
 void App::setPlatform(std::unique_ptr<IGuiPlatform> platform) {
   platform_ = std::move(platform);
 }

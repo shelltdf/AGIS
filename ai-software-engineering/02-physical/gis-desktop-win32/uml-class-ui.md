@@ -2,7 +2,7 @@
 
 **源码根**：[`gis-desktop-win32/src/ui_engine/`](../../../gis-desktop-win32/src/ui_engine/)
 
-**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。当前仓库实现为**可编译桩**（`exec` 默认 `null` 后端立即返回），与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui_engine/gdiplus_ui.h) 全局绘制 API **并存**，主程序仍可由 Win32 消息泵驱动。
+**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。**`App` 可栈上构造**（`App app; app.setPlatform(...); app.exec();`），`exec()` 内部调用各平台 `runEventLoop`，即**操作系统消息循环封装在 `IGuiPlatform` 实现中**，由 `App::exec` 统一触发。未设置平台时 `exec` 使用 `null` 后端立即返回；与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui_engine/gdiplus_ui.h) 全局绘制 API **并存**，主程序也可仍由 Win32 消息泵自管。
 
 ---
 
@@ -20,7 +20,6 @@ classDiagram
   }
 
   class App {
-    +instance() App&
     +setPlatform(platform) void
     +platform() IGuiPlatform*
     +exec() int
@@ -37,6 +36,17 @@ classDiagram
 | `"xcb"` / `"xlib"` | Linux X11 客户端 |
 | `"cocoa"` | macOS AppKit |
 | `"null"` | 空实现（设计/单测占位） |
+
+**具体实现（`IGuiPlatform`）**：
+
+| 文件 | 平台 | 说明 |
+|------|------|------|
+| [`platform_windows.h` / `platform_windows.cpp`](../../../gis-desktop-win32/src/ui_engine/platform_windows.h) | Windows | `GetMessage` / `DispatchMessage` |
+| [`platform_xlib.h` / `platform_xlib.cpp`](../../../gis-desktop-win32/src/ui_engine/platform_xlib.h) | Linux（默认） | Xlib `Display*`，轮询 `XPending`（占位，需窗口后补全） |
+| [`platform_xcb.h` / `platform_xcb.cpp`](../../../gis-desktop-win32/src/ui_engine/platform_xcb.h) | Linux（`-DAGIS_UI_USE_XCB=ON`） | `xcb_poll_for_event` 轮询 |
+| [`platform_cocoa.h` / `platform_cocoa.mm`](../../../gis-desktop-win32/src/ui_engine/platform_cocoa.h) | macOS | `NSApplication` 主循环 |
+
+CMake 按 `WIN32` / `APPLE` / `UNIX` 只编译当前平台对应源并链接（Linux X11 需 `FindX11`，XCB 需 `libxcb`）。
 
 ---
 
