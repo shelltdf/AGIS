@@ -14,4 +14,7 @@ namespace agis::ui {
 /** 构造 `MainFrame`：菜单栏、工具栏、状态栏；左 1、右 3、上 1、下 1 共六个 `DockArea`，中间为 `MapCanvas2D`。 */
 std::unique_ptr<MainFrame> BuildUiEngineDemoWidgetTree();
 
+/** 按客户区宽高重算演示壳层几何（供 `WM_SIZE` / `App::notifyClientResize` 使用）。 */
+void RelayoutMainFrameForClientSize(MainFrame* root, int client_w, int client_h);
+
 }  // namespace agis::ui

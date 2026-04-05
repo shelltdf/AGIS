@@ -1,7 +1,10 @@
 #include "ui_engine/widgets_mainframe.h"
 #include "app/ui_private.h"
 
+#include "ui_engine/app.h"
+
 #if defined(_WIN32)
+#include <stdio.h>
 #include <windows.h>
 #endif
 
@@ -30,6 +33,40 @@ void Win32Edge(PaintContext& ctx, COLORREF rgb) {
   FrameRect(hdc, &rc, br);
   DeleteObject(br);
 }
+
+void Win32DrawTextLeft(PaintContext& ctx, const wchar_t* text, COLORREF fg) {
+  HDC hdc = static_cast<HDC>(ctx.nativeDevice);
+  if (!hdc || !text) {
+    return;
+  }
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, fg);
+  RECT rc{ctx.clip.x + 8, ctx.clip.y, ctx.clip.x + ctx.clip.w, ctx.clip.y + ctx.clip.h};
+  DrawTextW(hdc, text, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+void Win32DrawTextCenter(PaintContext& ctx, const wchar_t* text, COLORREF fg) {
+  HDC hdc = static_cast<HDC>(ctx.nativeDevice);
+  if (!hdc || !text) {
+    return;
+  }
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, fg);
+  RECT rc{ctx.clip.x, ctx.clip.y, ctx.clip.x + ctx.clip.w, ctx.clip.y + ctx.clip.h};
+  DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+void WidgetClientOrigin(const Widget* w, int* ox, int* oy) {
+  int x = 0;
+  int y = 0;
+  for (const Widget* p = w; p; p = p->parent()) {
+    const Rect g = p->geometry();
+    x += g.x;
+    y += g.y;
+  }
+  *ox = x;
+  *oy = y;
+}
 #endif
 }  // namespace
 
@@ -43,26 +80,63 @@ void MainFrame::paintEvent(PaintContext& ctx) {
 
 void MenuBarWidget::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  Win32Fill(ctx, RGB(248, 249, 250));
+  const bool hot = App::instance().hoverWidget() == this;
+  Win32Fill(ctx, hot ? RGB(232, 235, 240) : RGB(248, 249, 250));
   Win32Edge(ctx, RGB(210, 214, 220));
+  Win32DrawTextLeft(ctx, L"File    Language    Theme    Help", RGB(28, 28, 32));
 #else
   (void)ctx;
 #endif
 }
 
+void MenuBarWidget::mouseMoveEvent(int client_x, int client_y, unsigned buttons) {
+  (void)client_x;
+  (void)client_y;
+  (void)buttons;
+  App::instance().setStatusHint(L"Menu: File, Language, Theme, Help");
+}
+
+void MenuBarWidget::mousePressEvent(int client_x, int client_y, int button) {
+  (void)client_x;
+  (void)client_y;
+  (void)button;
+  App::instance().setStatusHint(L"Menu bar pressed (demo)");
+}
+
 void ToolBarWidget::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  Win32Fill(ctx, RGB(235, 238, 242));
+  const bool hot = App::instance().hoverWidget() == this;
+  Win32Fill(ctx, hot ? RGB(220, 224, 230) : RGB(235, 238, 242));
   Win32Edge(ctx, RGB(200, 204, 210));
+  Win32DrawTextLeft(ctx, L"New    Open    Save    —    tools", RGB(35, 38, 45));
 #else
   (void)ctx;
 #endif
+}
+
+void ToolBarWidget::mouseMoveEvent(int client_x, int client_y, unsigned buttons) {
+  (void)client_x;
+  (void)client_y;
+  (void)buttons;
+  App::instance().setStatusHint(L"Toolbar: New, Open, Save (demo)");
+}
+
+void ToolBarWidget::mousePressEvent(int client_x, int client_y, int button) {
+  (void)client_x;
+  (void)client_y;
+  (void)button;
+  App::instance().setStatusHint(L"Toolbar pressed (demo)");
 }
 
 void StatusBarWidget::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
   Win32Fill(ctx, RGB(220, 223, 228));
   Win32Edge(ctx, RGB(180, 184, 192));
+  wchar_t buf[512]{};
+  const App& app = App::instance();
+  const std::wstring& hint = app.statusHint();
+  _snwprintf_s(buf, _TRUNCATE, L"Pointer: (%d, %d)   %ls", app.pointerClientX(), app.pointerClientY(), hint.c_str());
+  Win32DrawTextLeft(ctx, buf, RGB(25, 28, 35));
 #else
   (void)ctx;
 #endif
@@ -72,6 +146,22 @@ void DockArea::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
   Win32Fill(ctx, RGB(250, 251, 252));
   Win32Edge(ctx, RGB(190, 195, 202));
+  const wchar_t* cap = L"Dock Area";
+  switch (dockEdge()) {
+    case DockEdge::kLeft:
+      cap = L"Dock Area (Left)";
+      break;
+    case DockEdge::kRight:
+      cap = L"Dock Area (Right)";
+      break;
+    case DockEdge::kTop:
+      cap = L"Dock Area (Top)";
+      break;
+    case DockEdge::kBottom:
+      cap = L"Dock Area (Bottom)";
+      break;
+  }
+  Win32DrawTextLeft(ctx, cap, RGB(90, 95, 105));
 #else
   (void)ctx;
 #endif
@@ -81,6 +171,7 @@ void DockButtonStrip::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
   Win32Fill(ctx, RGB(225, 228, 232));
   Win32Edge(ctx, RGB(170, 175, 185));
+  Win32DrawTextCenter(ctx, L"||", RGB(55, 60, 70));
 #else
   (void)ctx;
 #endif
@@ -90,6 +181,7 @@ void DockView::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
   Win32Fill(ctx, RGB(255, 255, 255));
   Win32Edge(ctx, RGB(200, 204, 210));
+  Win32DrawTextLeft(ctx, L"Dock View", RGB(110, 115, 125));
 #else
   (void)ctx;
 #endif
@@ -99,6 +191,7 @@ void DockPanel::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
   Win32Fill(ctx, RGB(245, 246, 248));
   Win32Edge(ctx, RGB(200, 204, 210));
+  Win32DrawTextLeft(ctx, L"Panel content (demo)", RGB(95, 100, 110));
 #else
   (void)ctx;
 #endif
@@ -124,10 +217,30 @@ void PropsDockPanel::paintEvent(PaintContext& ctx) {
 
 void MapCanvas2D::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  Win32Fill(ctx, RGB(245, 248, 255));
+  const bool hot = App::instance().hoverWidget() == this;
+  Win32Fill(ctx, hot ? RGB(232, 238, 250) : RGB(245, 248, 255));
   Win32Edge(ctx, RGB(160, 175, 200));
+  Win32DrawTextLeft(ctx, L"2D map canvas — middle drag / wheel zoom (demo)", RGB(45, 55, 75));
 #else
   (void)ctx;
+#endif
+}
+
+void MapCanvas2D::mouseMoveEvent(int client_x, int client_y, unsigned buttons) {
+#if defined(_WIN32)
+  (void)buttons;
+  int ox = 0;
+  int oy = 0;
+  WidgetClientOrigin(this, &ox, &oy);
+  const int lx = client_x - ox;
+  const int ly = client_y - oy;
+  wchar_t buf[160]{};
+  _snwprintf_s(buf, _TRUNCATE, L"Canvas (%d, %d) — map view", lx, ly);
+  App::instance().setStatusHint(buf);
+#else
+  (void)client_x;
+  (void)client_y;
+  (void)buttons;
 #endif
 }
 

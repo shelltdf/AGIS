@@ -3,7 +3,9 @@
 #include "ui_engine/platform_gui.h"
 #include "ui_engine/widget.h"
 
+#include <functional>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -64,12 +66,43 @@ class AGIS_UI_API App {
 
   bool quitRequested() const { return quitRequested_; }
 
+  /** 演示壳：客户区内上一帧指针位置（Win32 客户区坐标）。 */
+  void setPointerClient(int x, int y) {
+    pointer_x_ = x;
+    pointer_y_ = y;
+  }
+  int pointerClientX() const { return pointer_x_; }
+  int pointerClientY() const { return pointer_y_; }
+
+  /** 当前悬停的最内层 Widget（命中测试叶子）；平台在 `WM_MOUSEMOVE` 等中更新。 */
+  void setHoverWidget(Widget* w) { hover_widget_ = w; }
+  Widget* hoverWidget() const { return hover_widget_; }
+
+  /** 状态栏等可读的简短提示（如鼠标按下反馈）。 */
+  void setStatusHint(std::wstring s) { status_hint_ = std::move(s); }
+  const std::wstring& statusHint() const { return status_hint_; }
+
+  /** 顶层窗口客户区尺寸变化时由平台调用；演示程序可注册以重排 `MainFrame` 子控件。 */
+  using ClientResizeHandler = std::function<void(Widget* root, int client_w, int client_h)>;
+  void setClientResizeHandler(ClientResizeHandler h) { client_resize_handler_ = std::move(h); }
+  void notifyClientResize(Widget* root, int client_w, int client_h) {
+    if (client_resize_handler_) {
+      client_resize_handler_(root, client_w, client_h);
+    }
+  }
+
  private:
   App();
 
   std::unique_ptr<IGuiPlatform> platform_;
   std::vector<std::unique_ptr<Widget>> rootWidgets_;
   bool quitRequested_{false};
+
+  int pointer_x_{-1};
+  int pointer_y_{-1};
+  Widget* hover_widget_{nullptr};
+  std::wstring status_hint_;
+  ClientResizeHandler client_resize_handler_;
 };
 
 }  // namespace agis::ui

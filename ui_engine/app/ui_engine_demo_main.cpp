@@ -21,6 +21,11 @@
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int show) {
   agis::ui::App& app = agis::ui::App::instance();
   app.addRootWidget(agis::ui::BuildUiEngineDemoWidgetTree());
+  app.setClientResizeHandler([](agis::ui::Widget* root, int cw, int ch) {
+    if (auto* mf = dynamic_cast<agis::ui::MainFrame*>(root)) {
+      agis::ui::RelayoutMainFrameForClientSize(mf, cw, ch);
+    }
+  });
 
   const agis::ui::AppLaunchParams launch =
       agis::ui::make_launch_params(__argc, __argv, reinterpret_cast<void*>(hInst), show);
@@ -46,6 +51,11 @@ int main(int argc, char** argv) {
   [[maybe_unused]] const agis::ui::AppLaunchParams launch = agis::ui::make_launch_params(argc, argv);
   agis::ui::App& app = agis::ui::App::instance();
   app.addRootWidget(agis::ui::BuildUiEngineDemoWidgetTree());
+  app.setClientResizeHandler([](agis::ui::Widget* root, int cw, int ch) {
+    if (auto* mf = dynamic_cast<agis::ui::MainFrame*>(root)) {
+      agis::ui::RelayoutMainFrameForClientSize(mf, cw, ch);
+    }
+  });
   return app.exec();
 }
 
@@ -62,6 +72,11 @@ int main(int argc, char** argv) {
   [[maybe_unused]] const agis::ui::AppLaunchParams launch = agis::ui::make_launch_params(argc, argv);
   agis::ui::App& app = agis::ui::App::instance();
   app.addRootWidget(agis::ui::BuildUiEngineDemoWidgetTree());
+  app.setClientResizeHandler([](agis::ui::Widget* root, int cw, int ch) {
+    if (auto* mf = dynamic_cast<agis::ui::MainFrame*>(root)) {
+      agis::ui::RelayoutMainFrameForClientSize(mf, cw, ch);
+    }
+  });
   return app.exec();
 }
 

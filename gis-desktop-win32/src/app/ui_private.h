@@ -33,6 +33,7 @@ class AGIS_UI_API MapCanvas2D : public Canvas2D {
  public:
   MapCanvas2D() = default;
   void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
 };
 
 /**

@@ -40,6 +40,28 @@ class AGIS_UI_API Widget {
   /** 纯绘制：由平台在合适时机调用（或合成到缓冲）。 */
   virtual void paintEvent(PaintContext& ctx) = 0;
 
+  /**
+   * 指针消息：`client_x` / `client_y` 为**顶层窗口客户区**坐标（与 `PaintContext::clip` 一致）。
+   * `buttons`：低位为左=1、右=2、中=4（与 Win32 `wParam` 中 `MK_*` 一致）。
+   */
+  virtual void mouseMoveEvent(int client_x, int client_y, unsigned buttons) {
+    (void)client_x;
+    (void)client_y;
+    (void)buttons;
+  }
+
+  virtual void mousePressEvent(int client_x, int client_y, int button) {
+    (void)client_x;
+    (void)client_y;
+    (void)button;
+  }
+
+  virtual void mouseReleaseEvent(int client_x, int client_y, int button) {
+    (void)client_x;
+    (void)client_y;
+    (void)button;
+  }
+
  protected:
   friend class ScrollArea;
 

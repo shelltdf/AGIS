@@ -29,6 +29,8 @@ class AGIS_UI_API MenuBarWidget : public Widget {
  public:
   MenuBarWidget() = default;
   void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
 };
 
 /** 主工具栏（实现侧：`CreateToolbarEx` / `IDC_MAIN_TOOLBAR`）。 */
@@ -36,6 +38,8 @@ class AGIS_UI_API ToolBarWidget : public Widget {
  public:
   ToolBarWidget() = default;
   void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
 };
 
 /** 状态栏（实现侧：底部 `STATUSCLASSNAME`，双击打开日志）。 */
