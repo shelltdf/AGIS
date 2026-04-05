@@ -17,6 +17,8 @@ class App;
  * 根 `Widget` 创建**一个**对应的**顶级原生窗口**（顶层 `HWND` / `NSWindow` / X11 `Window` 等），并在该窗口内承载该根及其子树。
  * 当**所有**此类顶级窗口均被用户关闭后，实现应结束主循环（例如 Win32 `PostQuitMessage`），从而使 `App::exec()` 返回、进程可正常退出。
  * 不要求根类型为特定类；无标题等元数据时可采用平台默认标题与尺寸。
+ *
+ * **绘制**：在 `WM_PAINT`（或各平台等价路径）中，应按 Widget 父子关系与 `geometry()` 将 `PaintContext`（含 `nativeDevice` 与**客户区绝对** `clip`）传入各 `Widget::paintEvent`，由控件实现类绘制自身（参见 Win32 下 `PaintWidgetSubtreeWin32`）。
  */
 class AGIS_UI_API IGuiPlatform {
  public:

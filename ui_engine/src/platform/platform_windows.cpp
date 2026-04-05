@@ -1,10 +1,8 @@
 #include "platform_windows.h"
 
-#if defined(AGIS_BUILD_UI_ENGINE_DEMO)
-#include "ui_engine_demo.h"
-#endif
 #include "ui_engine/app.h"
 #include "ui_engine/gdiplus_ui.h"
+#include "ui_engine/widget.h"
 #include "ui_engine/widget_core.h"
 
 #include <algorithm>
@@ -29,19 +27,33 @@ std::wstring RootWindowTitle(const Widget* w) {
   return L"AGIS";
 }
 
-void DemoPaintClient(HDC hdc, const RECT& client, Widget* root) {
-  const int w = client.right - client.left;
-  const int h = client.bottom - client.top;
-  HBRUSH bg = CreateSolidBrush(RGB(240, 242, 245));
-  FillRect(hdc, &client, bg);
-  DeleteObject(bg);
-
-  const bool empty_root = !root || root->children().empty();
-
-  if (empty_root) {
-    RECT rcHint{client.left + 12, client.top + 12, client.right - 12, client.top + 48};
-    DrawTextW(hdc, L"空 MainFrame 无子 Widget。", -1, &rcHint, DT_LEFT | DT_WORDBREAK);
+/** 按父子 `geometry()` 叠加为窗口客户区坐标，深度优先调用各 `Widget::paintEvent`（Win32 / `HDC`）。 */
+void PaintWidgetSubtreeWin32(HDC hdc, Widget* w, int parent_x, int parent_y) {
+  if (!w || !w->visible()) {
+    return;
   }
+  const Rect g = w->geometry();
+  const int x = parent_x + g.x;
+  const int y = parent_y + g.y;
+
+  PaintContext ctx;
+  ctx.nativeDevice = hdc;
+  ctx.clip = {x, y, g.w, g.h};
+  w->paintEvent(ctx);
+
+  for (const auto& ch : w->children()) {
+    PaintWidgetSubtreeWin32(hdc, ch.get(), x, y);
+  }
+}
+
+void DemoPaintClient(HDC hdc, const RECT& client, Widget* root) {
+  if (!root) {
+    HBRUSH bg = CreateSolidBrush(RGB(240, 242, 245));
+    FillRect(hdc, &client, bg);
+    DeleteObject(bg);
+    return;
+  }
+  PaintWidgetSubtreeWin32(hdc, root, 0, 0);
 }
 
 LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

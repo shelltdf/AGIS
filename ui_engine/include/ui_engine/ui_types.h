@@ -22,7 +22,11 @@ struct Rect {
   int h = 0;
 };
 
-/** 绘制上下文：由各平台后端填入原生绘制句柄（Win32: HDC；XCB/Cairo；macOS: CGContextRef 等）。 */
+/**
+ * 绘制上下文：由**当前平台**在 `WM_PAINT` / 等价时机构造并传入 `Widget::paintEvent`。
+ * - `nativeDevice`：平台原生绘制目标（如 Win32 `HDC`）。
+ * - `clip`：本控件在**宿主顶层窗口客户区**中的轴对齐矩形（像素，与 `Widget::geometry()` 链叠加后的绝对位置一致）。
+ */
 struct PaintContext {
   void* nativeDevice = nullptr;
   Rect clip{};
