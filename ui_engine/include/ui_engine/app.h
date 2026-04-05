@@ -13,7 +13,7 @@ namespace agis::ui {
  * 应用程序对象（类似 QApplication）：**进程内单例**，持有 GUI 后端，统一 `exec()` / `quit`。
  * 使用 `App::instance()` 取得引用；构造私有化，禁止复制。
  *
- * **根 Widget**：可注册多个顶层/根 `Widget`（如 `MainFrame`）。`exec()` 时若**尚未注册任何根 Widget**，返回 `kExitNoRootWidgets`（错误退出）。
+ * **根 Widget**：可注册多个顶层/根 `Widget`（如 `MainFrame`）；平台实现应为**每个**根创建**一个**顶级原生窗口，**全部关闭**后主循环结束。`exec()` 时若**尚未注册任何根 Widget**，返回 `kExitNoRootWidgets`（错误退出）。
  *
  * **事件循环**：`exec()` 调用 `IGuiPlatform::runEventLoop`；构造时通过 `CreateGuiPlatform()` 按平台安装默认 `IGuiPlatform`；未知平台则保持未设置，`exec()` 再回退到空后端。
  *

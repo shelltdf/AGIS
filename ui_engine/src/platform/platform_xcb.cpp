@@ -33,6 +33,7 @@ PlatformXcb::~PlatformXcb() {
 }
 
 int PlatformXcb::runEventLoop(App& app) {
+  // 约定：每个 app.rootWidgets() 根对应一个 XCB 顶层窗口，全部关闭后结束；当前占位未实现。
   (void)app;
   if (!impl_ || !impl_->conn) {
     return 1;

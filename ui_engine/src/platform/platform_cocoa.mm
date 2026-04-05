@@ -11,6 +11,7 @@ PlatformCocoa::PlatformCocoa() = default;
 PlatformCocoa::~PlatformCocoa() = default;
 
 int PlatformCocoa::runEventLoop(App& app) {
+  // 约定：每个 app.rootWidgets() 根对应一个 NSWindow，全部关闭后结束；当前占位未实现。
   (void)app;
   @autoreleasepool {
     NSApplication* nsapp = [NSApplication sharedApplication];

@@ -28,6 +28,7 @@ PlatformXlib::~PlatformXlib() {
 }
 
 int PlatformXlib::runEventLoop(App& app) {
+  // 约定：每个 app.rootWidgets() 根对应一个 X11 顶层 Window，全部关闭后结束；当前占位未实现。
   (void)app;
   if (!impl_ || !impl_->dpy) {
     return 1;
