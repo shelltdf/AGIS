@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""配置并构建本目录下的 ``ui_engine_demo``，然后启动该可执行文件。
+"""配置并构建 ``gis-desktop-win32`` 中的 ``ui_engine_demo``，然后启动该可执行文件。
 
-用法（在 ``gis-desktop-win32`` 目录下）::
+用法（在 ``ui_engine`` 目录或任意目录）::
 
     python run_ui_demo.py
 
-环境变量与 ``build.py`` 一致（如 ``AGIS_USE_GDAL``、``AGIS_FORCE_CONFIGURE``）；
-本脚本在完整构建后仅增量编译 ``ui_engine_demo`` 目标以节省时间。
+或自仓库根目录::
+
+    python ui_engine/run_ui_demo.py
+
+环境变量与 ``gis-desktop-win32/build.py`` 一致（如 ``AGIS_USE_GDAL``、``AGIS_FORCE_CONFIGURE``）；
+完整构建后仅增量编译 ``ui_engine_demo`` 目标以节省时间。
 """
 from __future__ import annotations
 
@@ -16,12 +20,14 @@ import subprocess
 import sys
 
 
-def _project_root() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
+def _desktop_project_dir() -> str:
+    """``gis-desktop-win32`` 目录（与本脚本所在 ``ui_engine`` 为兄弟目录）。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(here, "..", "gis-desktop-win32"))
 
 
 def main() -> int:
-    proj = _project_root()
+    proj = _desktop_project_dir()
     build = os.path.join(proj, "build")
 
     r = subprocess.run([sys.executable, os.path.join(proj, "build.py")], cwd=proj)

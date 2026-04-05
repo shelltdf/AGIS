@@ -1,4 +1,4 @@
-#include "ui_engine/platform_cocoa.h"
+#include "platform_cocoa.h"
 
 #include "ui_engine/app.h"
 

@@ -11,7 +11,7 @@ class PlatformWindows;
 /**
  * Win32 USER32 消息循环（`GetMessage` / `DispatchMessage`）。
  * 演示壳构造 `PlatformWindows(AppLaunchParams)` 仅在定义 `AGIS_BUILD_UI_ENGINE_DEMO` 时于 `platform_windows.cpp` 实现；
- * 进程入口见 `ui_engine_demo_main.cpp`（在 TU 内使用系统入口类型，再填入 `AppLaunchParams`）。
+ * 进程入口见 `ui_engine/app/ui_engine_demo_main.cpp`（在 TU 内使用系统入口类型，再填入 `AppLaunchParams`）。
  */
 class AGIS_UI_API PlatformWindows : public IGuiPlatform {
  public:

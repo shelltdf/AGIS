@@ -3,7 +3,7 @@
  * 不包含任何操作系统 API；窗口、消息循环与 GDI+ 由平台层实现（见 ui_engine_demo_main.cpp）。
  */
 
-#include "app/ui_engine_demo.h"
+#include "ui_engine_demo.h"
 
 #include "ui_engine/app.h"
 

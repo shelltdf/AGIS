@@ -1,4 +1,4 @@
-#include "ui_engine/platform_xlib.h"
+#include "platform_xlib.h"
 
 #include "ui_engine/app.h"
 

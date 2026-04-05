@@ -24,8 +24,8 @@ option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatfor
 
 # ui_engine 位于仓库根目录，与 gis-desktop-win32 并列（`AGIS/ui_engine/`）
 set(AGIS_UI_ENGINE_DIR "${CMAKE_SOURCE_DIR}/../ui_engine")
-if(NOT EXISTS "${AGIS_UI_ENGINE_DIR}/app.cpp")
-  message(FATAL_ERROR "ui_engine sources not found at ${AGIS_UI_ENGINE_DIR} (expected sibling of gis-desktop-win32).")
+if(NOT EXISTS "${AGIS_UI_ENGINE_DIR}/src/app.cpp")
+  message(FATAL_ERROR "ui_engine sources not found at ${AGIS_UI_ENGINE_DIR}/src (expected sibling of gis-desktop-win32).")
 endif()
 
 # 从源码安装后的 GDAL 前缀（与捆绑源码二选一）
@@ -92,18 +92,18 @@ endif()
 
 # --- ui_engine: 独立库（静态 / 动态由 AGIS_UI_ENGINE_SHARED 切换）---
 set(_agis_ui_engine_sources
-  ${AGIS_UI_ENGINE_DIR}/app.cpp
-  ${AGIS_UI_ENGINE_DIR}/widget.cpp
-  ${AGIS_UI_ENGINE_DIR}/widgets.cpp
-  ${AGIS_UI_ENGINE_DIR}/widgets_mainframe.cpp
+  ${AGIS_UI_ENGINE_DIR}/src/app.cpp
+  ${AGIS_UI_ENGINE_DIR}/src/widget.cpp
+  ${AGIS_UI_ENGINE_DIR}/src/widgets.cpp
+  ${AGIS_UI_ENGINE_DIR}/src/widgets_mainframe.cpp
 )
 if(WIN32)
-  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/gdiplus_ui.cpp)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/gdiplus_ui.cpp)
 endif()
 if(WIN32)
-  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_windows.cpp)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_windows.cpp)
 elseif(APPLE)
-  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_cocoa.mm)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_cocoa.mm)
 elseif(UNIX)
   if(AGIS_UI_USE_XCB)
     find_path(AGIS_XCB_INCLUDE_DIR NAMES xcb/xcb.h)
@@ -111,10 +111,10 @@ elseif(UNIX)
     if(NOT AGIS_XCB_INCLUDE_DIR OR NOT AGIS_XCB_LIBRARY)
       message(FATAL_ERROR "AGIS_UI_USE_XCB=ON but libxcb not found (set AGIS_XCB_INCLUDE_DIR / AGIS_XCB_LIBRARY)")
     endif()
-    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_xcb.cpp)
+    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_xcb.cpp)
   else()
     find_package(X11 REQUIRED)
-    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform_xlib.cpp)
+    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_xlib.cpp)
   endif()
 endif()
 
@@ -126,8 +126,12 @@ endif()
 
 set_target_properties(agis_ui_engine PROPERTIES OUTPUT_NAME "agis_ui_engine")
 
-# 使 `#include "ui_engine/..."` 生效：包含目录为仓库根（与 `ui_engine/` 目录并列）
-target_include_directories(agis_ui_engine PUBLIC ${CMAKE_SOURCE_DIR}/..)
+# `ui_engine/...`：`include/ui_engine/`；演示 `ui_engine_demo*` 在 `app/`；平台实现在 `src/platform/`
+target_include_directories(agis_ui_engine PUBLIC
+  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_DIR}/app
+  ${AGIS_UI_ENGINE_DIR}/src/platform
+)
 # `widgets_mainframe.cpp` 依赖 `app/ui_private.h`（实现仍在 ui_engine 库内）
 target_include_directories(agis_ui_engine PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
@@ -178,7 +182,7 @@ add_executable(agis_desktop WIN32
   src/core/app_log.cpp
 )
 
-target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/..)
+target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src ${AGIS_UI_ENGINE_DIR}/include)
 
 set_target_properties(agis_desktop PROPERTIES
   OUTPUT_NAME "AGIS"
@@ -236,17 +240,18 @@ endif()
 # 独立演示：链接 agis_ui_engine（GDI+ / 平台实现已在库内）。
 if(WIN32)
   add_executable(ui_engine_demo WIN32
-    src/app/ui_engine_demo.cpp
-    src/app/ui_engine_demo_main.cpp
+    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo.cpp
+    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo_main.cpp
   )
 else()
   add_executable(ui_engine_demo
-    src/app/ui_engine_demo.cpp
-    src/app/ui_engine_demo_main.cpp
+    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo.cpp
+    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo_main.cpp
   )
 endif()
 
-target_include_directories(ui_engine_demo PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/..)
+# `widgets_all.h` → `app/ui_private.h`（主程序侧 Widget 声明，实现仍在 agis_ui_engine）
+target_include_directories(ui_engine_demo PRIVATE ${AGIS_UI_ENGINE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 if(WIN32)
   set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
 endif()

@@ -1,7 +1,7 @@
-#include "ui_engine/platform_windows.h"
+#include "platform_windows.h"
 
 #if defined(AGIS_BUILD_UI_ENGINE_DEMO)
-#include "app/ui_engine_demo.h"
+#include "ui_engine_demo.h"
 #endif
 #include "ui_engine/app.h"
 #include "ui_engine/gdiplus_ui.h"

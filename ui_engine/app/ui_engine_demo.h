@@ -2,9 +2,9 @@
 
 /**
  * ui_engine 演示：与操作系统无关的 Widget 树构建与状态摘要（供各平台壳层调用）。
- * 进程入口在 `ui_engine_demo_main.cpp`：先 `App::addRootWidget(BuildUiEngineDemoWidgetTree())`，再按需
+ * 进程入口在 `ui_engine/app/ui_engine_demo_main.cpp`：先 `App::addRootWidget(BuildUiEngineDemoWidgetTree())`，再按需
  * `setPlatform`（Windows 下为 `PlatformWindows` + `AGIS_BUILD_UI_ENGINE_DEMO` 的 GDI+ 演示壳，见
- * `ui_engine/platform_windows.cpp`）。
+ * `ui_engine/src/platform/platform_windows.cpp`）。
  */
 
 #include <memory>

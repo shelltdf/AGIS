@@ -1,4 +1,4 @@
-#include "ui_engine/platform_xcb.h"
+#include "platform_xcb.h"
 
 #include "ui_engine/app.h"
 
