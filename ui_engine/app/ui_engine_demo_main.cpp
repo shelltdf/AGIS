@@ -1,7 +1,7 @@
 /**
  * ui_engine 演示 — 进程入口：Windows 为 `wWinMain`，其它平台为 `main`。
  *
- * 约定：`App` 在 `exec()` 前须至少注册一个根 Widget；此处注册**空的** `MainFrame`（无子控件）。
+ * 约定：`App` 在 `exec()` 前须至少注册一个根 Widget；此处由 `BuildUiEngineDemoWidgetTree()` 注册主框架壳层。
  * Windows 下将入口信息填入 `AppLaunchParams` 后 `CreateGuiPlatform(launch)`；**可移植类型**见 `ui_engine/app_launch_params.h`。
  */
 
@@ -20,7 +20,7 @@
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int show) {
   agis::ui::App& app = agis::ui::App::instance();
-  app.addRootWidget(BuildUiEngineDemoWidgetTree());
+  app.addRootWidget(agis::ui::BuildUiEngineDemoWidgetTree());
 
   const agis::ui::AppLaunchParams launch =
       agis::ui::make_launch_params(__argc, __argv, reinterpret_cast<void*>(hInst), show);
