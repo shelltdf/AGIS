@@ -47,7 +47,9 @@ classDiagram
 
 ---
 
-## Widget 继承树（widget.h / widgets.h）
+## 通用 Widget 继承树（widget.h / widgets.h）
+
+可复用基元；实现见 [`widgets.cpp`](../../../gis-desktop-win32/src/ui_engine/widgets.cpp)。
 
 ```mermaid
 classDiagram
@@ -93,21 +95,33 @@ classDiagram
     +contentWidget() Widget*
   }
 
+  class Splitter {
+    +orientation() SplitterOrientation
+  }
+
+  class Canvas2D
+  class DialogWindow
+  class PopupMenu
+
   Widget <|-- Window
   Widget <|-- Frame
   Widget <|-- Label
   Widget <|-- PushButton
   Widget <|-- LineEdit
   Widget <|-- ScrollArea
+  Widget <|-- Splitter
+  Widget <|-- Canvas2D
+  Window <|-- DialogWindow
+  Widget <|-- PopupMenu
 ```
 
 **说明**：父子关系仅通过 **`Widget::addChild(std::unique_ptr<Widget>)`**（或 `ScrollArea::setContentWidget` 对内容控件设置 `parent_`）建立；**无信号槽**，交互由后端调用如 **`PushButton::click()`**。
 
 ---
 
-## 主窗口已实现区域（widgets.h 后半部分）
+## AGIS 专用壳层（widgets_shell.h）
 
-与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型化 Widget（**抽象桩**，尚未接入 `IGuiPlatform` 实现树）。声明与通用控件同在 [`widgets.h`](../../../gis-desktop-win32/src/ui_engine/widgets.h)；可选 [`widgets_all.h`](../../../gis-desktop-win32/src/ui_engine/widgets_all.h) 等价于包含 `widgets.h`。
+与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型（**抽象桩**）。声明在 [`widgets_shell.h`](../../../gis-desktop-win32/src/ui_engine/widgets_shell.h)（内部已 `#include` [`widgets.h`](../../../gis-desktop-win32/src/ui_engine/widgets.h)）；实现见 [`widgets_shell.cpp`](../../../gis-desktop-win32/src/ui_engine/widgets_shell.cpp)。[`widgets_all.h`](../../../gis-desktop-win32/src/ui_engine/widgets_all.h) 一次包含通用 + 专用。
 
 ```mermaid
 classDiagram

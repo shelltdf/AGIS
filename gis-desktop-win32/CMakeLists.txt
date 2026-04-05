@@ -90,6 +90,7 @@ add_executable(agis_desktop WIN32
   src/ui_engine/app.cpp
   src/ui_engine/widget.cpp
   src/ui_engine/widgets.cpp
+  src/ui_engine/widgets_shell.cpp
   src/ui_engine/gdiplus_ui.cpp
 )
 
@@ -138,4 +139,27 @@ endif()
 if(MSVC)
   target_sources(agis_desktop PRIVATE app.manifest)
   target_compile_options(agis_desktop PRIVATE /utf-8)
+endif()
+
+# 独立演示：仅链接 ui_engine + GDI+，不依赖 map_engine / GDAL。
+add_executable(ui_engine_demo WIN32
+  src/app/ui_engine_demo.cpp
+  src/ui_engine/app.cpp
+  src/ui_engine/widget.cpp
+  src/ui_engine/widgets.cpp
+  src/ui_engine/widgets_shell.cpp
+  src/ui_engine/gdiplus_ui.cpp
+)
+target_include_directories(ui_engine_demo PRIVATE ${CMAKE_SOURCE_DIR}/src)
+set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
+target_compile_definitions(ui_engine_demo PRIVATE UNICODE _UNICODE NOMINMAX)
+target_link_libraries(ui_engine_demo PRIVATE
+  comctl32
+  user32
+  gdi32
+  gdiplus
+  shell32
+)
+if(MSVC)
+  target_compile_options(ui_engine_demo PRIVATE /utf-8)
 endif()
