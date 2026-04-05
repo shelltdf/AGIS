@@ -114,6 +114,7 @@ elseif(UNIX)
     target_sources(agis_desktop PRIVATE src/ui_engine/platform_xcb.cpp)
     target_include_directories(agis_desktop PRIVATE ${AGIS_XCB_INCLUDE_DIR})
     target_link_libraries(agis_desktop PRIVATE ${AGIS_XCB_LIBRARY})
+    target_compile_definitions(agis_desktop PRIVATE AGIS_UI_USE_XCB=1)
   else()
     find_package(X11 REQUIRED)
     target_sources(agis_desktop PRIVATE src/ui_engine/platform_xlib.cpp)
@@ -168,22 +169,27 @@ if(MSVC)
   target_compile_options(agis_desktop PRIVATE /utf-8)
 endif()
 
-# 独立演示：仅链接 ui_engine + GDI+，不依赖 map_engine / GDAL。
-add_executable(ui_engine_demo WIN32
+# 独立演示：仅链接 ui_engine；Windows 下另含 GDI+ 与 Win32 平台实现。
+set(_ui_engine_demo_sources
   src/app/ui_engine_demo.cpp
-  src/app/ui_engine_demo_win32.cpp
+  src/app/ui_engine_demo_main.cpp
   src/ui_engine/app.cpp
   src/ui_engine/widget.cpp
   src/ui_engine/widgets.cpp
   src/ui_engine/widgets_mainframe.cpp
-  src/ui_engine/gdiplus_ui.cpp
 )
+if(WIN32)
+  list(APPEND _ui_engine_demo_sources src/ui_engine/gdiplus_ui.cpp)
+endif()
 
 if(WIN32)
-  target_sources(ui_engine_demo PRIVATE
-    src/ui_engine/platform_windows.cpp
-    src/app/ui_engine_demo_platform_win32.cpp
-  )
+  add_executable(ui_engine_demo WIN32 ${_ui_engine_demo_sources})
+else()
+  add_executable(ui_engine_demo ${_ui_engine_demo_sources})
+endif()
+
+if(WIN32)
+  target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_windows.cpp)
 elseif(APPLE)
   target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_cocoa.mm)
   target_link_libraries(ui_engine_demo PRIVATE "-framework" "Cocoa")
@@ -192,22 +198,33 @@ elseif(UNIX)
     target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_xcb.cpp)
     target_include_directories(ui_engine_demo PRIVATE ${AGIS_XCB_INCLUDE_DIR})
     target_link_libraries(ui_engine_demo PRIVATE ${AGIS_XCB_LIBRARY})
+    target_compile_definitions(ui_engine_demo PRIVATE AGIS_UI_USE_XCB=1)
   else()
+    find_package(X11 REQUIRED)
     target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_xlib.cpp)
     target_link_libraries(ui_engine_demo PRIVATE X11::X11)
   endif()
 endif()
 
 target_include_directories(ui_engine_demo PRIVATE ${CMAKE_SOURCE_DIR}/src)
-set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
-target_compile_definitions(ui_engine_demo PRIVATE UNICODE _UNICODE NOMINMAX)
-target_link_libraries(ui_engine_demo PRIVATE
-  comctl32
-  user32
-  gdi32
-  gdiplus
-  shell32
-)
+if(WIN32)
+  set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
+endif()
+
+if(WIN32)
+  target_compile_definitions(ui_engine_demo PRIVATE UNICODE _UNICODE NOMINMAX AGIS_BUILD_UI_ENGINE_DEMO=1)
+endif()
+
+if(WIN32)
+  target_link_libraries(ui_engine_demo PRIVATE
+    comctl32
+    user32
+    gdi32
+    gdiplus
+    shell32
+  )
+endif()
+
 if(MSVC)
   target_compile_options(ui_engine_demo PRIVATE /utf-8)
 endif()

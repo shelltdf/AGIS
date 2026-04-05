@@ -9,17 +9,17 @@ namespace agis::ui {
 /**
  * 应用程序对象（类似 QApplication）：可栈上构造 `App app;`，持有 GUI 后端，统一 `exec()` / `quit`。
  * **事件循环**：`exec()` 调用 `IGuiPlatform::runEventLoop(*this)`，由各平台实现封装操作系统消息循环
- *（如 Win32 `GetMessage`、macOS `NSApplication run` 等）；未设置平台时使用空后端并立即返回。
+ *（如 Win32 `GetMessage`、macOS `NSApplication run` 等）。构造时按目标操作系统宏安装默认 `IGuiPlatform`；未知平台则保持未设置，`exec()` 再回退到空后端。
  *
- * 具体窗口与控件树由 Widget 子类构成；主程序也可仍用原生 WinMain 自管消息泵，与本类并存。
+ * 具体窗口与控件树由 Widget 子类构成；可在构造后再次 `setPlatform` 覆盖默认实现（例如 Windows 演示壳需传入 `HINSTANCE`）。
  */
 class App {
  public:
-  App() = default;
+  App();
   App(const App&) = delete;
   App& operator=(const App&) = delete;
 
-  /** 安装平台后端；须在 exec 前调用（或由集成层在启动时注入）。 */
+  /** 覆盖默认平台后端（取得所有权）。 */
   void setPlatform(std::unique_ptr<IGuiPlatform> platform);
 
   IGuiPlatform* platform() const { return platform_.get(); }
