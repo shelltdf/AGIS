@@ -4,6 +4,7 @@
 #include "ui_engine/gdiplus_ui.h"
 #include "ui_engine/widget.h"
 #include "ui_engine/widget_core.h"
+#include "ui_engine/widgets_mainframe.h"
 
 #include <algorithm>
 #include <string>
@@ -41,6 +42,26 @@ void PaintWidgetSubtreeWin32(HDC hdc, Widget* w, int parent_x, int parent_y) {
   ctx.clip = {x, y, g.w, g.h};
   w->paintEvent(ctx);
 
+  /** `MainFrame`：菜单栏最后绘制，使下拉叠在 Dock / 画布 / 状态栏等之上（下拉为叠层，几何上落在下方控件区域内）。 */
+  if (dynamic_cast<MainFrame*>(w)) {
+    MenuBarWidget* menu_bar = nullptr;
+    for (const auto& ch : w->children()) {
+      if (auto* mb = dynamic_cast<MenuBarWidget*>(ch.get())) {
+        menu_bar = mb;
+        break;
+      }
+    }
+    for (const auto& ch : w->children()) {
+      if (ch.get() != menu_bar) {
+        PaintWidgetSubtreeWin32(hdc, ch.get(), x, y);
+      }
+    }
+    if (menu_bar) {
+      PaintWidgetSubtreeWin32(hdc, menu_bar, x, y);
+    }
+    return;
+  }
+
   for (const auto& ch : w->children()) {
     PaintWidgetSubtreeWin32(hdc, ch.get(), x, y);
   }
@@ -56,6 +77,18 @@ void DemoPaintClient(HDC hdc, const RECT& client, Widget* root) {
   PaintWidgetSubtreeWin32(hdc, root, 0, 0);
 }
 
+bool WidgetIsDescendantOf(Widget* w, Widget* ancestor) {
+  if (!w || !ancestor) {
+    return false;
+  }
+  for (Widget* p = w; p; p = p->parent()) {
+    if (p == ancestor) {
+      return true;
+    }
+  }
+  return false;
+}
+
 Widget* HitTestWidget(Widget* w, int client_x, int client_y, int origin_x, int origin_y) {
   if (!w || !w->visible()) {
     return nullptr;
@@ -63,10 +96,48 @@ Widget* HitTestWidget(Widget* w, int client_x, int client_y, int origin_x, int o
   const Rect g = w->geometry();
   const int ax = origin_x + g.x;
   const int ay = origin_y + g.y;
-  if (client_x < ax || client_y < ay || client_x >= ax + g.w || client_y >= ay + g.h) {
+  bool inside = client_x >= ax && client_y >= ay && client_x < ax + g.w && client_y < ay + g.h;
+  if (!inside) {
+    if (auto* mb = dynamic_cast<MenuBarWidget*>(w)) {
+      inside = mb->containsPointForHitTest(client_x, client_y, origin_x, origin_y);
+    }
+  }
+  if (!inside) {
     return nullptr;
   }
   const auto& ch = w->children();
+
+  /**
+   * `MainFrame`：子控件在 vector 里菜单栏在前、画布等在后；逆序命中时画布先于菜单栏，
+   * 下拉与画布重叠时误命中画布，`MenuItem` 无悬停。须与绘制顺序一致：**先**测菜单栏子树，
+   * 再对其余子控件逆序命中。
+   */
+  if (dynamic_cast<MainFrame*>(w)) {
+    MenuBarWidget* menu_bar = nullptr;
+    for (const auto& c : ch) {
+      if (auto* mb = dynamic_cast<MenuBarWidget*>(c.get())) {
+        menu_bar = mb;
+        break;
+      }
+    }
+    if (menu_bar) {
+      Widget* hit = HitTestWidget(menu_bar, client_x, client_y, ax, ay);
+      if (hit) {
+        return hit;
+      }
+    }
+    for (auto it = ch.rbegin(); it != ch.rend(); ++it) {
+      if (it->get() == menu_bar) {
+        continue;
+      }
+      Widget* hit = HitTestWidget(it->get(), client_x, client_y, ax, ay);
+      if (hit) {
+        return hit;
+      }
+    }
+    return w;
+  }
+
   for (auto it = ch.rbegin(); it != ch.rend(); ++it) {
     Widget* hit = HitTestWidget(it->get(), client_x, client_y, ax, ay);
     if (hit) {
@@ -138,6 +209,11 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       App::instance().setPointerClient(x, y);
       if (root) {
         Widget* hit = HitTestWidget(root, x, y, 0, 0);
+        Menu* openm = App::instance().openDropDownMenu();
+        if (openm && (!hit || !WidgetIsDescendantOf(hit, openm))) {
+          App::instance().setOpenDropDownMenu(nullptr);
+          hit = HitTestWidget(root, x, y, 0, 0);
+        }
         App::instance().setHoverWidget(hit);
         if (hit) {
           hit->mousePressEvent(x, y, 1);
@@ -161,7 +237,10 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     }
     case WM_KEYDOWN:
       if (wParam == VK_ESCAPE) {
-        App::instance().requestQuit();
+        if (App::instance().openDropDownMenu()) {
+          App::instance().setOpenDropDownMenu(nullptr);
+          InvalidateRect(hwnd, nullptr, FALSE);
+        }
       }
       return 0;
     case WM_PAINT: {

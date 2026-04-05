@@ -11,6 +11,8 @@
 
 namespace agis::ui {
 
+class Menu;
+
 /**
  * 应用程序对象（类似 QApplication）：**进程内单例**，持有 GUI 后端，统一 `exec()` / `quit`。
  * 使用 `App::instance()` 取得引用；构造私有化，禁止复制。
@@ -91,6 +93,10 @@ class AGIS_UI_API App {
     }
   }
 
+  /** 当前在菜单栏展开的 `Menu`（下拉可见）；`nullptr` 表示未展开。由平台在点击外部时关闭。 */
+  void setOpenDropDownMenu(Menu* m);
+  Menu* openDropDownMenu() const { return open_drop_down_menu_; }
+
  private:
   App();
 
@@ -103,6 +109,7 @@ class AGIS_UI_API App {
   Widget* hover_widget_{nullptr};
   std::wstring status_hint_;
   ClientResizeHandler client_resize_handler_;
+  Menu* open_drop_down_menu_{nullptr};
 };
 
 }  // namespace agis::ui

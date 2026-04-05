@@ -1,4 +1,5 @@
 #include "ui_engine/app.h"
+#include "ui_engine/widgets_mainframe.h"
 
 #include <memory>
 #include <utility>
@@ -32,7 +33,10 @@ void App::setPlatform(std::unique_ptr<IGuiPlatform> platform) {
   platform_ = std::move(platform);
 }
 
-void App::clearRootWidgets() { rootWidgets_.clear(); }
+void App::clearRootWidgets() {
+  rootWidgets_.clear();
+  open_drop_down_menu_ = nullptr;
+}
 
 int App::exec() {
   if (rootWidgets_.empty()) {
@@ -49,6 +53,21 @@ void App::requestQuit() {
   quitRequested_ = true;
   if (platform_) {
     platform_->requestExit();
+  }
+}
+
+void App::setOpenDropDownMenu(Menu* m) {
+  if (open_drop_down_menu_ == m) {
+    return;
+  }
+  Menu* prev = open_drop_down_menu_;
+  open_drop_down_menu_ = nullptr;
+  if (prev) {
+    prev->closeDropDownVisual();
+  }
+  open_drop_down_menu_ = m;
+  if (m) {
+    m->openDropDownVisual();
   }
 }
 

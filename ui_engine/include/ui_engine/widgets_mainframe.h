@@ -9,6 +9,8 @@
 #include "ui_engine/export.h"
 #include "ui_engine/widget_core.h"
 
+#include <string>
+
 namespace agis::ui {
 
 /** 停靠区所在边（与本产品 Dock Area 四边模型一致）。 */
@@ -24,13 +26,70 @@ class AGIS_UI_API MainFrame : public Window {
   void paintEvent(PaintContext& ctx) override;
 };
 
-/** 顶层菜单栏区域（实现侧：`SetMenu` / `BuildMenu` 绑定的 HMENU 条带）。 */
+/** 顶层菜单栏区域（实现侧：`SetMenu` / `BuildMenu` 绑定的 HMENU 条带）。子节点为若干 `Menu`（横向排列）。 */
 class AGIS_UI_API MenuBarWidget : public Widget {
  public:
   MenuBarWidget() = default;
+
+  /**
+   * 命中测试用：条带矩形 **或** 当前展开下拉的 `Menu` 完整几何（叠在下方 UI 之上，**不**参与主布局增高）。
+   * `origin_*` 为父链上已叠加到本控件左上角的客户区坐标。
+   */
+  bool containsPointForHitTest(int client_x, int client_y, int origin_x, int origin_y) const;
+
   void paintEvent(PaintContext& ctx) override;
   void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
   void mousePressEvent(int client_x, int client_y, int button) override;
+};
+
+/**
+ * 菜单栏上的一个顶层菜单项（如 File / Language）。
+ * 子节点为 `MenuItem`（下拉项）；展开时 `geometry` 向下延伸以包含下拉区（叠层绘制；**不**推高主壳层布局）。
+ */
+class AGIS_UI_API Menu : public Widget {
+ public:
+  Menu() = default;
+
+  void setTitle(std::wstring title);
+  const std::wstring& title() const { return title_; }
+
+  bool dropDownOpen() const { return drop_down_open_; }
+
+  /** 由 `RelayoutMenuBarChildren` 调用：在栏内单元格 (x,y,w) 与条带高度 `bar_h` 下同步整控件几何与子项布局。 */
+  void syncGeometryWithBarCell(int x, int y, int w, int bar_h);
+
+  void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
+
+ private:
+  friend class App;
+  void openDropDownVisual();
+  void closeDropDownVisual();
+
+  std::wstring title_;
+  bool drop_down_open_{false};
+  int bar_strip_h_{28};
+};
+
+/** 菜单条目（`Menu` 的子节点）。 */
+class AGIS_UI_API MenuItem : public Widget {
+ public:
+  MenuItem();
+
+  void setText(std::wstring text);
+  const std::wstring& text() const { return text_; }
+
+  void setEnabled(bool on) { enabled_ = on; }
+  bool enabled() const { return enabled_; }
+
+  void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
+
+ private:
+  std::wstring text_;
+  bool enabled_{true};
 };
 
 /** 主工具栏（实现侧：`CreateToolbarEx` / `IDC_MAIN_TOOLBAR`）。 */
@@ -40,6 +99,10 @@ class AGIS_UI_API ToolBarWidget : public Widget {
   void paintEvent(PaintContext& ctx) override;
   void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
   void mousePressEvent(int client_x, int client_y, int button) override;
+
+ private:
+  /** 演示文案四段：New / Open / Save / 其余；`-1` 表示未落在栏内。 */
+  int toolbar_hover_segment_{-1};
 };
 
 /** 状态栏（实现侧：底部 `STATUSCLASSNAME`，双击打开日志）。 */

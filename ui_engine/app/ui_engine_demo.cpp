@@ -11,6 +11,33 @@
 
 namespace agis::ui {
 
+/** 菜单栏内每个 `Menu` 固定宽度、左起排列（与 `kMenuH` 行高一致）。 */
+constexpr int kMenuCellW = 120;
+
+static void RelayoutMenuBarChildren(MenuBarWidget* bar, int w, int h) {
+  if (!bar || w <= 0 || h <= 0) {
+    return;
+  }
+  auto& c = bar->children();
+  const int n = static_cast<int>(c.size());
+  if (n == 0) {
+    return;
+  }
+  int x = 0;
+  for (int i = 0; i < n; ++i) {
+    const int cell_w = std::min(kMenuCellW, std::max(0, w - x));
+    if (cell_w <= 0) {
+      break;
+    }
+    if (auto* menu = dynamic_cast<Menu*>(c[i].get())) {
+      menu->syncGeometryWithBarCell(x, 0, cell_w, h);
+    } else {
+      c[i]->setGeometry({x, 0, cell_w, h});
+    }
+    x += cell_w;
+  }
+}
+
 namespace {
 
 constexpr int kStrip = 32;
@@ -162,8 +189,13 @@ void RelayoutMainFrameForClientSizeImpl(MainFrame* root, int client_w, int clien
 
   root->setGeometry({0, 0, client_w, client_h});
 
-  kids[0]->setGeometry({0, 0, client_w, kMenuH});
-  kids[1]->setGeometry({0, kMenuH, client_w, kTbH});
+  /** `kids[1]` 为菜单栏、`kids[0]` 为工具栏：子控件逆序命中，菜单栏须后添加（见 `BuildUiEngineDemoWidgetTree`）。 */
+  kids[1]->setGeometry({0, 0, client_w, kMenuH});
+  if (auto* mb = dynamic_cast<MenuBarWidget*>(kids[1].get())) {
+    RelayoutMenuBarChildren(mb, client_w, kMenuH);
+  }
+  /** 下拉为叠层，不占用主壳层纵向排版；工具栏紧贴固定高度菜单栏下缘。 */
+  kids[0]->setGeometry({0, kMenuH, client_w, kTbH});
 
   const int y0 = kMenuH + kTbH;
   const int content_h = std::max(0, client_h - y0 - kStatusH);
@@ -221,13 +253,69 @@ std::unique_ptr<MainFrame> BuildUiEngineDemoWidgetTree() {
   root->setTitle(L"demo");
   root->setGeometry({0, 0, 960, 640});
 
-  auto menu = std::make_unique<MenuBarWidget>();
-  menu->setGeometry({0, 0, 960, 28});
-  root->addChild(std::move(menu));
+  auto menu_bar = std::make_unique<MenuBarWidget>();
+  menu_bar->setGeometry({0, 0, 960, 28});
+
+  auto file = std::make_unique<Menu>();
+  file->setTitle(L"File");
+  {
+    auto n1 = std::make_unique<MenuItem>();
+    n1->setText(L"New");
+    auto n2 = std::make_unique<MenuItem>();
+    n2->setText(L"Open");
+    auto n3 = std::make_unique<MenuItem>();
+    n3->setText(L"Save");
+    file->addChild(std::move(n1));
+    file->addChild(std::move(n2));
+    file->addChild(std::move(n3));
+  }
+  menu_bar->addChild(std::move(file));
+
+  auto language = std::make_unique<Menu>();
+  language->setTitle(L"Language");
+  {
+    auto n1 = std::make_unique<MenuItem>();
+    n1->setText(L"中文");
+    auto n2 = std::make_unique<MenuItem>();
+    n2->setText(L"English");
+    language->addChild(std::move(n1));
+    language->addChild(std::move(n2));
+  }
+  menu_bar->addChild(std::move(language));
+
+  auto theme = std::make_unique<Menu>();
+  theme->setTitle(L"Theme");
+  {
+    auto n1 = std::make_unique<MenuItem>();
+    n1->setText(L"Follow system");
+    auto n2 = std::make_unique<MenuItem>();
+    n2->setText(L"Light");
+    auto n3 = std::make_unique<MenuItem>();
+    n3->setText(L"Dark");
+    theme->addChild(std::move(n1));
+    theme->addChild(std::move(n2));
+    theme->addChild(std::move(n3));
+  }
+  menu_bar->addChild(std::move(theme));
+
+  auto help = std::make_unique<Menu>();
+  help->setTitle(L"Help");
+  {
+    auto n1 = std::make_unique<MenuItem>();
+    n1->setText(L"Help topics");
+    auto n2 = std::make_unique<MenuItem>();
+    n2->setText(L"About");
+    help->addChild(std::move(n1));
+    help->addChild(std::move(n2));
+  }
+  menu_bar->addChild(std::move(help));
+
+  RelayoutMenuBarChildren(menu_bar.get(), 960, 28);
 
   auto tb = std::make_unique<ToolBarWidget>();
   tb->setGeometry({0, 28, 960, 36});
   root->addChild(std::move(tb));
+  root->addChild(std::move(menu_bar));
 
   constexpr int y0 = 64;
   constexpr int cw = 560;
