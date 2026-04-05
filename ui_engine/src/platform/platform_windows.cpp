@@ -36,32 +36,12 @@ void DemoPaintClient(HDC hdc, const RECT& client, Widget* root) {
   FillRect(hdc, &client, bg);
   DeleteObject(bg);
 
-  RECT rcLayer{client.left + 8, client.top + 8, client.left + 8 + 200, client.top + 8 + 180};
-  UiPaintLayerPanel(hdc, rcLayer);
+  const bool empty_root = !root || root->children().empty();
 
-  RECT rcProps{client.right - 280, client.top + 8, client.right - 8, client.top + 200};
-  RECT driverCard{rcProps.left + 12, rcProps.top + 40, rcProps.right - 12, rcProps.top + 100};
-  RECT sourceCard{rcProps.left + 12, rcProps.top + 108, rcProps.right - 12, rcProps.top + 180};
-  UiPaintLayerPropsDockFrame(hdc, rcProps, &driverCard, &sourceCard, L"ui_engine_demo");
-
-  RECT rcCenter{client.left + w / 4, client.top + h / 4, client.right - w / 4, client.bottom - h / 4};
-  UiPaintMapCenterHint(hdc, rcCenter, L"MapCenterHint / GDI+");
-
-  RECT rcSmall{client.left + 230, client.top + 200, client.left + 430, client.top + 320};
-  UiPaintLayerPropsPanel(hdc, rcSmall, L"PropsPanel", L"body line");
-
-  RECT rcHint{client.right - 320, client.bottom - 48, client.right - 12, client.bottom - 12};
-  UiPaintMapHintOverlay(hdc, rcHint, L"UiPaintMapHintOverlay — ESC 退出");
-
-  SetBkMode(hdc, TRANSPARENT);
-  SetTextColor(hdc, RGB(20, 24, 32));
-#if defined(AGIS_BUILD_UI_ENGINE_DEMO)
-  const std::wstring line = FormatUiEngineDemoStatusLine(App::instance(), root);
-#else
-  const std::wstring line = L"";
-#endif
-  RECT rcText{client.left + 12, client.bottom - 72, client.right - 12, client.bottom - 36};
-  DrawTextW(hdc, line.c_str(), static_cast<int>(line.size()), &rcText, DT_LEFT | DT_WORDBREAK);
+  if (empty_root) {
+    RECT rcHint{client.left + 12, client.top + 12, client.right - 12, client.top + 48};
+    DrawTextW(hdc, L"空 MainFrame 无子 Widget。", -1, &rcHint, DT_LEFT | DT_WORDBREAK);
+  }
 }
 
 LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
