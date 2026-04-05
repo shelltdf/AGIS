@@ -60,8 +60,9 @@ classDiagram
 | [`platform_xlib.h`](../../../ui_engine/src/platform/platform_xlib.h) / [`platform_xlib.cpp`](../../../ui_engine/src/platform/platform_xlib.cpp) | Linux（默认） | Xlib `Display*`，轮询 `XPending`（占位，需窗口后补全） |
 | [`platform_xcb.h`](../../../ui_engine/src/platform/platform_xcb.h) / [`platform_xcb.cpp`](../../../ui_engine/src/platform/platform_xcb.cpp) | Linux（`-DAGIS_UI_USE_XCB=ON`） | `xcb_poll_for_event` 轮询 |
 | [`platform_cocoa.h`](../../../ui_engine/src/platform/platform_cocoa.h) / [`platform_cocoa.mm`](../../../ui_engine/src/platform/platform_cocoa.mm) | macOS | `NSApplication` 主循环 |
+| [`platform_gui.h`](../../../ui_engine/include/ui_engine/platform_gui.h) `CreateGuiPlatform` | [`platform_factory.cpp`](../../../ui_engine/src/platform_factory.cpp) | 全平台 | 编译期写死分支，创建当前目标对应的 `IGuiPlatform`；应用与演示入口只包含 `platform_gui.h`，无需直接包含各 `platform_*.h` |
 
-CMake 按 `WIN32` / `APPLE` / `UNIX` 只编译当前平台对应源并链接（Linux X11 需 `FindX11`，XCB 需 `libxcb`）。
+CMake 按 `WIN32` / `APPLE` / `UNIX` 编译当前平台对应 `platform_*.cpp/.mm` 并链接；[`platform_factory.cpp`](../../../ui_engine/src/platform_factory.cpp) 始终参与 `agis_ui_engine`（Linux X11 需 `FindX11`，XCB 需 `libxcb`）。
 
 ---
 

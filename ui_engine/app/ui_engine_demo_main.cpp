@@ -16,7 +16,7 @@
 #include "ui_engine_demo.h"
 #include "ui_engine/app.h"
 #include "ui_engine/app_launch_params.h"
-#include "platform_windows.h"
+#include "ui_engine/platform_gui.h"
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int show) {
   agis::ui::App& app = agis::ui::App::instance();
@@ -24,7 +24,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int show) {
 
   const agis::ui::AppLaunchParams launch =
       agis::ui::make_launch_params(__argc, __argv, reinterpret_cast<void*>(hInst), show);
-  app.setPlatform(std::make_unique<agis::ui::PlatformWindows>(launch));
+  app.setPlatform(agis::ui::CreateGuiPlatform(launch));
 
   agis::ui::IGuiPlatform* plat = app.platform();
   if (plat && !plat->ok()) {

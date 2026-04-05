@@ -15,9 +15,9 @@ namespace agis::ui {
  *
  * **根 Widget**：可注册多个顶层/根 `Widget`（如 `MainFrame`）。`exec()` 时若**尚未注册任何根 Widget**，返回 `kExitNoRootWidgets`（错误退出）。
  *
- * **事件循环**：`exec()` 调用 `IGuiPlatform::runEventLoop`；构造时按目标操作系统宏安装默认 `IGuiPlatform`；未知平台则保持未设置，`exec()` 再回退到空后端。
+ * **事件循环**：`exec()` 调用 `IGuiPlatform::runEventLoop`；构造时通过 `CreateGuiPlatform()` 按平台安装默认 `IGuiPlatform`；未知平台则保持未设置，`exec()` 再回退到空后端。
  *
- * 可在首次 `exec()` 前调用 `setPlatform` 覆盖默认实现（例如 Windows 演示壳需传入 `HINSTANCE`）。
+ * 可在首次 `exec()` 前调用 `setPlatform` 覆盖默认实现；Windows 演示壳请通过 `CreateGuiPlatform(launch)` 传入 `AppLaunchParams`（含 `native_app_instance`）。
  */
 class AGIS_UI_API App {
  public:

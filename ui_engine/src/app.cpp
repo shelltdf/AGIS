@@ -3,18 +3,6 @@
 #include <memory>
 #include <utility>
 
-#if defined(_WIN32)
-#include "platform_windows.h"
-#elif defined(__APPLE__)
-#include "platform_cocoa.h"
-#elif defined(__linux__) || defined(__unix__)
-#if defined(AGIS_UI_USE_XCB)
-#include "platform_xcb.h"
-#else
-#include "platform_xlib.h"
-#endif
-#endif
-
 namespace agis::ui {
 
 namespace {
@@ -38,19 +26,7 @@ App& App::instance() {
   return inst;
 }
 
-App::App() {
-#if defined(_WIN32)
-  platform_ = std::make_unique<PlatformWindows>();
-#elif defined(__APPLE__)
-  platform_ = std::make_unique<PlatformCocoa>();
-#elif defined(__linux__) || defined(__unix__)
-#if defined(AGIS_UI_USE_XCB)
-  platform_ = std::make_unique<PlatformXcb>();
-#else
-  platform_ = std::make_unique<PlatformXlib>();
-#endif
-#endif
-}
+App::App() { platform_ = CreateGuiPlatform(); }
 
 void App::setPlatform(std::unique_ptr<IGuiPlatform> platform) {
   platform_ = std::move(platform);

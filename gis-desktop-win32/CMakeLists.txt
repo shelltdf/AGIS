@@ -93,6 +93,7 @@ endif()
 # --- ui_engine: 独立库（静态 / 动态由 AGIS_UI_ENGINE_SHARED 切换）---
 set(_agis_ui_engine_sources
   ${AGIS_UI_ENGINE_DIR}/src/app.cpp
+  ${AGIS_UI_ENGINE_DIR}/src/platform_factory.cpp
   ${AGIS_UI_ENGINE_DIR}/src/widget.cpp
   ${AGIS_UI_ENGINE_DIR}/src/widgets.cpp
   ${AGIS_UI_ENGINE_DIR}/src/widgets_mainframe.cpp
