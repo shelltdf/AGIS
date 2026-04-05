@@ -8,7 +8,8 @@
 | 地图宿主 / GDAL+GDI | `gis-desktop-win32/src/map/map_engine.h` / `map_engine.cpp` → **`MapEngine::Instance()`**、`MapHostProc`、`MapDocument`（引擎持有）、`agis_detail::RasterMapLayer` / `VectorMapLayer` |
 | 投影 / 拾取 | `gis-desktop-win32/src/map/map_projection.cpp` / `map_projection.h` |
 | GPU 呈现 | `gis-desktop-win32/src/map/map_gpu.cpp` / `map_gpu.h` |
-| GDI+ UI | `gis-desktop-win32/src/ui/gdiplus_ui.h` / `gdiplus_ui.cpp`（物理类图见 [uml-class-ui.md](uml-class-ui.md)） |
+| GDI+ UI | `gis-desktop-win32/src/ui/gdiplus_ui.h` / `gdiplus_ui.cpp` |
+| 抽象 GUI（App / Widget / 平台接口） | `gis-desktop-win32/src/ui/app.*`、`widget.*`、`widgets.*`、`ui_types.h`、`platform_gui.h`（类图见 [uml-class-ui.md](uml-class-ui.md)） |
 | 日志缓冲 | `gis-desktop-win32/src/core/app_log.cpp` |
 | 日志窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `LogWndProc` |
 | 菜单资源 ID | `gis-desktop-win32/src/app/resource.h` 与代码中 `#define` 一致 |

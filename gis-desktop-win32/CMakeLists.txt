@@ -87,6 +87,9 @@ add_executable(agis_desktop WIN32
   src/map/map_gpu.cpp
   src/map/map_projection.cpp
   src/core/app_log.cpp
+  src/ui/app.cpp
+  src/ui/widget.cpp
+  src/ui/widgets.cpp
   src/ui/gdiplus_ui.cpp
 )
 

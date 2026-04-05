@@ -1,17 +1,116 @@
 # ui 模块 UML 类图（物理阶段）
 
-**源码根**：[`gis-desktop-win32/src/ui/`](../../../gis-desktop-win32/src/ui/)（当前仅 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui/gdiplus_ui.h) / [`gdiplus_ui.cpp`](../../../gis-desktop-win32/src/ui/gdiplus_ui.cpp)）。
+**源码根**：[`gis-desktop-win32/src/ui/`](../../../gis-desktop-win32/src/ui/)
 
-**说明**：本模块**未定义 C++ 类**，对外为全局函数 API（GDI+ 绘制与 PNG 导出）。类图用 **`«module»`** 表示编译单元公开接口；[`gdiplus_ui.cpp`](../../../gis-desktop-win32/src/ui/gdiplus_ui.cpp) 内匿名命名空间另有辅助函数（圆角路径、属性区卡片、PNG 编码器 CLSID 查询等），不暴露在头文件中。
+**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。当前仓库实现为**可编译桩**（`exec` 默认 `null` 后端立即返回），与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui/gdiplus_ui.h) 全局绘制 API **并存**，主程序仍可由 Win32 消息泵驱动。
 
 ---
 
-## 公开 API（gdiplus_ui.h）
+## 跨平台后端（platform_gui.h）
 
 ```mermaid
 classDiagram
   direction TB
 
+  class IGuiPlatform {
+    <<interface>>
+    +runEventLoop(app) int
+    +requestExit() void
+    +backendId()* const char*
+  }
+
+  class App {
+    +instance() App&
+    +setPlatform(platform) void
+    +platform() IGuiPlatform*
+    +exec() int
+    +requestQuit() void
+    +quitRequested() bool
+  }
+
+  App *-- "0..1" IGuiPlatform : platform_
+```
+
+| `backendId()` 典型返回值 | 说明 |
+|--------------------------|------|
+| `"win32"` | Win32 USER32 / GDI / GDI+ / 可选 Direct2D |
+| `"xcb"` / `"xlib"` | Linux X11 客户端 |
+| `"cocoa"` | macOS AppKit |
+| `"null"` | 空实现（设计/单测占位） |
+
+---
+
+## 几何与绘制（ui_types.h）
+
+- **`Point` / `Size` / `Rect`**：整数像素逻辑坐标。
+- **`PaintContext`**：`nativeDevice` 为不透明指针（如 `HDC`、`cairo_t*`、`CGContextRef`），由后端填充。
+
+---
+
+## Widget 继承树（widget.h / widgets.h）
+
+```mermaid
+classDiagram
+  direction TB
+
+  class Widget {
+    <<abstract>>
+    +parent() Widget*
+    +geometry() Rect
+    +setGeometry(r) void
+    +children() vector
+    +addChild(child) void
+    +visible() bool
+    +setVisible(on) void
+    +paintEvent(ctx)* void
+  }
+
+  class Window {
+    +setTitle(title) void
+    +title() wstring
+  }
+
+  class Frame
+  class Label {
+    +setText(t) void
+    +text() wstring
+  }
+
+  class PushButton {
+    +setText(t) void
+    +text() wstring
+    +click() void
+    +setOnClicked(fn) void
+  }
+
+  class LineEdit {
+    +setText(t) void
+    +text() wstring
+  }
+
+  class ScrollArea {
+    +setContentWidget(w) void
+    +contentWidget() Widget*
+  }
+
+  Widget <|-- Window
+  Widget <|-- Frame
+  Widget <|-- Label
+  Widget <|-- PushButton
+  Widget <|-- LineEdit
+  Widget <|-- ScrollArea
+```
+
+**说明**：父子关系仅通过 **`Widget::addChild(std::unique_ptr<Widget>)`**（或 `ScrollArea::setContentWidget` 对内容控件设置 `parent_`）建立；**无信号槽**，交互由后端调用如 **`PushButton::click()`**。
+
+---
+
+## 过程式 GDI+ API（gdiplus_ui.h）
+
+与 **`agis::ui` 类层次独立**，供当前主窗口自绘 Dock / 地图叠加层等：
+
+```mermaid
+classDiagram
   class gdiplus_ui {
     <<module>>
     <<header gdiplus_ui.h>>
@@ -19,44 +118,29 @@ classDiagram
     +UiGdiplusShutdown() void
     +UiPaintLayerPanel(hdc, rc) void
     +UiPaintLayerPropsPanel(hdc, rc, nameLine, body) void
-    +UiPaintLayerPropsDockFrame(hdc, rc, driverCard, sourceCard, layerSubtitleLine) void
+    +UiPaintLayerPropsDockFrame(...) void
     +UiPaintMapHintOverlay(hdc, client, hint) void
     +UiPaintMapCenterHint(hdc, client, text) void
     +UiSaveHbitmapToPngFile(hbmp, path) bool
-    +UiSaveBgraTopDownToPngFile(pixels, width, height, path) bool
+    +UiSaveBgraTopDownToPngFile(pixels, w, h, path) bool
   }
 ```
 
-### 职责简述
-
-| 符号 | 职责 |
-|------|------|
-| `UiGdiplusInit` / `UiGdiplusShutdown` | `GdiplusStartup` / `GdiplusShutdown` 与进程内 token（`.cpp` 文件作用域静态变量）。 |
-| `UiPaintLayerPanel` | 左侧「图层」Dock 顶区：渐变背景、标题「图层」、副标题与「左」角标。 |
-| `UiPaintLayerPropsPanel` | 右侧「图层属性」整卡：顶区 + 单卡片内 `nameLine` / `body` 文本（GDI+）。 |
-| `UiPaintLayerPropsDockFrame` | 右侧 Dock **仅装饰**：双卡片区轮廓（驱动属性 / 数据源属性）或单卡回退；详细多行文本由宿主 `EDIT` 子控件承载。 |
-| `UiPaintMapHintOverlay` | 地图客户区**右下**半透明提示条（在 GDI `BitBlt` 之后叠加）。 |
-| `UiPaintMapCenterHint` | 地图客户区**中央**圆角卡片提示（如无 GDAL 等）。 |
-| `UiSaveHbitmapToPngFile` | `HBITMAP` → PNG 文件（GDI+ `Bitmap` + PNG 编码器）。 |
-| `UiSaveBgraTopDownToPngFile` | 顶行在前的 BGRA8 像素缓冲 → PNG（与 `CreateDIBSection` 32 位自上而下一致）。 |
-
 ---
 
-## 依赖（实现侧，非本仓库类型）
-
-- **GDI+**：`#include <gdiplus.h>`，链接 `gdiplus.lib`（见 `gdiplus_ui.cpp` `#pragma comment`）。
-- **调用方**：主窗口与地图宿主在 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp)、[`map_engine.cpp`](../../../gis-desktop-win32/src/map/map_engine.cpp) 等处按区域 `RECT` 调用上述绘制函数。
-
----
-
-## 实现文件内私有符号（匿名命名空间，摘要）
-
-仅用于文档追溯，**不**作为对外契约：
+## 实现文件内私有符号（gdiplus_ui.cpp，摘要）
 
 | 符号 | 作用 |
 |------|------|
-| `g_gdiplusToken` | `ULONG_PTR`，GDI+ 启动 token。 |
-| `FillRoundRectPath` | 构建圆角矩形 `GraphicsPath`。 |
-| `PaintPropsSectionCard` | 填充/描边单张属性区卡片。 |
-| `DrawPropsCardHeader` | 卡片顶区：左侧强调条 + 主副标题。 |
-| `GetPngEncoderClsid` | 枚举编码器，查找 `image/png` 的 CLSID。 |
+| `g_gdiplusToken` | GDI+ 启动 token |
+| `FillRoundRectPath` | 圆角路径 |
+| `PaintPropsSectionCard` / `DrawPropsCardHeader` | 属性区卡片 |
+| `GetPngEncoderClsid` | PNG 编码器 CLSID |
+
+---
+
+## 依赖与调用关系
+
+- **GDI+**：见 `gdiplus_ui.cpp`。
+- **`agis::ui`**：无强制第三方；后端实现可再链接各平台库。
+- **主程序**：[`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) 仍使用 Win32；未来可将消息泵迁入 `IGuiPlatform` 的 `runEventLoop`（Win32 实现）。
