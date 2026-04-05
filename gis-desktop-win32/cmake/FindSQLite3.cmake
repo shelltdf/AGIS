@@ -1,0 +1,18 @@
+# Prefer AGIS-bundled sqlite target (add_subdirectory 3rdparty/sqlite-amalgamation-3510300) before system SQLite.
+if(TARGET agis_sqlite3)
+  set(SQLite3_FOUND TRUE)
+  set(SQLite3_VERSION "3.51.3")
+  if(DEFINED AGIS_SQLITE_INCLUDE_DIR AND AGIS_SQLITE_INCLUDE_DIR)
+    set(SQLite3_INCLUDE_DIR "${AGIS_SQLITE_INCLUDE_DIR}")
+  else()
+    set(SQLite3_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/sqlite-amalgamation-3510300")
+  endif()
+  set(SQLite3_INCLUDE_DIRS "${SQLite3_INCLUDE_DIR}")
+  set(SQLite3_LIBRARIES agis_sqlite3)
+  if(NOT TARGET SQLite::SQLite3)
+    add_library(SQLite::SQLite3 ALIAS agis_sqlite3)
+  endif()
+  return()
+endif()
+
+include(${CMAKE_ROOT}/Modules/FindSQLite3.cmake)
