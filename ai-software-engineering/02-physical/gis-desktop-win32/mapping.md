@@ -9,7 +9,7 @@
 | 投影 / 拾取 | `gis-desktop-win32/src/map_engine/map_projection.cpp` / `map_projection.h` |
 | GPU 呈现 | `gis-desktop-win32/src/map_engine/map_gpu.cpp` / `map_gpu.h` |
 | GDI+ UI | `gis-desktop-win32/src/ui_engine/gdiplus_ui.h` / `gdiplus_ui.cpp` |
-| 抽象 GUI（App / Widget / 平台接口） | `gis-desktop-win32/src/ui_engine/app.*`、`widget.*`、`widgets.*`、`widgets_shell.*`、`widgets_all.h`、`ui_types.h`、`platform_gui.h`（类图见 [uml-class-ui.md](uml-class-ui.md)） |
+| 抽象 GUI（App / Widget / 平台接口） | `gis-desktop-win32/src/ui_engine/app.*`、`widget.*`、`widgets.*`、`widgets_all.h`；**兼容** `widgets_shell.h`（仅转包含 `widgets.h`）、`ui_types.h`、`platform_gui.h`（类图见 [uml-class-ui.md](uml-class-ui.md)） |
 | 日志缓冲 | `gis-desktop-win32/src/core/app_log.cpp` |
 | 日志窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `LogWndProc` |
 | 菜单资源 ID | `gis-desktop-win32/src/app/resource.h` 与代码中 `#define` 一致 |

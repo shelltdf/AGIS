@@ -105,9 +105,9 @@ classDiagram
 
 ---
 
-## 主窗口已实现区域（widgets_shell.h）
+## 主窗口已实现区域（widgets.h 后半部分）
 
-与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型化 Widget（**抽象桩**，尚未接入 `IGuiPlatform` 实现树）。声明见 [`widgets_shell.h`](../../../gis-desktop-win32/src/ui_engine/widgets_shell.h)（依赖 [`widgets.h`](../../../gis-desktop-win32/src/ui_engine/widgets.h) 中的 `Window` 等）；需要一并包含时可使用 [`widgets_all.h`](../../../gis-desktop-win32/src/ui_engine/widgets_all.h)。
+与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型化 Widget（**抽象桩**，尚未接入 `IGuiPlatform` 实现树）。声明与通用控件同在 [`widgets.h`](../../../gis-desktop-win32/src/ui_engine/widgets.h)；可选 [`widgets_all.h`](../../../gis-desktop-win32/src/ui_engine/widgets_all.h) 等价于包含 `widgets.h`。
 
 ```mermaid
 classDiagram

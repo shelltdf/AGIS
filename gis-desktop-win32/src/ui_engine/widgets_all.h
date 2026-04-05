@@ -1,5 +1,4 @@
 #pragma once
 
-/** 通用控件（widgets.h）与主窗口已实现区域对应的壳层类型（widgets_shell.h）一并引入。 */
+/** 全部 Widget 子类（通用控件 + 主窗口壳层 / Dock / 地图 / 对话框等）见 `widgets.h`。 */
 #include "ui_engine/widgets.h"
-#include "ui_engine/widgets_shell.h"
