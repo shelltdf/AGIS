@@ -20,6 +20,9 @@ class IGuiPlatform {
 
   /** 稳定标识，如 "win32" / "xcb" / "xlib" / "cocoa" / "null"。 */
   virtual const char* backendId() const = 0;
+
+  /** 平台是否已就绪（窗口/表面创建成功等）；默认 true。 */
+  virtual bool ok() const { return true; }
 };
 
 }  // namespace agis::ui

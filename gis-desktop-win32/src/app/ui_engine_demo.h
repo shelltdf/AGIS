@@ -2,7 +2,9 @@
 
 /**
  * ui_engine 演示：与操作系统无关的 Widget 树构建与状态摘要（供各平台壳层调用）。
- * Windows 下进程入口 `wWinMain` 见 `ui_engine_demo_main.cpp`；演示 HWND / GDI+ 壳见 `ui_engine/platform_windows.cpp`（`AGIS_BUILD_UI_ENGINE_DEMO`）。
+ * 进程入口在 `ui_engine_demo_main.cpp`：先 `App::addRootWidget(BuildUiEngineDemoWidgetTree())`，再按需
+ * `setPlatform`（Windows 下为 `PlatformWindows` + `AGIS_BUILD_UI_ENGINE_DEMO` 的 GDI+ 演示壳，见
+ * `ui_engine/platform_windows.cpp`）。
  */
 
 #include <memory>
@@ -14,7 +16,7 @@ namespace agis::ui {
 
 class App;
 
-/** 构造覆盖 widget_core / widgets_mainframe / ui_private 类型的演示树。 */
+/** 构造覆盖 widget_core / widgets_mainframe / ui_private 类型的演示树；由入口在 `exec()` 前交给 `App::addRootWidget`。 */
 std::unique_ptr<MainFrame> BuildUiEngineDemoWidgetTree();
 
 /** 统计子树中的 Widget 节点数（含根）。 */

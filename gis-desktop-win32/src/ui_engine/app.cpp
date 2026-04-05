@@ -56,7 +56,12 @@ void App::setPlatform(std::unique_ptr<IGuiPlatform> platform) {
   platform_ = std::move(platform);
 }
 
+void App::clearRootWidgets() { rootWidgets_.clear(); }
+
 int App::exec() {
+  if (rootWidgets_.empty()) {
+    return kExitNoRootWidgets;
+  }
   if (!platform_) {
     platform_ = std::make_unique<NullGuiPlatform>();
   }

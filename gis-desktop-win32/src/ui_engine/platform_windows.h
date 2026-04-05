@@ -1,10 +1,7 @@
 #pragma once
 
+#include "ui_engine/app_launch_params.h"
 #include "ui_engine/platform_gui.h"
-
-#if defined(_WIN32)
-#include <windows.h>
-#endif
 
 namespace agis::ui {
 
@@ -17,18 +14,19 @@ void PlatformWindowsReleaseDemoResources(PlatformWindows* p);
 
 /**
  * Win32 USER32 消息循环（`GetMessage` / `DispatchMessage`）。
- * `PlatformWindows(HINSTANCE, …)` 仅在定义 `AGIS_BUILD_UI_ENGINE_DEMO` 时于 `platform_windows.cpp` 编译；进程入口 `wWinMain` 在 `ui_engine_demo_main.cpp`。
+ * 演示壳构造 `PlatformWindows(AppLaunchParams)` 仅在定义 `AGIS_BUILD_UI_ENGINE_DEMO` 时于 `platform_windows.cpp` 实现；
+ * 进程入口见 `ui_engine_demo_main.cpp`（在 TU 内使用系统入口类型，再填入 `AppLaunchParams`）。
  */
 class PlatformWindows : public IGuiPlatform {
  public:
   PlatformWindows();
 #if defined(_WIN32)
-  PlatformWindows(HINSTANCE hinst, int nShowCmd);
+  explicit PlatformWindows(const AppLaunchParams& launch);
 #endif
   ~PlatformWindows() override;
 
 #if defined(_WIN32)
-  bool ok() const;
+  bool ok() const override;
 #endif
 
   int runEventLoop(App& app) override;
@@ -44,8 +42,10 @@ class PlatformWindows : public IGuiPlatform {
 #if defined(_WIN32)
   friend void detail::PlatformWindowsReleaseDemoResources(PlatformWindows*);
   Mode mode_{Mode::Basic};
-  HINSTANCE hinst_{nullptr};
-  HWND hwnd_{nullptr};
+  /** 语义同 `HINSTANCE`，存为 `void*` 以免公共头依赖 `<windows.h>`。 */
+  void* native_instance_{nullptr};
+  /** 语义同演示主窗口 `HWND`。 */
+  void* main_window_{nullptr};
   bool class_registered_{false};
 #endif
 };

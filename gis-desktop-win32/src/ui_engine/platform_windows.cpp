@@ -20,8 +20,6 @@ PlatformWindows::PlatformWindows() = default;
 
 namespace {
 
-std::unique_ptr<MainFrame> g_demoRoot;
-
 constexpr wchar_t kDemoClassName[] = L"AGIS_UIEngineDemo";
 constexpr wchar_t kDemoTitle[] = L"ui_engine demo";
 
@@ -51,7 +49,8 @@ void DemoPaintClient(HDC hdc, const RECT& client) {
 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, RGB(20, 24, 32));
-  const std::wstring line = FormatUiEngineDemoStatusLine(App::instance(), g_demoRoot.get());
+  const std::wstring line =
+      FormatUiEngineDemoStatusLine(App::instance(), App::instance().primaryRootWidget());
   RECT rcText{client.left + 12, client.bottom - 72, client.right - 12, client.bottom - 36};
   DrawTextW(hdc, line.c_str(), static_cast<int>(line.size()), &rcText, DT_LEFT | DT_WORDBREAK);
 }
@@ -60,7 +59,7 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
   (void)hwnd;
   switch (msg) {
     case WM_DESTROY:
-      g_demoRoot.reset();
+      App::instance().clearRootWidgets();
       PostQuitMessage(0);
       return 0;
     case WM_KEYDOWN:
@@ -84,16 +83,17 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
 }  // namespace
 
-PlatformWindows::PlatformWindows(HINSTANCE hinst, int nShowCmd)
-    : mode_(PlatformWindows::Mode::UiEngineDemo), hinst_(hinst) {
+PlatformWindows::PlatformWindows(const AppLaunchParams& launch)
+    : mode_(PlatformWindows::Mode::UiEngineDemo), native_instance_(launch.native_app_instance) {
   UiGdiplusInit();
-  g_demoRoot = BuildUiEngineDemoWidgetTree();
+
+  const HINSTANCE hinst = static_cast<HINSTANCE>(native_instance_);
 
   WNDCLASSEXW wc{};
   wc.cbSize = sizeof(wc);
   wc.style = CS_HREDRAW | CS_VREDRAW;
   wc.lpfnWndProc = DemoWndProc;
-  wc.hInstance = hinst_;
+  wc.hInstance = hinst;
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   wc.lpszClassName = kDemoClassName;
@@ -101,11 +101,11 @@ PlatformWindows::PlatformWindows(HINSTANCE hinst, int nShowCmd)
     class_registered_ = true;
   }
 
-  hwnd_ = CreateWindowExW(0, kDemoClassName, kDemoTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                           1000, 720, nullptr, nullptr, hinst_, nullptr);
-  if (hwnd_) {
-    ShowWindow(hwnd_, nShowCmd);
-    UpdateWindow(hwnd_);
+  main_window_ = CreateWindowExW(0, kDemoClassName, kDemoTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                 1000, 720, nullptr, nullptr, hinst, nullptr);
+  if (main_window_) {
+    ShowWindow(static_cast<HWND>(main_window_), launch.show_window_command);
+    UpdateWindow(static_cast<HWND>(main_window_));
   }
 }
 
@@ -120,7 +120,7 @@ PlatformWindows::~PlatformWindows() {
 #if defined(_WIN32)
 bool PlatformWindows::ok() const {
   if (mode_ == PlatformWindows::Mode::UiEngineDemo) {
-    return hwnd_ != nullptr;
+    return main_window_ != nullptr;
   }
   return true;
 }
@@ -148,15 +148,18 @@ void PlatformWindowsReleaseDemoResources(PlatformWindows* p) {
   if (!p || p->mode_ != PlatformWindows::Mode::UiEngineDemo) {
     return;
   }
-  if (p->hwnd_ && IsWindow(p->hwnd_)) {
-    DestroyWindow(p->hwnd_);
+  if (p->main_window_) {
+    const HWND hwnd = static_cast<HWND>(p->main_window_);
+    if (IsWindow(hwnd)) {
+      DestroyWindow(hwnd);
+    }
   }
-  p->hwnd_ = nullptr;
-  if (p->class_registered_ && p->hinst_) {
-    UnregisterClassW(kDemoClassName, p->hinst_);
+  p->main_window_ = nullptr;
+  if (p->class_registered_ && p->native_instance_) {
+    UnregisterClassW(kDemoClassName, static_cast<HINSTANCE>(p->native_instance_));
     p->class_registered_ = false;
   }
-  g_demoRoot.reset();
+  App::instance().clearRootWidgets();
   UiGdiplusShutdown();
   p->mode_ = PlatformWindows::Mode::Basic;
 }
