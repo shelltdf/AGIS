@@ -80,6 +80,8 @@ endif()
 add_executable(agis_desktop WIN32
   src/app/main.cpp
   src/map/map_layer.cpp
+  src/map/map_layer_driver.cpp
+  src/map/map_layer_driver_gdal.cpp
   src/map/map_document.cpp
   src/map/map_engine.cpp
   src/map/map_gpu.cpp

@@ -1,6 +1,35 @@
 #include "map/map_layer.h"
 
 #include <string>
+#include <utility>
+
+MapLayer::MapLayer(std::unique_ptr<MapLayerDriver> driver) : driver_(std::move(driver)) {}
+
+MapLayerDriverKind MapLayer::DriverKind() const {
+  return driver_ ? driver_->kind() : MapLayerDriverKind::kGdalFile;
+}
+
+void MapLayer::AppendDriverProperties(std::wstring* out) const {
+  if (!out || !driver_) {
+    return;
+  }
+  driver_->appendDriverProperties(gdalDatasetForDriver(), sourcePathForDriver(), out);
+}
+
+void MapLayer::AppendSourceProperties(std::wstring* out) const {
+  if (!out || !driver_) {
+    return;
+  }
+  driver_->appendSourceProperties(gdalDatasetForDriver(), sourcePathForDriver(), out);
+}
+
+GDALDataset* MapLayer::gdalDatasetForDriver() const {
+  return nullptr;
+}
+
+std::wstring MapLayer::sourcePathForDriver() const {
+  return L"";
+}
 
 const wchar_t* MapLayerKindLabel(MapLayerKind k) {
   switch (k) {
@@ -34,11 +63,17 @@ const wchar_t* MapLayerDriverKindLabel(MapLayerDriverKind k) {
 }
 
 bool MapLayer::BuildOverviews(std::wstring& err) {
-  err = L"此图层类型不支持金字塔。";
-  return false;
+  if (!driver_) {
+    err = L"此图层类型不支持金字塔。";
+    return false;
+  }
+  return driver_->buildOverviews(gdalDatasetForDriver(), err);
 }
 
 bool MapLayer::ClearOverviews(std::wstring& err) {
-  err = L"此图层类型不支持金字塔。";
-  return false;
+  if (!driver_) {
+    err = L"此图层类型不支持金字塔。";
+    return false;
+  }
+  return driver_->clearOverviews(gdalDatasetForDriver(), err);
 }

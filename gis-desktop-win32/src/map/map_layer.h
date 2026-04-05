@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include "map/map_layer_driver.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,18 +21,6 @@ struct ViewExtent {
   bool valid() const { return maxX > minX && maxY > minY; }
 };
 
-enum class MapLayerDriverKind {
-  kGdalFile,
-  kTmsXyz,
-  kWmts,
-  /** ArcGIS REST Services Directory 风格（MapServer/ImageServer `f=json`，由 GDAL WMS 驱动解析）。 */
-  kArcGisRestJson,
-  /** OGC Web Services SOAP 绑定等（占位）。 */
-  kSoapPlaceholder,
-  /** 经典 WMS KVP GetCapabilities/GetMap（占位）。 */
-  kWmsPlaceholder,
-};
-
 /** 属性面板与日志用短标签（UTF-16）。 */
 const wchar_t* MapLayerDriverKindLabel(MapLayerDriverKind k);
 
@@ -42,11 +32,12 @@ class MapLayer {
   virtual void Draw(HDC hdc, const RECT& client, const ViewExtent& view) const = 0;
   virtual MapLayerKind GetKind() const { return MapLayerKind::kOther; }
   /** 本图层选用的数据源驱动（每种驱动对应不同属性语义与更换数据源方式）。 */
-  virtual MapLayerDriverKind DriverKind() const { return MapLayerDriverKind::kGdalFile; }
-  /** 属性面板：驱动侧（GDAL/OGR 能力、仿射、波段/图层几何等）。 */
-  virtual void AppendDriverProperties(std::wstring* out) const { (void)out; }
-  /** 属性面板：数据源侧（路径、文件列表、数据集描述与元数据域等）。 */
-  virtual void AppendSourceProperties(std::wstring* out) const { (void)out; }
+  MapLayerDriverKind DriverKind() const;
+
+  /** 属性面板：驱动侧（由 MapLayerDriver 实现）。 */
+  void AppendDriverProperties(std::wstring* out) const;
+  /** 属性面板：数据源侧（由 MapLayerDriver 实现）。 */
+  void AppendSourceProperties(std::wstring* out) const;
   /** 合并驱动 + 数据源（兼容旧调用）。 */
   void AppendDetailedProperties(std::wstring* out) const {
     if (!out) {
@@ -55,13 +46,22 @@ class MapLayer {
     AppendDriverProperties(out);
     AppendSourceProperties(out);
   }
-  virtual bool BuildOverviews(std::wstring& err);
-  virtual bool ClearOverviews(std::wstring& err);
+  bool BuildOverviews(std::wstring& err);
+  bool ClearOverviews(std::wstring& err);
 
   bool IsLayerVisible() const { return layerVisible_; }
   void SetLayerVisible(bool on) { layerVisible_ = on; }
 
  protected:
+  explicit MapLayer(std::unique_ptr<MapLayerDriver> driver);
+
+  /** 供 MapLayerDriver 访问底层 GDAL 数据集；无 GDAL 时返回 nullptr。 */
+  virtual GDALDataset* gdalDatasetForDriver() const;
+  /** 属性面板「数据源」路径展示（栅格为打开路径，矢量可为显示名/路径）。 */
+  virtual std::wstring sourcePathForDriver() const;
+
+  std::unique_ptr<MapLayerDriver> driver_;
+
   /** 列表与地图是否绘制该图层（独立于经纬网等全局可见性）。 */
   bool layerVisible_{true};
 };

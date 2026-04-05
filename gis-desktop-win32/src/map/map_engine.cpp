@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cwctype>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -68,6 +69,8 @@ static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
 }
 
 #if GIS_DESKTOP_HAVE_GDAL
+
+#include "map/map_layer_driver_gdal.h"
 
 namespace agis_detail {
 
@@ -336,14 +339,15 @@ void AppendOgrLayerDetails(OGRLayer* lay, int index, std::wstring* out) {
 class RasterMapLayer final : public MapLayer {
  public:
   RasterMapLayer(GDALDataset* ds, std::wstring name, std::wstring sourcePath, MapLayerDriverKind driverKind)
-      : ds_(ds), name_(std::move(name)), sourcePath_(std::move(sourcePath)), driverKind_(driverKind) {}
+      : MapLayer(std::make_unique<GdalRasterMapLayerDriver>(driverKind)),
+        ds_(ds),
+        name_(std::move(name)),
+        sourcePath_(std::move(sourcePath)) {}
   ~RasterMapLayer() override { GDALClose(ds_); }
 
   std::wstring DisplayName() const override { return name_; }
 
   MapLayerKind GetKind() const override { return MapLayerKind::kRasterGdal; }
-
-  MapLayerDriverKind DriverKind() const override { return driverKind_; }
 
   bool GetExtent(ViewExtent& out) const override {
     const int w = ds_->GetRasterXSize();
@@ -536,143 +540,15 @@ class RasterMapLayer final : public MapLayer {
     DeleteDC(hdcMem);
   }
 
-  void AppendSourceProperties(std::wstring* out) const override {
-    if (!out) {
-      return;
-    }
-    *out += L"【数据源】\r\n";
-    *out += sourcePath_.empty() ? L"（未记录）\r\n" : sourcePath_ + L"\r\n";
-    const char* ddesc = ds_->GetDescription();
-    *out += L"\r\n【GDALDataset 描述 GetDescription】\r\n";
-    *out += (ddesc && ddesc[0]) ? WideFromUtf8(ddesc) : L"（空）";
-    *out += L"\r\n\r\n";
-    AppendDatasetFileList(ds_, out);
-    *out += L"【数据集级元数据 GDALDataset 各域（含 IMAGE_STRUCTURE、SUBDATASETS 等）】\r\n";
-    AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds_), out);
-  }
-
-  void AppendDriverProperties(std::wstring* out) const override {
-    if (!out) {
-      return;
-    }
-    *out += L"【AGIS 驱动方式】 ";
-    *out += MapLayerDriverKindLabel(driverKind_);
-    *out += L"\r\n";
-    if (driverKind_ == MapLayerDriverKind::kArcGisRestJson) {
-      *out += L"【说明】 与 ArcGIS REST Services Directory 中 MapServer/ImageServer 的 JSON 一致；由 GDAL WMS 驱动拉取并映射为栅格。\r\n";
-    } else if (driverKind_ == MapLayerDriverKind::kWmts) {
-      *out += L"【说明】 使用 GDAL WMTS 驱动；URL 可为 GetCapabilities 地址，亦可写 WMTS:https://… 形式。\r\n";
-    } else if (driverKind_ == MapLayerDriverKind::kTmsXyz) {
-      *out += L"【说明】 使用 GDAL XYZ/ZXY 模板 URL（含 {z}{x}{y}）。\r\n";
-    }
-    GDALDriver* drv = ds_->GetDriver();
-    if (drv) {
-      AppendDriverMetadata(drv, out);
-    }
-    *out += L"【栅格尺寸 GetRasterXSize/YSize】 ";
-    *out += std::to_wstring(ds_->GetRasterXSize()) + L" × " + std::to_wstring(ds_->GetRasterYSize());
-    *out += L"\r\n【波段数 GetRasterCount】 " + std::to_wstring(ds_->GetRasterCount());
-    const GDALAccess acc = ds_->GetAccess();
-    *out += L"\r\n【访问模式 GDALDataset::GetAccess】 ";
-    *out += (acc == GA_Update) ? L"GA_Update（可写金字塔等）\r\n" : L"GA_ReadOnly\r\n";
-    *out += L"【数据集类型】 ";
-    *out += ds_->GetRasterCount() > 0 ? L"栅格\r\n" : L"无栅格波段\r\n";
-    double gt[6]{};
-    if (ds_->GetGeoTransform(gt) == CE_None) {
-      *out += L"【仿射变换 GDALDataset::GetGeoTransform】\r\n";
-      for (int i = 0; i < 6; ++i) {
-        *out += L"  [" + std::to_wstring(i) + L"] " + std::to_wstring(gt[i]) + L"\r\n";
-      }
-    } else {
-      *out += L"【仿射变换】（GetGeoTransform 未设置或非 CE_None）\r\n";
-    }
-    const char* wkt = ds_->GetProjectionRef();
-    *out += L"【空间参考 GDALDataset::GetProjectionRef】\r\n";
-    if (wkt && wkt[0]) {
-      std::wstring w = WideFromUtf8(wkt);
-      if (w.size() > 2000) {
-        w.resize(2000);
-        w += L"…";
-      }
-      *out += w + L"\r\n";
-    } else {
-      *out += L"（无）\r\n";
-    }
-    AppendGcpSummary(ds_, out);
-
-    *out += L"【波段详情 GDALRasterBand】\r\n";
-    for (int bi = 1; bi <= ds_->GetRasterCount(); ++bi) {
-      GDALRasterBand* b = ds_->GetRasterBand(bi);
-      if (!b) {
-        continue;
-      }
-      int bx = 0;
-      int by = 0;
-      b->GetBlockSize(&bx, &by);
-      *out += L"  ── 波段 " + std::to_wstring(bi) + L" GetRasterBand(" + std::to_wstring(bi) + L") ──\r\n";
-      *out += L"    数据类型 GetRasterDataType: ";
-      *out += WideFromUtf8(GDALGetDataTypeName(b->GetRasterDataType()));
-      *out += L"\r\n    颜色解释 GetColorInterpretation: ";
-      *out += WideFromUtf8(GDALGetColorInterpretationName(b->GetColorInterpretation()));
-      *out += L"\r\n    尺寸: " + std::to_wstring(b->GetXSize()) + L" × " + std::to_wstring(b->GetYSize());
-      *out += L"\r\n    块大小 GetBlockSize: " + std::to_wstring(bx) + L" × " + std::to_wstring(by);
-      const int noc = b->GetOverviewCount();
-      *out += L"\r\n    金字塔 GetOverviewCount: " + std::to_wstring(noc) + L"\r\n";
-      for (int oi = 0; oi < noc; ++oi) {
-        GDALRasterBand* ov = b->GetOverview(oi);
-        if (ov) {
-          *out += L"      [Overview " + std::to_wstring(oi) + L"] " + std::to_wstring(ov->GetXSize()) + L" × " +
-                  std::to_wstring(ov->GetYSize()) + L"\r\n";
-        }
-      }
-      AppendRasterBandExtras(b, out);
-    }
-    *out += L"\r\n提示：本地 GeoTIFF 等可写文件可用「生成金字塔」写入 .ovr；只读或网络源可能失败。\r\n";
-    ViewExtent ex{};
-    if (GetExtent(ex) && ex.valid()) {
-      *out += L"\r\n【地图范围（由仿射变换推算）】\r\nminX " + std::to_wstring(ex.minX) + L"\r\nminY " +
-              std::to_wstring(ex.minY) + L"\r\nmaxX " + std::to_wstring(ex.maxX) + L"\r\nmaxY " +
-              std::to_wstring(ex.maxY) + L"\r\n";
-    }
-  }
+  GDALDataset* gdalDatasetForDriver() const override { return ds_; }
+  std::wstring sourcePathForDriver() const override { return sourcePath_; }
 
   GDALDataset* Dataset() const { return ds_; }
-
-  bool BuildOverviews(std::wstring& err) override {
-    int levels[] = {2, 4, 8, 16};
-    CPLErr e =
-        ds_->BuildOverviews("NEAREST", 4, levels, 0, nullptr, nullptr, nullptr, nullptr);
-    if (e != CE_None) {
-      err = WideFromUtf8(CPLGetLastErrorMsg());
-      if (err.empty()) {
-        err = L"BuildOverviews 失败（需可写数据集，部分格式不支持）";
-      }
-      return false;
-    }
-    ds_->FlushCache();
-    return true;
-  }
-
-  bool ClearOverviews(std::wstring& err) override {
-    // GDAL 3.x：无 ClearOverviews；nOverviews==0 表示删除金字塔（见 gdaldataset.cpp 文档）
-    CPLErr e =
-        ds_->BuildOverviews("NEAREST", 0, nullptr, 0, nullptr, nullptr, nullptr, nullptr);
-    if (e != CE_None) {
-      err = WideFromUtf8(CPLGetLastErrorMsg());
-      if (err.empty()) {
-        err = L"删除金字塔失败（需可写数据集，部分格式不支持）";
-      }
-      return false;
-    }
-    ds_->FlushCache();
-    return true;
-  }
 
  private:
   GDALDataset* ds_;
   std::wstring name_;
   std::wstring sourcePath_;
-  MapLayerDriverKind driverKind_{MapLayerDriverKind::kGdalFile};
 };
 
 void WorldToScreenXY(const ViewExtent& view, double wx, double wy, int cw, int ch, int* sx, int* sy) {
@@ -749,14 +625,12 @@ void DrawGeometry(const OGRGeometry* geom, const ViewExtent& view, int cw, int c
 class VectorMapLayer final : public MapLayer {
  public:
   VectorMapLayer(GDALDataset* ds, std::wstring name, MapLayerDriverKind driverKind)
-      : ds_(ds), name_(std::move(name)), driverKind_(driverKind) {}
+      : MapLayer(std::make_unique<GdalVectorMapLayerDriver>(driverKind)), ds_(ds), name_(std::move(name)) {}
   ~VectorMapLayer() override { GDALClose(ds_); }
 
   std::wstring DisplayName() const override { return name_; }
 
   MapLayerKind GetKind() const override { return MapLayerKind::kVectorGdal; }
-
-  MapLayerDriverKind DriverKind() const override { return driverKind_; }
 
   bool GetExtent(ViewExtent& out) const override {
     OGREnvelope env{};
@@ -818,62 +692,12 @@ class VectorMapLayer final : public MapLayer {
     DeleteObject(pen);
   }
 
-  void AppendSourceProperties(std::wstring* out) const override {
-    if (!out) {
-      return;
-    }
-    *out += L"【数据源】\r\n";
-    *out += name_.empty() ? L"（未记录）\r\n" : name_ + L"\r\n";
-    const char* ddesc = ds_->GetDescription();
-    *out += L"\r\n【GDALDataset 描述 GetDescription】\r\n";
-    *out += (ddesc && ddesc[0]) ? WideFromUtf8(ddesc) : L"（空）";
-    *out += L"\r\n\r\n";
-    AppendDatasetFileList(ds_, out);
-    *out += L"【数据集级元数据 GDALDataset 各域】\r\n";
-    AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds_), out);
-  }
-
-  void AppendDriverProperties(std::wstring* out) const override {
-    if (!out) {
-      return;
-    }
-    *out += L"【AGIS 驱动方式】 ";
-    *out += MapLayerDriverKindLabel(driverKind_);
-    *out += L"\r\n";
-    GDALDriver* drv = ds_->GetDriver();
-    if (drv) {
-      AppendDriverMetadata(drv, out);
-    }
-    *out += L"【矢量图层数 GDALDataset::GetLayerCount】 " + std::to_wstring(ds_->GetLayerCount()) + L"\r\n";
-    const GDALAccess acc = ds_->GetAccess();
-    *out += L"【访问模式】 ";
-    *out += (acc == GA_Update) ? L"GA_Update\r\n" : L"GA_ReadOnly\r\n";
-    const char* wkt = ds_->GetProjectionRef();
-    *out += L"【数据集坐标系 GDALDataset::GetProjectionRef】\r\n";
-    if (wkt && wkt[0]) {
-      std::wstring w = WideFromUtf8(wkt);
-      if (w.size() > 2000) {
-        w.resize(2000);
-        w += L"…";
-      }
-      *out += w + L"\r\n\r\n";
-    } else {
-      *out += L"（无）\r\n\r\n";
-    }
-    for (int i = 0; i < ds_->GetLayerCount(); ++i) {
-      OGRLayer* lay = ds_->GetLayer(i);
-      if (!lay) {
-        continue;
-      }
-      *out += L"\r\n";
-      AppendOgrLayerDetails(lay, i, out);
-    }
-  }
+  GDALDataset* gdalDatasetForDriver() const override { return ds_; }
+  std::wstring sourcePathForDriver() const override { return name_; }
 
  private:
   GDALDataset* ds_;
   std::wstring name_;
-  MapLayerDriverKind driverKind_{MapLayerDriverKind::kGdalFile};
 };
 
 std::unique_ptr<MapLayer> CreateLayerFromDataset(GDALDataset* ds, const std::wstring& baseName,
