@@ -1,5 +1,8 @@
 #include "map/map_engine.h"
 
+#include "map/map_engine_internal.h"
+#include "map/map_utf8.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -42,45 +45,7 @@ void ApplyUiFontToChildren(HWND parent) {
   }
 }
 
-std::string Utf8FromWide(const std::wstring& w) {
-  if (w.empty()) {
-    return {};
-  }
-  const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-  if (n <= 0) {
-    return {};
-  }
-  std::string out(static_cast<size_t>(n - 1), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out.data(), n, nullptr, nullptr);
-  return out;
-}
-
-std::wstring WideFromUtf8(const char* s) {
-  if (!s || !s[0]) {
-    return {};
-  }
-  const int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
-  if (n <= 0) {
-    return {};
-  }
-  std::wstring w(static_cast<size_t>(n - 1), L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, s, -1, w.data(), n);
-  return w;
-}
-
 }  // namespace
-
-const wchar_t* MapLayerKindLabel(MapLayerKind k) {
-  switch (k) {
-    case MapLayerKind::kRasterGdal:
-      return L"栅格（GDAL）";
-    case MapLayerKind::kVectorGdal:
-      return L"矢量（GDAL）";
-    case MapLayerKind::kOther:
-    default:
-      return L"其他";
-  }
-}
 
 /** 列表块内一行显示用的短驱动名（避免过长）。 */
 static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
@@ -100,35 +65,6 @@ static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
     default:
       return L"未知";
   }
-}
-
-const wchar_t* MapLayerDriverKindLabel(MapLayerDriverKind k) {
-  switch (k) {
-    case MapLayerDriverKind::kGdalFile:
-      return L"GDAL 本地/虚拟文件";
-    case MapLayerDriverKind::kTmsXyz:
-      return L"TMS / XYZ";
-    case MapLayerDriverKind::kWmts:
-      return L"WMTS（OGC Web Map Tile Service）";
-    case MapLayerDriverKind::kArcGisRestJson:
-      return L"ArcGIS REST JSON（Services Directory，GDAL WMS）";
-    case MapLayerDriverKind::kSoapPlaceholder:
-      return L"OGC SOAP（占位）";
-    case MapLayerDriverKind::kWmsPlaceholder:
-      return L"WMS KVP（占位）";
-    default:
-      return L"未知";
-  }
-}
-
-bool MapLayer::BuildOverviews(std::wstring& err) {
-  err = L"此图层类型不支持金字塔。";
-  return false;
-}
-
-bool MapLayer::ClearOverviews(std::wstring& err) {
-  err = L"此图层类型不支持金字塔。";
-  return false;
 }
 
 #if GIS_DESKTOP_HAVE_GDAL
@@ -1132,893 +1068,67 @@ std::unique_ptr<MapLayer> CreateLayerFromArcGisRestJsonUrl(const std::wstring& u
 
 #endif  // GIS_DESKTOP_HAVE_GDAL
 
-namespace {
-
-ViewExtent DefaultGeographicView() {
-  return ViewExtent{-180.0, -90.0, 180.0, 90.0};
+MapEngine& MapEngine::Instance() {
+  static MapEngine inst;
+  return inst;
 }
 
-/** 比例尺长度取整（米）：1/2/5×10^n */
-double NiceMeters(double meters) {
-  if (!(meters > 0.0) || !std::isfinite(meters)) {
-    return 1000.0;
-  }
-  const double p10 = std::pow(10.0, std::floor(std::log10(meters)));
-  const double n = meters / p10;
-  double f = 10.0;
-  if (n <= 1.0) {
-    f = 1.0;
-  } else if (n <= 2.0) {
-    f = 2.0;
-  } else if (n <= 5.0) {
-    f = 5.0;
-  }
-  return f * p10;
-}
-
-/** 将经度规范到 [-180,180] 便于判断本初子午线 / 日界线 */
-double NormalizeLon180(double lonDeg) {
-  double x = std::fmod(lonDeg + 180.0, 360.0);
-  if (x < 0.0) {
-    x += 360.0;
-  }
-  return x - 180.0;
-}
-
-bool IsPrimeMeridianLon(double lonDeg) {
-  return std::abs(NormalizeLon180(lonDeg)) < 1e-3;
-}
-
-bool IsAntimeridianLon(double lonDeg) {
-  return std::abs(std::abs(NormalizeLon180(lonDeg)) - 180.0) < 1e-3;
-}
-
-bool IsPoleLat(double latDeg) {
-  return std::abs(latDeg - 90.0) < 1e-3 || std::abs(latDeg + 90.0) < 1e-3;
-}
-
-bool IsEquatorLat(double latDeg) {
-  return std::abs(latDeg) < 1e-3;
-}
-
-void FormatLonLabel(wchar_t* buf, size_t nbuf, double lonDeg) {
-  if (nbuf < 8) {
-    return;
-  }
-  _snwprintf_s(buf, nbuf, _TRUNCATE, L"%.4g°", lonDeg);
-}
-
-void FormatLatLabel(wchar_t* buf, size_t nbuf, double latDeg) {
-  if (nbuf < 8) {
-    return;
-  }
-  _snwprintf_s(buf, nbuf, _TRUNCATE, L"%.4g°", latDeg);
-}
-
-double NiceGridStepDeg(double spanDeg, int targetLines) {
-  if (spanDeg <= 1e-9 || targetLines <= 0) {
-    return 1.0;
-  }
-  const double raw = spanDeg / static_cast<double>(targetLines);
-  const double p10 = std::pow(10.0, std::floor(std::log10(raw)));
-  const double n = raw / p10;
-  double m = 1.0;
-  if (n <= 1.0) {
-    m = 1.0;
-  } else if (n <= 2.0) {
-    m = 2.0;
-  } else if (n <= 5.0) {
-    m = 5.0;
-  } else {
-    m = 10.0;
-  }
-  return m * p10;
-}
-
-void WorldToScreenMap(const ViewExtent& v, double wx, double wy, int cw, int ch, double* sx, double* sy) {
-  const double ww = v.maxX - v.minX;
-  const double wh = v.maxY - v.minY;
-  if (ww <= 0.0 || wh <= 0.0 || cw <= 0 || ch <= 0) {
-    *sx = 0;
-    *sy = 0;
-    return;
-  }
-  *sx = (wx - v.minX) / ww * static_cast<double>(cw);
-  *sy = (v.maxY - wy) / wh * static_cast<double>(ch);
-}
-
-/** 在视口内绘制比例尺（横条长度代表当前纬度处地面距离，单位 m/km）。 */
-void DrawScaleBar(HDC hdc, const RECT& inner, const ViewExtent& view) {
-  const int cw = inner.right - inner.left;
-  const int ch = inner.bottom - inner.top;
-  if (cw < 120 || ch < 100 || !view.valid()) {
-    return;
-  }
-  constexpr double kPi = 3.14159265358979323846;
-  constexpr double R = 6371000.0;
-  const double lonSpan = view.maxX - view.minX;
-  const double latSpan = view.maxY - view.minY;
-  const double latMid = (view.minY + view.maxY) * 0.5;
-  const double latRad = latMid * (kPi / 180.0);
-  const double cosLat = std::max(0.02, std::abs(std::cos(latRad)));
-  double mPerPx =
-      (lonSpan / static_cast<double>(std::max(1, cw))) * (kPi / 180.0) * R * cosLat;
-  if (!(mPerPx > 0.0) || !std::isfinite(mPerPx)) {
-    mPerPx = (latSpan / static_cast<double>(std::max(1, ch))) * (kPi / 180.0) * R;
-  }
-  const double targetPx = 120.0;
-  double niceM = NiceMeters(mPerPx * targetPx);
-  int barPx = static_cast<int>(std::lround(niceM / mPerPx));
-  barPx = std::max(48, std::min(barPx, cw - 24));
-  niceM = mPerPx * static_cast<double>(barPx);
-
-  const int barH = 6;
-  const int x0 = inner.left + 10;
-  const int kBottomGap = 88;
-  int textY = inner.bottom - kBottomGap;
-  int yBar = textY - 14;
-  if (yBar < inner.top + 4) {
-    yBar = inner.top + 4;
-    textY = yBar + 16;
-  }
-
-  RECT rc{x0, yBar, x0 + barPx, yBar + barH};
-  const HBRUSH fill = CreateSolidBrush(RGB(42, 48, 58));
-  FillRect(hdc, &rc, fill);
-  DeleteObject(fill);
-  HPEN pen = CreatePen(PS_SOLID, 1, RGB(250, 250, 252));
-  const HGDIOBJ oldPen = SelectObject(hdc, pen);
-  MoveToEx(hdc, x0, yBar, nullptr);
-  LineTo(hdc, x0, yBar - 4);
-  MoveToEx(hdc, x0 + barPx, yBar, nullptr);
-  LineTo(hdc, x0 + barPx, yBar - 4);
-  SelectObject(hdc, oldPen);
-  DeleteObject(pen);
-
-  wchar_t cap[64]{};
-  if (niceM >= 1000.0) {
-    const double km = niceM / 1000.0;
-    if (km >= 100.0) {
-      _snwprintf_s(cap, _TRUNCATE, L"%.0f km", km);
-    } else if (km >= 10.0) {
-      _snwprintf_s(cap, _TRUNCATE, L"%.1f km", km);
-    } else {
-      _snwprintf_s(cap, _TRUNCATE, L"%.2f km", km);
-    }
-  } else if (niceM >= 1.0) {
-    _snwprintf_s(cap, _TRUNCATE, L"%.0f m", niceM);
-  } else {
-    _snwprintf_s(cap, _TRUNCATE, L"%.2f m", niceM);
-  }
-  HFONT fnt = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-  if (fnt) {
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(35, 40, 50));
-    const HGDIOBJ oldF = SelectObject(hdc, fnt);
-    TextOutW(hdc, x0, textY, cap, lstrlenW(cap));
-    SelectObject(hdc, oldF);
-    DeleteObject(fnt);
-  }
-}
-
-void DrawLatLonGrid(HDC hdc, const RECT& inner, const ViewExtent& view, MapDisplayProjection proj) {
-  const int cw = inner.right - inner.left;
-  const int ch = inner.bottom - inner.top;
-  if (cw <= 0 || ch <= 0 || !view.valid()) {
-    return;
-  }
-  const double lonSpan = view.maxX - view.minX;
-  const double latSpan = view.maxY - view.minY;
-  double stepLon = std::max(NiceGridStepDeg(lonSpan, 12), 1e-9);
-  stepLon = std::max(stepLon, lonSpan / 160.0);
-  double stepLat = std::max(NiceGridStepDeg(latSpan, 10), 1e-9);
-  stepLat = std::max(stepLat, latSpan / 140.0);
-
-  const auto toScreen = [&](double lon, double lat, double* sx, double* sy) {
-    MapProj_GeoLonLatToScreen(proj, view, cw, ch, lon, lat, sx, sy);
-  };
-  const int curveSteps =
-      (proj != MapDisplayProjection::kGeographicWgs84 && MapProj_IsProjectionSelectable(proj)) ? 56 : 1;
-
-  const HBRUSH bg = CreateSolidBrush(RGB(245, 250, 255));
-  FillRect(hdc, &inner, bg);
-  DeleteObject(bg);
-
-  HPEN penMinor = CreatePen(PS_SOLID, 1, RGB(200, 210, 220));
-  HPEN penMajor = CreatePen(PS_SOLID, 1, RGB(160, 175, 190));
-  HPEN penPrime = CreatePen(PS_SOLID, 3, RGB(55, 75, 105));
-  const HGDIOBJ oldPen = SelectObject(hdc, penMinor);
-  SetBkMode(hdc, TRANSPARENT);
-
-  const double lon0 = std::floor(view.minX / stepLon) * stepLon;
-  int li = 0;
-  for (double lon = lon0; lon <= view.maxX + 1e-7; lon += stepLon, ++li) {
-    if (IsPrimeMeridianLon(lon) || IsAntimeridianLon(lon)) {
-      continue;
-    }
-    SelectObject(hdc, (li % 5 == 0) ? penMajor : penMinor);
-    for (int s = 0; s < curveSteps; ++s) {
-      const double t0 = static_cast<double>(s) / static_cast<double>(curveSteps);
-      const double t1 = static_cast<double>(s + 1) / static_cast<double>(curveSteps);
-      const double latA = view.minY + t0 * (view.maxY - view.minY);
-      const double latB = view.minY + t1 * (view.maxY - view.minY);
-      double x0 = 0;
-      double y0 = 0;
-      double x1 = 0;
-      double y1 = 0;
-      toScreen(lon, latA, &x0, &y0);
-      toScreen(lon, latB, &x1, &y1);
-      MoveToEx(hdc, static_cast<int>(std::floor(x0)), static_cast<int>(std::floor(y0)), nullptr);
-      LineTo(hdc, static_cast<int>(std::floor(x1)), static_cast<int>(std::floor(y1)));
-    }
-  }
-
-  const double lat0 = std::floor(view.minY / stepLat) * stepLat;
-  int gi = 0;
-  for (double lat = lat0; lat <= view.maxY + 1e-7; lat += stepLat, ++gi) {
-    if (IsPoleLat(lat) || IsEquatorLat(lat)) {
-      continue;
-    }
-    SelectObject(hdc, (gi % 5 == 0) ? penMajor : penMinor);
-    for (int s = 0; s < curveSteps; ++s) {
-      const double t0 = static_cast<double>(s) / static_cast<double>(curveSteps);
-      const double t1 = static_cast<double>(s + 1) / static_cast<double>(curveSteps);
-      const double lonA = view.minX + t0 * (view.maxX - view.minX);
-      const double lonB = view.minX + t1 * (view.maxX - view.minX);
-      double x0 = 0;
-      double y0 = 0;
-      double x1 = 0;
-      double y1 = 0;
-      toScreen(lonA, lat, &x0, &y0);
-      toScreen(lonB, lat, &x1, &y1);
-      MoveToEx(hdc, static_cast<int>(std::floor(x0)), static_cast<int>(std::floor(y0)), nullptr);
-      LineTo(hdc, static_cast<int>(std::floor(x1)), static_cast<int>(std::floor(y1)));
-    }
-  }
-
-  SelectObject(hdc, penPrime);
-  auto drawMeridian = [&](double lon) {
-    if (lon < view.minX - 1e-6 || lon > view.maxX + 1e-6) {
-      return;
-    }
-    for (int s = 0; s < curveSteps; ++s) {
-      const double t0 = static_cast<double>(s) / static_cast<double>(curveSteps);
-      const double t1 = static_cast<double>(s + 1) / static_cast<double>(curveSteps);
-      const double latA = view.minY + t0 * (view.maxY - view.minY);
-      const double latB = view.minY + t1 * (view.maxY - view.minY);
-      double xa = 0;
-      double ya = 0;
-      double xb = 0;
-      double yb = 0;
-      toScreen(lon, latA, &xa, &ya);
-      toScreen(lon, latB, &xb, &yb);
-      MoveToEx(hdc, static_cast<int>(std::floor(xa)), static_cast<int>(std::floor(ya)), nullptr);
-      LineTo(hdc, static_cast<int>(std::floor(xb)), static_cast<int>(std::floor(yb)));
-    }
-  };
-  auto drawParallel = [&](double lat) {
-    if (lat < view.minY - 1e-6 || lat > view.maxY + 1e-6) {
-      return;
-    }
-    for (int s = 0; s < curveSteps; ++s) {
-      const double t0 = static_cast<double>(s) / static_cast<double>(curveSteps);
-      const double t1 = static_cast<double>(s + 1) / static_cast<double>(curveSteps);
-      const double lonA = view.minX + t0 * (view.maxX - view.minX);
-      const double lonB = view.minX + t1 * (view.maxX - view.minX);
-      double xa = 0;
-      double ya = 0;
-      double xb = 0;
-      double yb = 0;
-      toScreen(lonA, lat, &xa, &ya);
-      toScreen(lonB, lat, &xb, &yb);
-      MoveToEx(hdc, static_cast<int>(std::floor(xa)), static_cast<int>(std::floor(ya)), nullptr);
-      LineTo(hdc, static_cast<int>(std::floor(xb)), static_cast<int>(std::floor(yb)));
-    }
-  };
-  drawMeridian(0.0);
-  drawMeridian(180.0);
-  drawMeridian(-180.0);
-  drawParallel(90.0);
-  drawParallel(0.0);
-  drawParallel(-90.0);
-
-  SelectObject(hdc, oldPen);
-  DeleteObject(penMinor);
-  DeleteObject(penMajor);
-  DeleteObject(penPrime);
-
-  HFONT fnt = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-  if (fnt) {
-    HFONT fntBold = CreateFontW(-12, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-    const HGDIOBJ oldF = SelectObject(hdc, fnt);
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(55, 65, 85));
-    wchar_t buf[32]{};
-    li = 0;
-    for (double lon = lon0; lon <= view.maxX + 1e-7; lon += stepLon, ++li) {
-      if (li % 5 != 0) {
-        continue;
-      }
-      if (IsPrimeMeridianLon(lon) || IsAntimeridianLon(lon)) {
-        continue;
-      }
-      double xs = 0;
-      double ys = 0;
-      toScreen(lon, view.minY, &xs, &ys);
-      const int ix = static_cast<int>(std::floor(xs));
-      if (ix < -50 || ix > cw + 50) {
-        continue;
-      }
-      FormatLonLabel(buf, 32, lon);
-      TextOutW(hdc, std::max(2, ix - 18), ch - 18, buf, lstrlenW(buf));
-    }
-    gi = 0;
-    for (double lat = lat0; lat <= view.maxY + 1e-7; lat += stepLat, ++gi) {
-      if (gi % 5 != 0) {
-        continue;
-      }
-      if (IsPoleLat(lat) || IsEquatorLat(lat)) {
-        continue;
-      }
-      double xs = 0;
-      double ys = 0;
-      toScreen(view.minX, lat, &xs, &ys);
-      const int iy = static_cast<int>(std::floor(ys));
-      if (iy < -12 || iy > ch + 12) {
-        continue;
-      }
-      FormatLatLabel(buf, 32, lat);
-      TextOutW(hdc, inner.left + 4, std::max(2, iy - 10), buf, lstrlenW(buf));
-    }
-    if (fntBold) {
-      SelectObject(hdc, fntBold);
-      SetTextColor(hdc, RGB(20, 35, 65));
-      auto stampLonBottom = [&](double lon, const wchar_t* text) {
-        if (lon < view.minX - 1e-6 || lon > view.maxX + 1e-6) {
-          return;
-        }
-        double xs = 0;
-        double ys = 0;
-        toScreen(lon, view.minY, &xs, &ys);
-        const int ix = static_cast<int>(std::floor(xs));
-        if (ix < -80 || ix > cw + 80) {
-          return;
-        }
-        TextOutW(hdc, std::max(2, ix - 22), ch - 18, text, lstrlenW(text));
-      };
-      auto stampLatLeft = [&](double lat, const wchar_t* text) {
-        if (lat < view.minY - 1e-6 || lat > view.maxY + 1e-6) {
-          return;
-        }
-        double xs = 0;
-        double ys = 0;
-        toScreen(view.minX, lat, &xs, &ys);
-        const int iy = static_cast<int>(std::floor(ys));
-        if (iy < -20 || iy > ch + 20) {
-          return;
-        }
-        TextOutW(hdc, inner.left + 4, std::max(2, iy - 10), text, lstrlenW(text));
-      };
-      stampLonBottom(0.0, L"0°");
-      stampLonBottom(180.0, L"180°");
-      stampLonBottom(-180.0, L"180°");
-      stampLatLeft(90.0, L"90°");
-      stampLatLeft(0.0, L"0°");
-      stampLatLeft(-90.0, L"-90°");
-    }
-    SelectObject(hdc, oldF);
-    DeleteObject(fnt);
-    if (fntBold) {
-      DeleteObject(fntBold);
-    }
-  }
-}
-
-}  // namespace
-
-static MapDocument g_doc;
-static HWND g_mapHwnd = nullptr;
-/** 用户选择的 2D 呈现后端；地图 HWND 创建后由 MapGpu_Init 生效。 */
-static MapRenderBackend g_mapRenderBackend = MapRenderBackend::kGdi;
-static bool g_mdrag = false;
-static POINT g_mlast{0, 0};
-static HWND g_mapChromeScale = nullptr;
-/** 快捷键说明面板：规则要求默认折叠 */
-static bool g_mapShortcutExpanded = false;
-/** 要素可见性面板：规则要求默认展开 */
-static bool g_mapVisExpanded = true;
-
-void MapEngine_UpdateMapChrome() {
-  MapProj_InvalidateBoundsCache();
-  if (!g_mapChromeScale || !IsWindow(g_mapChromeScale)) {
-    return;
-  }
-  wchar_t b[32]{};
-  _snwprintf_s(b, _TRUNCATE, L"%d%%", g_doc.ScalePercentForUi());
-  SetWindowTextW(g_mapChromeScale, b);
-}
-
-void MapDocument::FitViewToLayers() {
-  if (layers.empty()) {
-    view = DefaultGeographicView();
-    refViewWidthDeg = 360.0;
-    refViewHeightDeg = 180.0;
-    MapEngine_UpdateMapChrome();
-    return;
-  }
-  ViewExtent e{};
-  bool any = false;
-  for (const auto& layer : layers) {
-    if (!layer->IsLayerVisible()) {
-      continue;
-    }
-    ViewExtent le{};
-    if (!layer->GetExtent(le)) {
-      continue;
-    }
-    if (!any) {
-      e = le;
-      any = true;
-    } else {
-      e.minX = std::min(e.minX, le.minX);
-      e.minY = std::min(e.minY, le.minY);
-      e.maxX = std::max(e.maxX, le.maxX);
-      e.maxY = std::max(e.maxY, le.maxY);
-    }
-  }
-  if (!any || !e.valid()) {
-    MapEngine_UpdateMapChrome();
-    return;
-  }
-  const double mx = (e.maxX - e.minX) * 0.05;
-  const double my = (e.maxY - e.minY) * 0.05;
-  view.minX = e.minX - mx;
-  view.minY = e.minY - my;
-  view.maxX = e.maxX + mx;
-  view.maxY = e.maxY + my;
-  refViewWidthDeg = view.maxX - view.minX;
-  refViewHeightDeg = view.maxY - view.minY;
-  MapEngine_UpdateMapChrome();
-}
-
-void MapDocument::EnforceLonLatAspect360_180() {
-  if (!layers.empty()) {
-    return;
-  }
-  const double w = view.maxX - view.minX;
-  const double h = view.maxY - view.minY;
-  if (w <= 1e-18 || h <= 1e-18) {
-    return;
-  }
-  constexpr double kLonLatRatio = 360.0 / 180.0;
-  const double cx = (view.minX + view.maxX) * 0.5;
-  const double cy = (view.minY + view.maxY) * 0.5;
-  const double r = w / h;
-  if (std::abs(r - kLonLatRatio) < 1e-12) {
-    return;
-  }
-  if (r > kLonLatRatio) {
-    const double newH = w / kLonLatRatio;
-    view.minY = cy - newH * 0.5;
-    view.maxY = cy + newH * 0.5;
-  } else {
-    const double newW = h * kLonLatRatio;
-    view.minX = cx - newW * 0.5;
-    view.maxX = cx + newW * 0.5;
-  }
-}
-
-void MapDocument::NormalizeEmptyMapView() {
-  if (!layers.empty()) {
-    return;
-  }
-  const double w = view.maxX - view.minX;
-  const double h = view.maxY - view.minY;
-  if (w <= 0.0 || h <= 0.0) {
-    view = DefaultGeographicView();
-    refViewWidthDeg = 360.0;
-    refViewHeightDeg = 180.0;
-    return;
-  }
-  // 极端缩小：纬度跨度超过 180° 时压回 [-90,90]，并与经度等比例缩放（避免只压纬度导致变形）
-  if (h > 180.0) {
-    const double scale = 180.0 / h;
-    const double cx = (view.minX + view.maxX) * 0.5;
-    const double newW = w * scale;
-    view.minX = cx - newW * 0.5;
-    view.maxX = cx + newW * 0.5;
-    view.minY = -90.0;
-    view.maxY = 90.0;
-  }
-  EnforceLonLatAspect360_180();
-}
-
-bool MapDocument::AddLayerFromFile(const std::wstring& path, std::wstring& err) {
-#if !GIS_DESKTOP_HAVE_GDAL
-  err = L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。请在 gis-desktop-win32 下用 AGIS_USE_GDAL=on 重新运行 "
-        L"python build.py 并确保 CMake 配置成功（依赖见 3rdparty/README-GDAL-BUILD.md）。若仅需壳程序，请用 AGIS_USE_GDAL=off 编译。";
-  return false;
-#else
-  GDALAllRegister();
-  const std::string utf8 = Utf8FromWide(path);
-  unsigned openFlags = GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | GDAL_OF_UPDATE;
-  GDALDataset* ds = static_cast<GDALDataset*>(
-      GDALOpenEx(utf8.c_str(), openFlags, nullptr, nullptr, nullptr));
-  if (!ds) {
-    openFlags = GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED;
-    ds = static_cast<GDALDataset*>(GDALOpenEx(utf8.c_str(), openFlags, nullptr, nullptr, nullptr));
-  }
-  if (!ds) {
-    err = L"无法打开数据源：";
-    err += path;
-    return false;
-  }
-  std::wstring base = path;
-  const size_t slash = base.find_last_of(L"/\\");
-  if (slash != std::wstring::npos) {
-    base = base.substr(slash + 1);
-  }
-  auto layer = agis_detail::CreateLayerFromDataset(ds, base, path, MapLayerDriverKind::kGdalFile, err);
-  if (!layer) {
-    return false;
-  }
-  layers.push_back(std::move(layer));
-  FitViewToLayers();
-  return true;
-#endif
-}
-
-bool MapDocument::AddLayerFromTmsUrl(const std::wstring& url, std::wstring& err) {
-#if !GIS_DESKTOP_HAVE_GDAL
-  (void)url;
-  err = L"本程序未启用 GDAL，无法使用 TMS/XYZ。请用 AGIS_USE_GDAL=on 重新构建。";
-  return false;
-#else
-  GDALAllRegister();
-  auto layer = agis_detail::CreateLayerFromTmsUrl(url, err);
-  if (!layer) {
-    return false;
-  }
-  layers.push_back(std::move(layer));
-  FitViewToLayers();
-  return true;
-#endif
-}
-
-bool MapDocument::AddLayerFromWmtsUrl(const std::wstring& url, std::wstring& err) {
-#if !GIS_DESKTOP_HAVE_GDAL
-  (void)url;
-  err = L"本程序未启用 GDAL，无法使用 WMTS。请用 AGIS_USE_GDAL=on 重新构建。";
-  return false;
-#else
-  GDALAllRegister();
-  auto layer = agis_detail::CreateLayerFromWmtsUrl(url, err);
-  if (!layer) {
-    return false;
-  }
-  layers.push_back(std::move(layer));
-  FitViewToLayers();
-  return true;
-#endif
-}
-
-bool MapDocument::AddLayerFromArcGisRestJsonUrl(const std::wstring& url, std::wstring& err) {
-#if !GIS_DESKTOP_HAVE_GDAL
-  (void)url;
-  err = L"本程序未启用 GDAL，无法使用 ArcGIS REST。请用 AGIS_USE_GDAL=on 重新构建。";
-  return false;
-#else
-  GDALAllRegister();
-  auto layer = agis_detail::CreateLayerFromArcGisRestJsonUrl(url, err);
-  if (!layer) {
-    return false;
-  }
-  layers.push_back(std::move(layer));
-  FitViewToLayers();
-  return true;
-#endif
-}
-
-bool MapDocument::ReplaceLayerAt(size_t index, std::unique_ptr<MapLayer> layer, std::wstring& err) {
-  if (!layer) {
-    err = L"无效图层";
-    return false;
-  }
-  if (index >= layers.size()) {
-    err = L"图层索引越界";
-    return false;
-  }
-  layers[index] = std::move(layer);
-  FitViewToLayers();
-  return true;
-}
-
-bool MapDocument::RemoveLayerAt(size_t index, std::wstring& err) {
-  if (index >= layers.size()) {
-    err = L"图层索引越界";
-    return false;
-  }
-  layers.erase(layers.begin() + static_cast<ptrdiff_t>(index));
-  FitViewToLayers();
-  return true;
-}
-
-void MapDocument::MoveLayerUp(size_t index) {
-  if (index == 0 || index >= layers.size()) {
-    return;
-  }
-  std::swap(layers[index - 1], layers[index]);
-}
-
-void MapDocument::MoveLayerDown(size_t index) {
-  if (index + 1 >= layers.size()) {
-    return;
-  }
-  std::swap(layers[index], layers[index + 1]);
-}
-
-void MapDocument::Draw(HDC hdcMem, const RECT& client) {
-  const int cw = client.right - client.left;
-  const int ch = client.bottom - client.top;
-  if (cw <= 0 || ch <= 0) {
-    FillRect(hdcMem, &client, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-    return;
-  }
-  const RECT innerLocal{0, 0, cw, ch};
-  if (!view.valid()) {
-    FillRect(hdcMem, &innerLocal, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-    return;
-  }
-  if (layers.empty()) {
-    if (showLatLonGrid) {
-      DrawLatLonGrid(hdcMem, innerLocal, view, displayProjection);
-    } else {
-      const HBRUSH bg = CreateSolidBrush(RGB(245, 250, 255));
-      FillRect(hdcMem, &innerLocal, bg);
-      DeleteObject(bg);
-    }
-    DrawScaleBar(hdcMem, innerLocal, view);
-    return;
-  }
-
-  FillRect(hdcMem, &innerLocal, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-
-#if GIS_DESKTOP_HAVE_GDAL
-  for (const auto& layer : layers) {
-    if (!layer->IsLayerVisible()) {
-      continue;
-    }
-    layer->Draw(hdcMem, innerLocal, view);
-  }
-#else
-  UiPaintMapCenterHint(
-      hdcMem, innerLocal,
-      L"当前构建未启用 GDAL。\n请安装 PROJ 与 GDAL（见 3rdparty/README-GDAL-BUILD.md），或设置 AGIS_USE_GDAL=on 与 CMAKE_PREFIX_PATH，再重新配置。");
-#endif
-  DrawScaleBar(hdcMem, innerLocal, view);
-}
-
-void MapDocument::ScreenToWorld(int sx, int sy, int cw, int ch, double* wx, double* wy) const {
-  if (layers.empty() && MapProj_IsProjectionSelectable(displayProjection)) {
-    MapProj_ScreenToGeoLonLat(displayProjection, view, cw, ch, sx, sy, wx, wy);
-    return;
-  }
-  const double worldW = view.maxX - view.minX;
-  const double worldH = view.maxY - view.minY;
-  if (worldW <= 0.0 || worldH <= 0.0 || cw <= 0 || ch <= 0) {
-    *wx = view.minX;
-    *wy = view.minY;
-    return;
-  }
-  const double fx = static_cast<double>(sx) / static_cast<double>(cw);
-  const double fy = static_cast<double>(sy) / static_cast<double>(ch);
-  *wx = view.minX + fx * worldW;
-  *wy = view.maxY - fy * worldH;
-}
-
-void MapDocument::ZoomAt(int sx, int sy, int cw, int ch, double factor) {
-  if (!view.valid() || cw <= 0 || ch <= 0 || factor <= 0.0) {
-    return;
-  }
-  const double worldW = view.maxX - view.minX;
-  const double worldH = view.maxY - view.minY;
-  if (worldW <= 0.0 || worldH <= 0.0) {
-    return;
-  }
-  double wx = 0;
-  double wy = 0;
-  ScreenToWorld(sx, sy, cw, ch, &wx, &wy);
-  const double newW = worldW / factor;
-  const double newH = worldH / factor;
-  const double rx = static_cast<double>(sx) / static_cast<double>(cw);
-  const double ry = static_cast<double>(sy) / static_cast<double>(ch);
-  view.minX = wx - rx * newW;
-  view.maxX = view.minX + newW;
-  view.maxY = wy + ry * newH;
-  view.minY = view.maxY - newH;
-  NormalizeEmptyMapView();
-  MapEngine_UpdateMapChrome();
-}
-
-void MapDocument::PanPixels(int dx, int dy, int cw, int ch) {
-  if (!view.valid() || cw <= 0 || ch <= 0) {
-    return;
-  }
-  const double worldW = view.maxX - view.minX;
-  const double worldH = view.maxY - view.minY;
-  if (worldW <= 0.0 || worldH <= 0.0) {
-    return;
-  }
-  const double pxPerWorldX = static_cast<double>(cw) / worldW;
-  const double pxPerWorldY = static_cast<double>(ch) / worldH;
-  view.minX -= static_cast<double>(dx) / pxPerWorldX;
-  view.maxX -= static_cast<double>(dx) / pxPerWorldX;
-  view.minY += static_cast<double>(dy) / pxPerWorldY;
-  view.maxY += static_cast<double>(dy) / pxPerWorldY;
-  NormalizeEmptyMapView();
-  MapEngine_UpdateMapChrome();
-}
-
-void MapDocument::ZoomViewAtCenter(double factor, int cw, int ch) {
-  ZoomAt(cw / 2, ch / 2, cw, ch, factor);
-}
-
-void MapDocument::ResetZoom100AnchorCenter(int cw, int ch) {
-  if (!view.valid() || cw <= 0 || ch <= 0) {
-    return;
-  }
-  const double cx = (view.minX + view.maxX) * 0.5;
-  const double cy = (view.minY + view.maxY) * 0.5;
-  const double worldW = view.maxX - view.minX;
-  const double worldH = view.maxY - view.minY;
-  if (worldW <= 0.0 || worldH <= 0.0) {
-    return;
-  }
-  if (layers.empty()) {
-    view.minX = cx - refViewWidthDeg * 0.5;
-    view.maxX = cx + refViewWidthDeg * 0.5;
-    view.maxY = cy + refViewHeightDeg * 0.5;
-    view.minY = cy - refViewHeightDeg * 0.5;
-    NormalizeEmptyMapView();
-    MapEngine_UpdateMapChrome();
-    return;
-  }
-  const double ar = worldH / worldW;
-  double useW = refViewWidthDeg;
-  double useH = useW * ar;
-  view.minX = cx - useW * 0.5;
-  view.maxX = cx + useW * 0.5;
-  view.maxY = cy + useH * 0.5;
-  view.minY = cy - useH * 0.5;
-  NormalizeEmptyMapView();
-  MapEngine_UpdateMapChrome();
-}
-
-void MapDocument::CenterContentOrigin(int cw, int ch) {
-  (void)cw;
-  (void)ch;
-  double cx = 0.0;
-  double cy = 0.0;
-  ViewExtent ex{};
-  bool any = false;
-  for (const auto& layer : layers) {
-    ViewExtent le{};
-    if (!layer->GetExtent(le)) {
-      continue;
-    }
-    if (!any) {
-      ex = le;
-      any = true;
-    } else {
-      ex.minX = std::min(ex.minX, le.minX);
-      ex.minY = std::min(ex.minY, le.minY);
-      ex.maxX = std::max(ex.maxX, le.maxX);
-      ex.maxY = std::max(ex.maxY, le.maxY);
-    }
-  }
-  if (any && ex.valid()) {
-    cx = (ex.minX + ex.maxX) * 0.5;
-    cy = (ex.minY + ex.maxY) * 0.5;
-  }
-  const double w = view.maxX - view.minX;
-  const double h = view.maxY - view.minY;
-  view.minX = cx - w * 0.5;
-  view.maxX = cx + w * 0.5;
-  view.maxY = cy + h * 0.5;
-  view.minY = cy - h * 0.5;
-  NormalizeEmptyMapView();
-  MapEngine_UpdateMapChrome();
-}
-
-int MapDocument::ScalePercentForUi() const {
-  const double w = view.maxX - view.minX;
-  const double h = view.maxY - view.minY;
-  if (w <= 1e-18 || h <= 1e-18) {
-    return 100;
-  }
-  const double pw = refViewWidthDeg / w * 100.0;
-  const double ph = refViewHeightDeg / h * 100.0;
-  return static_cast<int>(std::lround((pw + ph) * 0.5));
-}
-
-void MapDocument::SetShowLatLonGrid(bool on) {
-  showLatLonGrid = on;
-}
-
-void MapDocument::SetDisplayProjection(MapDisplayProjection p) {
-  if (p < MapDisplayProjection::kGeographicWgs84 || p >= MapDisplayProjection::kCount) {
-    return;
-  }
-#if !GIS_DESKTOP_HAVE_GDAL
-  if (p != MapDisplayProjection::kGeographicWgs84) {
-    p = MapDisplayProjection::kGeographicWgs84;
-  }
-#endif
-  displayProjection = p;
-  MapProj_InvalidateBoundsCache();
-}
-
-void MapEngine_Init() {
+void MapEngine::Init() {
   MapProj_SystemInit();
 #if GIS_DESKTOP_HAVE_GDAL
   GDALAllRegister();
 #endif
 }
 
-void MapEngine_Shutdown() {
+void MapEngine::Shutdown() {
   MapProj_SystemShutdown();
-  g_doc.layers.clear();
-  g_doc.view = DefaultGeographicView();
-  g_doc.refViewWidthDeg = 360.0;
-  g_doc.refViewHeightDeg = 180.0;
+  doc_.layers.clear();
+  doc_.view = DefaultGeographicView();
+  doc_.refViewWidthDeg = 360.0;
+  doc_.refViewHeightDeg = 180.0;
 }
 
-void MapEngine_SetRenderBackend(MapRenderBackend backend) {
-  g_mapRenderBackend = backend;
-  if (g_mapHwnd && IsWindow(g_mapHwnd)) {
-    if (!MapGpu_Init(g_mapHwnd, backend)) {
+void MapEngine::SetRenderBackend(MapRenderBackend backend) {
+  mapRenderBackend_ = backend;
+  if (mapHwnd_ && IsWindow(mapHwnd_)) {
+    if (!MapGpu_Init(mapHwnd_, backend)) {
       AppLogLine(L"[地图] GPU 呈现初始化失败，已回退为 GDI。");
-      g_mapRenderBackend = MapRenderBackend::kGdi;
-      MapGpu_Init(g_mapHwnd, MapRenderBackend::kGdi);
+      mapRenderBackend_ = MapRenderBackend::kGdi;
+      MapGpu_Init(mapHwnd_, MapRenderBackend::kGdi);
     }
-    InvalidateRect(g_mapHwnd, nullptr, FALSE);
+    InvalidateRect(mapHwnd_, nullptr, FALSE);
   }
 }
 
-MapRenderBackend MapEngine_GetRenderBackend() {
-  if (g_mapHwnd && IsWindow(g_mapHwnd)) {
+MapRenderBackend MapEngine::GetRenderBackend() const {
+  if (mapHwnd_ && IsWindow(mapHwnd_)) {
     return MapGpu_GetActiveBackend();
   }
-  return g_mapRenderBackend;
+  return mapRenderBackend_;
 }
 
-MapDocument& MapEngine_Document() { return g_doc; }
-
-void MapEngine_RefreshLayerList(HWND listbox) {
+void MapEngine::RefreshLayerList(HWND listbox) {
   if (!listbox) {
     return;
   }
   SendMessageW(listbox, LB_RESETCONTENT, 0, 0);
-  for (const auto& layer : g_doc.layers) {
+  for (const auto& layer : doc_.layers) {
     SendMessageW(listbox, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(layer->DisplayName().c_str()));
   }
-  if (g_doc.layers.empty()) {
+  if (doc_.layers.empty()) {
     SendMessageW(listbox, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"（无图层，使用「图层」菜单添加）"));
   }
   SendMessageW(listbox, LB_SETITEMHEIGHT, 0, MAKELPARAM(kLayerListItemHeight, 0));
 }
 
-void MapEngine_MeasureLayerListItem(LPMEASUREITEMSTRUCT mis) {
+void MapEngine::MeasureLayerListItem(LPMEASUREITEMSTRUCT mis) {
   if (!mis) {
     return;
   }
   mis->itemHeight = kLayerListItemHeight;
 }
 
-void MapEngine_PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
+void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
   if (!dis || dis->CtlType != ODT_LISTBOX) {
     return;
   }
@@ -2061,7 +1171,7 @@ void MapEngine_PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
   fmt.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
 
-  const int n = static_cast<int>(g_doc.layers.size());
+  const int n = static_cast<int>(doc_.layers.size());
   if (n == 0 && item == 0) {
     Gdiplus::SolidBrush hint(Gdiplus::Color(255, 130, 135, 150));
     g.DrawString(L"（无图层，使用「图层」菜单添加）", -1, &metaF,
@@ -2074,7 +1184,7 @@ void MapEngine_PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
   if (item < 0 || item >= n) {
     return;
   }
-  const auto& layer = g_doc.layers[static_cast<size_t>(item)];
+  const auto& layer = doc_.layers[static_cast<size_t>(item)];
   const bool vis = layer->IsLayerVisible();
   Gdiplus::SolidBrush eyeBr(vis ? Gdiplus::Color(255, 0, 140, 90) : Gdiplus::Color(255, 180, 185, 195));
   Gdiplus::Font eyeF(&fam, 16.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
@@ -2105,7 +1215,7 @@ void MapEngine_PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
   (void)focus;
 }
 
-bool MapEngine_OnLayerListClick(HWND listbox, int x, int y) {
+bool MapEngine::OnLayerListClick(HWND listbox, int x, int y) {
   if (!listbox) {
     return false;
   }
@@ -2114,7 +1224,7 @@ bool MapEngine_OnLayerListClick(HWND listbox, int x, int y) {
     return false;
   }
   const int hit = static_cast<int>(LOWORD(lr));
-  const int n = static_cast<int>(g_doc.layers.size());
+  const int n = static_cast<int>(doc_.layers.size());
   if (n <= 0 || hit < 0 || hit >= n) {
     return false;
   }
@@ -2126,18 +1236,18 @@ bool MapEngine_OnLayerListClick(HWND listbox, int x, int y) {
   if (lx < 0 || lx >= kVisToggleWidth) {
     return false;
   }
-  auto& lyr = g_doc.layers[static_cast<size_t>(hit)];
+  auto& lyr = doc_.layers[static_cast<size_t>(hit)];
   lyr->SetLayerVisible(!lyr->IsLayerVisible());
   InvalidateRect(listbox, nullptr, FALSE);
-  if (g_mapHwnd && IsWindow(g_mapHwnd)) {
-    InvalidateRect(g_mapHwnd, nullptr, FALSE);
+  if (mapHwnd_ && IsWindow(mapHwnd_)) {
+    InvalidateRect(mapHwnd_, nullptr, FALSE);
   }
   return true;
 }
 
-int MapEngine_GetLayerCount() { return static_cast<int>(g_doc.layers.size()); }
+int MapEngine::GetLayerCount() const { return static_cast<int>(doc_.layers.size()); }
 
-void MapEngine_GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring* outDriverProps,
+void MapEngine::GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring* outDriverProps,
                                  std::wstring* outSourceProps) {
   if (!outTitle || !outDriverProps || !outSourceProps) {
     return;
@@ -2146,13 +1256,13 @@ void MapEngine_GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring
   outDriverProps->clear();
   outSourceProps->clear();
 #if GIS_DESKTOP_HAVE_GDAL
-  if (index < 0 || index >= static_cast<int>(g_doc.layers.size())) {
+  if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
     *outTitle = L"未选择图层";
     *outDriverProps = L"在左侧「图层」列表中单击一行，可在此查看驱动与格式相关属性。";
     *outSourceProps = L"选中图层后，此处显示数据源路径、文件列表与数据集描述等。";
     return;
   }
-  const auto& layer = g_doc.layers[static_cast<size_t>(index)];
+  const auto& layer = doc_.layers[static_cast<size_t>(index)];
   *outTitle = layer->DisplayName();
   *outTitle += L" · ";
   *outTitle += MapLayerDriverKindLabel(layer->DriverKind());
@@ -2171,25 +1281,25 @@ void MapEngine_GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring
 #endif
 }
 
-bool MapEngine_IsRasterGdalLayer(int index) {
+bool MapEngine::IsRasterGdalLayer(int index) const {
 #if GIS_DESKTOP_HAVE_GDAL
-  if (index < 0 || index >= static_cast<int>(g_doc.layers.size())) {
+  if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
     return false;
   }
-  return g_doc.layers[static_cast<size_t>(index)]->GetKind() == MapLayerKind::kRasterGdal;
+  return doc_.layers[static_cast<size_t>(index)]->GetKind() == MapLayerKind::kRasterGdal;
 #else
   (void)index;
   return false;
 #endif
 }
 
-bool MapEngine_BuildOverviewsForLayer(int index, std::wstring& err) {
+bool MapEngine::BuildOverviewsForLayer(int index, std::wstring& err) {
 #if GIS_DESKTOP_HAVE_GDAL
-  if (index < 0 || index >= static_cast<int>(g_doc.layers.size())) {
+  if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
     err = L"无效图层。";
     return false;
   }
-  return g_doc.layers[static_cast<size_t>(index)]->BuildOverviews(err);
+  return doc_.layers[static_cast<size_t>(index)]->BuildOverviews(err);
 #else
   (void)index;
   err = L"未启用 GDAL。";
@@ -2197,13 +1307,13 @@ bool MapEngine_BuildOverviewsForLayer(int index, std::wstring& err) {
 #endif
 }
 
-bool MapEngine_ClearOverviewsForLayer(int index, std::wstring& err) {
+bool MapEngine::ClearOverviewsForLayer(int index, std::wstring& err) {
 #if GIS_DESKTOP_HAVE_GDAL
-  if (index < 0 || index >= static_cast<int>(g_doc.layers.size())) {
+  if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
     err = L"无效图层。";
     return false;
   }
-  return g_doc.layers[static_cast<size_t>(index)]->ClearOverviews(err);
+  return doc_.layers[static_cast<size_t>(index)]->ClearOverviews(err);
 #else
   (void)index;
   err = L"未启用 GDAL。";
@@ -2211,20 +1321,20 @@ bool MapEngine_ClearOverviewsForLayer(int index, std::wstring& err) {
 #endif
 }
 
-bool MapEngine_ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int index) {
+bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int index) {
 #if !GIS_DESKTOP_HAVE_GDAL
   (void)owner;
   (void)layerListbox;
   (void)index;
   return false;
 #else
-  if (index < 0 || index >= static_cast<int>(g_doc.layers.size())) {
+  if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
     MessageBoxW(owner, L"请先选择有效图层。", L"AGIS", MB_OK | MB_ICONWARNING);
     return false;
   }
   MapLayerDriverKind kind{};
   std::wstring urlExtra;
-  if (!MapEngine_ShowLayerDriverDialog(owner, &kind, &urlExtra)) {
+  if (!ShowLayerDriverDialog(owner, &kind, &urlExtra)) {
     return false;
   }
   if (kind == MapLayerDriverKind::kWmsPlaceholder) {
@@ -2259,7 +1369,7 @@ bool MapEngine_ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int index
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    if (!g_doc.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
+    if (!doc_.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
       AppLogLine(std::wstring(L"[错误] ") + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
@@ -2283,7 +1393,7 @@ bool MapEngine_ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int index
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    if (!g_doc.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
+    if (!doc_.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
       AppLogLine(std::wstring(L"[错误] ") + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
@@ -2307,7 +1417,7 @@ bool MapEngine_ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int index
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    if (!g_doc.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
+    if (!doc_.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
       AppLogLine(std::wstring(L"[错误] ") + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
@@ -2352,15 +1462,15 @@ bool MapEngine_ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int index
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    if (!g_doc.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
+    if (!doc_.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
     AppLogLine(std::wstring(L"[图层] 已更换数据源（GDAL）：") + base);
   }
-  MapEngine_RefreshLayerList(layerListbox);
-  if (g_mapHwnd) {
-    InvalidateRect(g_mapHwnd, nullptr, FALSE);
+  RefreshLayerList(layerListbox);
+  if (mapHwnd_) {
+    InvalidateRect(mapHwnd_, nullptr, FALSE);
   }
   return true;
 #endif
@@ -2527,7 +1637,7 @@ void EnsureLayerDriverDlgClass() {
 
 }  // namespace
 
-bool MapEngine_ShowLayerDriverDialog(HWND owner, MapLayerDriverKind* outKind, std::wstring* outUrl) {
+bool MapEngine::ShowLayerDriverDialog(HWND owner, MapLayerDriverKind* outKind, std::wstring* outUrl) {
   if (!outKind || !outUrl) {
     return false;
   }
@@ -2579,7 +1689,7 @@ namespace {
 bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector<uint8_t>* outPixels);
 }
 
-bool MapEngine_SaveMapScreenshotToFile(HWND mapHwnd, const wchar_t* path, std::wstring& err) {
+bool MapEngine::SaveMapScreenshotToFile(HWND mapHwnd, const wchar_t* path, std::wstring& err) {
   if (!mapHwnd || !path || !path[0]) {
     err = L"参数无效。";
     return false;
@@ -2604,7 +1714,7 @@ bool MapEngine_SaveMapScreenshotToFile(HWND mapHwnd, const wchar_t* path, std::w
   return true;
 }
 
-void MapEngine_PromptSaveMapScreenshot(HWND owner, HWND mapHwnd) {
+void MapEngine::PromptSaveMapScreenshot(HWND owner, HWND mapHwnd) {
   wchar_t path[MAX_PATH]{};
   SYSTEMTIME st{};
   GetLocalTime(&st);
@@ -2624,17 +1734,17 @@ void MapEngine_PromptSaveMapScreenshot(HWND owner, HWND mapHwnd) {
     return;
   }
   std::wstring err;
-  if (MapEngine_SaveMapScreenshotToFile(mapHwnd, path, err)) {
+  if (SaveMapScreenshotToFile(mapHwnd, path, err)) {
     AppLogLine(std::wstring(L"[截图] 已保存：") + path);
   } else {
     AppLogLine(std::wstring(L"[错误] 截图失败：") + err);
   }
 }
 
-void MapEngine_OnAddLayerFromDialog(HWND owner, HWND layerList) {
+void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
   MapLayerDriverKind kind{};
   std::wstring urlExtra;
-  if (!MapEngine_ShowLayerDriverDialog(owner, &kind, &urlExtra)) {
+  if (!ShowLayerDriverDialog(owner, &kind, &urlExtra)) {
     return;
   }
   if (kind == MapLayerDriverKind::kWmsPlaceholder) {
@@ -2665,15 +1775,15 @@ void MapEngine_OnAddLayerFromDialog(HWND owner, HWND layerList) {
       return;
     }
     std::wstring err;
-    if (!g_doc.AddLayerFromTmsUrl(urlExtra, err)) {
+    if (!doc_.AddLayerFromTmsUrl(urlExtra, err)) {
       AppLogLine(std::wstring(L"[错误] 添加 TMS 图层失败：") + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return;
     }
     AppLogLine(std::wstring(L"[图层] 已添加 TMS：") + urlExtra);
-    MapEngine_RefreshLayerList(layerList);
-    if (g_mapHwnd) {
-      InvalidateRect(g_mapHwnd, nullptr, FALSE);
+    RefreshLayerList(layerList);
+    if (mapHwnd_) {
+      InvalidateRect(mapHwnd_, nullptr, FALSE);
     }
     return;
   }
@@ -2691,15 +1801,15 @@ void MapEngine_OnAddLayerFromDialog(HWND owner, HWND layerList) {
       return;
     }
     std::wstring err;
-    if (!g_doc.AddLayerFromWmtsUrl(urlExtra, err)) {
+    if (!doc_.AddLayerFromWmtsUrl(urlExtra, err)) {
       AppLogLine(std::wstring(L"[错误] 添加 WMTS 图层失败：") + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return;
     }
     AppLogLine(std::wstring(L"[图层] 已添加 WMTS：") + urlExtra);
-    MapEngine_RefreshLayerList(layerList);
-    if (g_mapHwnd) {
-      InvalidateRect(g_mapHwnd, nullptr, FALSE);
+    RefreshLayerList(layerList);
+    if (mapHwnd_) {
+      InvalidateRect(mapHwnd_, nullptr, FALSE);
     }
     return;
   }
@@ -2718,15 +1828,15 @@ void MapEngine_OnAddLayerFromDialog(HWND owner, HWND layerList) {
       return;
     }
     std::wstring err;
-    if (!g_doc.AddLayerFromArcGisRestJsonUrl(urlExtra, err)) {
+    if (!doc_.AddLayerFromArcGisRestJsonUrl(urlExtra, err)) {
       AppLogLine(std::wstring(L"[错误] 添加 ArcGIS REST 图层失败：") + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return;
     }
     AppLogLine(std::wstring(L"[图层] 已添加 ArcGIS REST：") + urlExtra);
-    MapEngine_RefreshLayerList(layerList);
-    if (g_mapHwnd) {
-      InvalidateRect(g_mapHwnd, nullptr, FALSE);
+    RefreshLayerList(layerList);
+    if (mapHwnd_) {
+      InvalidateRect(mapHwnd_, nullptr, FALSE);
     }
     return;
   }
@@ -2747,7 +1857,7 @@ void MapEngine_OnAddLayerFromDialog(HWND owner, HWND layerList) {
     return;
   }
   std::wstring err;
-  if (!g_doc.AddLayerFromFile(path, err)) {
+  if (!doc_.AddLayerFromFile(path, err)) {
     AppLogLine(std::wstring(L"[错误] 添加图层失败：") + err);
     return;
   }
@@ -2759,10 +1869,19 @@ void MapEngine_OnAddLayerFromDialog(HWND owner, HWND layerList) {
     }
     AppLogLine(std::wstring(L"[图层] 已添加（GDAL）：") + base);
   }
-  MapEngine_RefreshLayerList(layerList);
-  if (g_mapHwnd) {
-    InvalidateRect(g_mapHwnd, nullptr, FALSE);
+  RefreshLayerList(layerList);
+  if (mapHwnd_) {
+    InvalidateRect(mapHwnd_, nullptr, FALSE);
   }
+}
+
+void MapEngine::UpdateMapChrome() {
+  if (!mapChromeScale_ || !IsWindow(mapChromeScale_)) {
+    return;
+  }
+  wchar_t buf[32]{};
+  _snwprintf_s(buf, _TRUNCATE, L"%d%%", doc_.ScalePercentForUi());
+  SetWindowTextW(mapChromeScale_, buf);
 }
 
 namespace {
@@ -2855,7 +1974,7 @@ bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector
   }
   const HGDIOBJ old = SelectObject(mem, dib);
   const RECT inner{0, 0, cw, ch};
-  g_doc.Draw(mem, inner);
+  MapEngine::Instance().Document().Draw(mem, inner);
   UiPaintMapHintOverlay(mem, inner, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
   const size_t nbytes = static_cast<size_t>(cw) * static_cast<size_t>(ch) * 4u;
   outPixels->resize(nbytes);
@@ -2870,15 +1989,16 @@ bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector
 }  // namespace
 
 LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  MapEngine& eng = MapEngine::Instance();
   switch (msg) {
     case WM_CREATE:
-      g_mapHwnd = hwnd;
-      g_doc.view = DefaultGeographicView();
-      g_doc.refViewWidthDeg = 360.0;
-      g_doc.refViewHeightDeg = 180.0;
-      if (!MapGpu_Init(hwnd, g_mapRenderBackend)) {
+      eng.mapHwnd_ = hwnd;
+      eng.doc_.view = DefaultGeographicView();
+      eng.doc_.refViewWidthDeg = 360.0;
+      eng.doc_.refViewHeightDeg = 180.0;
+      if (!MapGpu_Init(hwnd, eng.mapRenderBackend_)) {
         AppLogLine(L"[地图] GPU 呈现初始化失败，已回退为 GDI。");
-        g_mapRenderBackend = MapRenderBackend::kGdi;
+        eng.mapRenderBackend_ = MapRenderBackend::kGdi;
         MapGpu_Init(hwnd, MapRenderBackend::kGdi);
       }
       {
@@ -2910,20 +2030,20 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_RESET)), inst, nullptr);
         CreateWindowW(L"BUTTON", L"−", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 8, 228, 28, 22, hwnd,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_ZOOM_OUT)), inst, nullptr);
-        g_mapChromeScale =
+        eng.mapChromeScale_ =
             CreateWindowW(L"STATIC", L"100%", WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE, 40, 228, 56, 22,
                           hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_SCALE_TEXT)), inst, nullptr);
         CreateWindowW(L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 100, 228, 28, 22, hwnd,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_ZOOM_IN)), inst, nullptr);
         LayoutMapOverlayControls(hwnd);
         ApplyUiFontToChildren(hwnd);
-        MapEngine_UpdateMapChrome();
+        eng.UpdateMapChrome();
       }
       return 0;
     case WM_DESTROY:
       MapGpu_Shutdown(hwnd);
-      g_mapHwnd = nullptr;
-      g_mapChromeScale = nullptr;
+      eng.mapHwnd_ = nullptr;
+      eng.mapChromeScale_ = nullptr;
       return 0;
     case WM_SIZE: {
       RECT sr{};
@@ -2941,23 +2061,23 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         const int cw = r.right - r.left;
         const int ch = r.bottom - r.top;
         if (id == IDC_MAP_SHORTCUT_TOGGLE) {
-          g_mapShortcutExpanded = !g_mapShortcutExpanded;
+          eng.mapShortcutExpanded_ = !eng.mapShortcutExpanded_;
           if (HWND hEd = GetDlgItem(hwnd, IDC_MAP_SHORTCUT_EDIT)) {
-            ShowWindow(hEd, g_mapShortcutExpanded ? SW_SHOW : SW_HIDE);
+            ShowWindow(hEd, eng.mapShortcutExpanded_ ? SW_SHOW : SW_HIDE);
           }
           SetWindowTextW(GetDlgItem(hwnd, IDC_MAP_SHORTCUT_TOGGLE),
-                         g_mapShortcutExpanded ? L"快捷键 ▲" : L"快捷键 ▼");
+                         eng.mapShortcutExpanded_ ? L"快捷键 ▲" : L"快捷键 ▼");
           LayoutMapOverlayControls(hwnd);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
         }
         if (id == IDC_MAP_VIS_TOGGLE) {
-          g_mapVisExpanded = !g_mapVisExpanded;
+          eng.mapVisExpanded_ = !eng.mapVisExpanded_;
           if (HWND hGr = GetDlgItem(hwnd, IDC_MAP_VIS_GRID)) {
-            ShowWindow(hGr, g_mapVisExpanded ? SW_SHOW : SW_HIDE);
+            ShowWindow(hGr, eng.mapVisExpanded_ ? SW_SHOW : SW_HIDE);
           }
           SetWindowTextW(GetDlgItem(hwnd, IDC_MAP_VIS_TOGGLE),
-                         g_mapVisExpanded ? L"可见性 ▲" : L"可见性 ▼");
+                         eng.mapVisExpanded_ ? L"可见性 ▲" : L"可见性 ▼");
           LayoutMapOverlayControls(hwnd);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
@@ -2965,32 +2085,32 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         if (id == IDC_MAP_VIS_GRID) {
           const UINT st = static_cast<UINT>(
               SendMessageW(GetDlgItem(hwnd, IDC_MAP_VIS_GRID), BM_GETCHECK, 0, 0));
-          g_doc.SetShowLatLonGrid(st == BST_CHECKED);
+          eng.doc_.SetShowLatLonGrid(st == BST_CHECKED);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
         }
         if (id == IDC_MAP_FIT) {
-          g_doc.FitViewToLayers();
+          eng.doc_.FitViewToLayers();
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
         }
         if (id == IDC_MAP_ORIGIN) {
-          g_doc.CenterContentOrigin(cw, ch);
+          eng.doc_.CenterContentOrigin(cw, ch);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
         }
         if (id == IDC_MAP_RESET) {
-          g_doc.ResetZoom100AnchorCenter(cw, ch);
+          eng.doc_.ResetZoom100AnchorCenter(cw, ch);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
         }
         if (id == IDC_MAP_ZOOM_OUT) {
-          g_doc.ZoomViewAtCenter(1.0 / 1.1, cw, ch);
+          eng.doc_.ZoomViewAtCenter(1.0 / 1.1, cw, ch);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
         }
         if (id == IDC_MAP_ZOOM_IN) {
-          g_doc.ZoomViewAtCenter(1.1, cw, ch);
+          eng.doc_.ZoomViewAtCenter(1.1, cw, ch);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
         }
@@ -3006,13 +2126,13 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       return 0;
     case WM_MBUTTONDOWN:
       SetFocus(hwnd);
-      g_mdrag = true;
-      g_mlast.x = GET_X_LPARAM(lParam);
-      g_mlast.y = GET_Y_LPARAM(lParam);
+      eng.mdrag_ = true;
+      eng.mlast_.x = GET_X_LPARAM(lParam);
+      eng.mlast_.y = GET_Y_LPARAM(lParam);
       SetCapture(hwnd);
       return 0;
     case WM_MBUTTONUP:
-      g_mdrag = false;
+      eng.mdrag_ = false;
       ReleaseCapture();
       return 0;
     case WM_MOUSEWHEEL: {
@@ -3027,22 +2147,22 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       const int mx = pt.x;
       const int my = pt.y;
       const double factor = delta > 0 ? 1.1 : 1.0 / 1.1;
-      g_doc.ZoomAt(mx, my, cw, ch, factor);
+      eng.doc_.ZoomAt(mx, my, cw, ch, factor);
       RedrawWindow(hwnd, nullptr, nullptr,
                    RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
       return 0;
     }
     case WM_MOUSEMOVE:
-      if (g_mdrag && (wParam & MK_MBUTTON) != 0) {
+      if (eng.mdrag_ && (wParam & MK_MBUTTON) != 0) {
         const int x = GET_X_LPARAM(lParam);
         const int y = GET_Y_LPARAM(lParam);
-        const int dx = x - g_mlast.x;
-        const int dy = y - g_mlast.y;
-        g_mlast.x = x;
-        g_mlast.y = y;
+        const int dx = x - eng.mlast_.x;
+        const int dy = y - eng.mlast_.y;
+        eng.mlast_.x = x;
+        eng.mlast_.y = y;
         RECT r2{};
         GetClientRect(hwnd, &r2);
-        g_doc.PanPixels(dx, dy, r2.right - r2.left, r2.bottom - r2.top);
+        eng.doc_.PanPixels(dx, dy, r2.right - r2.left, r2.bottom - r2.top);
         InvalidateRect(hwnd, nullptr, FALSE);
       }
       return 0;
@@ -3057,7 +2177,7 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         HDC mem = CreateCompatibleDC(hdc);
         HBITMAP bmp = CreateCompatibleBitmap(hdc, cw, ch);
         const HGDIOBJ oldBmp = SelectObject(mem, bmp);
-        g_doc.Draw(mem, client);
+        eng.doc_.Draw(mem, client);
         UiPaintMapHintOverlay(mem, client, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
         BitBlt(hdc, 0, 0, cw, ch, mem, 0, 0, SRCCOPY);
         SelectObject(mem, oldBmp);

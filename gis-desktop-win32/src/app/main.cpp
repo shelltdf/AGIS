@@ -134,7 +134,7 @@ void SyncViewMenu(HWND hwnd) {
   }
   CheckMenuRadioItem(view, ID_VIEW_MODE_2D, ID_VIEW_MODE_3D,
                        g_view3d ? ID_VIEW_MODE_3D : ID_VIEW_MODE_2D, MF_BYCOMMAND);
-  const MapRenderBackend rb = MapEngine_GetRenderBackend();
+  const MapRenderBackend rb = MapEngine::Instance().GetRenderBackend();
   UINT rid = ID_VIEW_RENDER_GDI;
   if (rb == MapRenderBackend::kD3d11) {
     rid = ID_VIEW_RENDER_D3D11;
@@ -143,7 +143,7 @@ void SyncViewMenu(HWND hwnd) {
   }
   CheckMenuRadioItem(view, ID_VIEW_RENDER_GDI, ID_VIEW_RENDER_GL, rid, MF_BYCOMMAND);
   if (g_hmenuProjSub) {
-    const int pi = static_cast<int>(MapEngine_Document().GetDisplayProjection());
+    const int pi = static_cast<int>(MapEngine::Instance().Document().GetDisplayProjection());
     if (pi >= 0 && pi < static_cast<int>(MapDisplayProjection::kCount)) {
       CheckMenuRadioItem(g_hmenuProjSub, ID_VIEW_PROJ_FIRST, ID_VIEW_PROJ_LAST, ID_VIEW_PROJ_FIRST + pi,
                          MF_BYCOMMAND);
@@ -422,8 +422,8 @@ HWND CreateMainToolbar(HWND parent, HINSTANCE inst) {
 constexpr UINT_PTR kLayerListSubclassId = 5;
 
 static void LayerListSyncUiAfterOp(HWND listbox, HWND mainFrame, int newSelIndex) {
-  MapEngine_RefreshLayerList(listbox);
-  const int n = MapEngine_GetLayerCount();
+  MapEngine::Instance().RefreshLayerList(listbox);
+  const int n = MapEngine::Instance().GetLayerCount();
   if (n <= 0) {
     SendMessageW(listbox, LB_SETCURSEL, static_cast<WPARAM>(-1), 0);
     PostMessageW(mainFrame, WM_APP_LAYER_SEL, 0, static_cast<LPARAM>(-1));
@@ -442,7 +442,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
   if (msg == WM_LBUTTONDOWN) {
     const int x = GET_X_LPARAM(lParam);
     const int y = GET_Y_LPARAM(lParam);
-    if (MapEngine_OnLayerListClick(hwnd, x, y)) {
+    if (MapEngine::Instance().OnLayerListClick(hwnd, x, y)) {
       HWND layerPane = reinterpret_cast<HWND>(refData);
       HWND mainFr = GetParent(layerPane);
       const LRESULT lr = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
@@ -468,7 +468,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     if (static_cast<int>(lr) != LB_ERR && HIWORD(lr) == 0) {
       hit = static_cast<int>(LOWORD(lr));
     }
-    const int n = MapEngine_GetLayerCount();
+    const int n = MapEngine::Instance().GetLayerCount();
     const bool onLayer = (n > 0 && hit >= 0 && hit < n);
     const bool canUp = onLayer && hit > 0;
     const bool canDown = onLayer && hit < n - 1;
@@ -490,9 +490,9 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
     switch (cmd) {
       case ID_LAYER_CTX_ADD:
-        MapEngine_OnAddLayerFromDialog(mainFr, hwnd);
+        MapEngine::Instance().OnAddLayerFromDialog(mainFr, hwnd);
         {
-          const int nn = MapEngine_GetLayerCount();
+          const int nn = MapEngine::Instance().GetLayerCount();
           if (nn > 0) {
             SendMessageW(hwnd, LB_SETCURSEL, static_cast<WPARAM>(nn - 1), 0);
             PostMessageW(mainFr, WM_APP_LAYER_SEL, 0, static_cast<LPARAM>(nn - 1));
@@ -508,7 +508,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           return 0;
         }
         std::wstring err;
-        if (!MapEngine_Document().RemoveLayerAt(static_cast<size_t>(hit), err)) {
+        if (!MapEngine::Instance().Document().RemoveLayerAt(static_cast<size_t>(hit), err)) {
           if (!err.empty()) {
             MessageBoxW(mainFr, err.c_str(), L"AGIS", MB_OK | MB_ICONWARNING);
           }
@@ -516,7 +516,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         }
         AppLogLine(L"[图层] 已删除所选图层。");
         {
-          const int nn = MapEngine_GetLayerCount();
+          const int nn = MapEngine::Instance().GetLayerCount();
           const int newSel = (nn > 0) ? std::min(hit, nn - 1) : -1;
           LayerListSyncUiAfterOp(hwnd, mainFr, newSel);
         }
@@ -526,7 +526,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         if (!canUp) {
           return 0;
         }
-        MapEngine_Document().MoveLayerUp(static_cast<size_t>(hit));
+        MapEngine::Instance().Document().MoveLayerUp(static_cast<size_t>(hit));
         AppLogLine(L"[图层] 已上移。");
         LayerListSyncUiAfterOp(hwnd, mainFr, hit - 1);
         return 0;
@@ -535,7 +535,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         if (!canDown) {
           return 0;
         }
-        MapEngine_Document().MoveLayerDown(static_cast<size_t>(hit));
+        MapEngine::Instance().Document().MoveLayerDown(static_cast<size_t>(hit));
         AppLogLine(L"[图层] 已下移。");
         LayerListSyncUiAfterOp(hwnd, mainFr, hit + 1);
         return 0;
@@ -592,7 +592,7 @@ LRESULT CALLBACK LayerPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     case WM_MEASUREITEM: {
       auto* mis = reinterpret_cast<LPMEASUREITEMSTRUCT>(lParam);
       if (mis && mis->CtlID == IDC_LAYER_LIST) {
-        MapEngine_MeasureLayerListItem(mis);
+        MapEngine::Instance().MeasureLayerListItem(mis);
         return TRUE;
       }
       break;
@@ -600,7 +600,7 @@ LRESULT CALLBACK LayerPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     case WM_DRAWITEM: {
       const DRAWITEMSTRUCT* dis = reinterpret_cast<LPDRAWITEMSTRUCT>(lParam);
       if (dis && dis->CtlID == IDC_LAYER_LIST) {
-        MapEngine_PaintLayerListItem(dis);
+        MapEngine::Instance().PaintLayerListItem(dis);
         return TRUE;
       }
       break;
@@ -691,7 +691,7 @@ void RefreshPropsPanel(HWND hwndProps) {
   std::wstring title;
   std::wstring driverTxt;
   std::wstring sourceTxt;
-  MapEngine_GetLayerInfoForUi(g_layerSelIndex, &title, &driverTxt, &sourceTxt);
+  MapEngine::Instance().GetLayerInfoForUi(g_layerSelIndex, &title, &driverTxt, &sourceTxt);
   g_propsLayerSubtitleForPaint = title;
   if (edDriver) {
     SetWindowTextW(edDriver, driverTxt.c_str());
@@ -699,8 +699,8 @@ void RefreshPropsPanel(HWND hwndProps) {
   if (edSrc) {
     SetWindowTextW(edSrc, sourceTxt.c_str());
   }
-  const bool raster = MapEngine_IsRasterGdalLayer(g_layerSelIndex);
-  const bool layerOk = g_layerSelIndex >= 0 && g_layerSelIndex < MapEngine_GetLayerCount();
+  const bool raster = MapEngine::Instance().IsRasterGdalLayer(g_layerSelIndex);
+  const bool layerOk = g_layerSelIndex >= 0 && g_layerSelIndex < MapEngine::Instance().GetLayerCount();
   if (b1) {
     EnableWindow(b1, (raster && layerOk) ? TRUE : FALSE);
   }
@@ -776,7 +776,7 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       HWND owner = GetParent(hwnd);
       if (id == IDC_PROPS_BUILD_OV) {
         std::wstring err;
-        if (MapEngine_BuildOverviewsForLayer(g_layerSelIndex, err)) {
+        if (MapEngine::Instance().BuildOverviewsForLayer(g_layerSelIndex, err)) {
           AppLogLine(L"[图层] 已生成金字塔。");
           if (g_hwndMap) {
             InvalidateRect(g_hwndMap, nullptr, FALSE);
@@ -790,7 +790,7 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       }
       if (id == IDC_PROPS_CLEAR_OV) {
         std::wstring err;
-        if (MapEngine_ClearOverviewsForLayer(g_layerSelIndex, err)) {
+        if (MapEngine::Instance().ClearOverviewsForLayer(g_layerSelIndex, err)) {
           AppLogLine(L"[图层] 已删除金字塔。");
           if (g_hwndMap) {
             InvalidateRect(g_hwndMap, nullptr, FALSE);
@@ -804,8 +804,8 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       }
       if (id == IDC_PROPS_CHANGE_SRC) {
         HWND lb = g_hwndLayer ? GetDlgItem(g_hwndLayer, IDC_LAYER_LIST) : nullptr;
-        if (MapEngine_ReplaceLayerSourceFromUi(owner, lb, g_layerSelIndex)) {
-          MapEngine_RefreshLayerList(lb);
+        if (MapEngine::Instance().ReplaceLayerSourceFromUi(owner, lb, g_layerSelIndex)) {
+          MapEngine::Instance().RefreshLayerList(lb);
           RefreshPropsPanel(hwnd);
         }
         return 0;
@@ -1045,7 +1045,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         SendMessageW(g_hwndPropsStrip, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
       }
 
-      MapEngine_RefreshLayerList(GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
+      MapEngine::Instance().RefreshLayerList(GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
       AppLogLine(L"AGIS 启动完成。");
       SetWindowTextW(hwnd, L"AGIS — 地图视图（单文档 SDI）");
       SyncViewMenu(hwnd);
@@ -1139,7 +1139,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
       }
       if (id == ID_FILE_SCREENSHOT) {
-        MapEngine_PromptSaveMapScreenshot(hwnd, g_hwndMap);
+        MapEngine::Instance().PromptSaveMapScreenshot(hwnd, g_hwndMap);
         return 0;
       }
       if (id == ID_WINDOW_LAYER_DOCK) {
@@ -1179,7 +1179,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         } else if (id == ID_VIEW_RENDER_GL) {
           b = MapRenderBackend::kOpenGL;
         }
-        MapEngine_SetRenderBackend(b);
+        MapEngine::Instance().SetRenderBackend(b);
         SyncViewMenu(hwnd);
         AppLogLine(b == MapRenderBackend::kGdi
                        ? L"[视图] 2D 呈现：GDI。"
@@ -1190,11 +1190,11 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       if (id >= ID_VIEW_PROJ_FIRST && id <= ID_VIEW_PROJ_LAST) {
         const int pi = id - ID_VIEW_PROJ_FIRST;
         if (pi >= 0 && pi < static_cast<int>(MapDisplayProjection::kCount)) {
-          MapEngine_Document().SetDisplayProjection(static_cast<MapDisplayProjection>(pi));
+          MapEngine::Instance().Document().SetDisplayProjection(static_cast<MapDisplayProjection>(pi));
           SyncViewMenu(hwnd);
           InvalidateRect(g_hwndMap, nullptr, FALSE);
           AppLogLine(std::wstring(L"[视图] 投影：") + MapProj_MenuLabel(static_cast<MapDisplayProjection>(pi)));
-          if (!MapEngine_Document().layers.empty()) {
+          if (!MapEngine::Instance().Document().layers.empty()) {
             AppLogLine(L"[提示] 当前已有图层，视图仍以数据坐标系绘制；投影切换主要作用于无图层时的经纬网显示。");
           }
         }
@@ -1205,7 +1205,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
       }
       if (id == ID_LAYER_ADD) {
-        MapEngine_OnAddLayerFromDialog(hwnd, GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
+        MapEngine::Instance().OnAddLayerFromDialog(hwnd, GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
         return 0;
       }
       if (id == ID_HELP_ABOUT) {
@@ -1314,7 +1314,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         g_appUiFont = nullptr;
         g_appUiFontOwned = false;
       }
-      MapEngine_Shutdown();
+      MapEngine::Instance().Shutdown();
       PostQuitMessage(0);
       return 0;
     default:
@@ -1364,7 +1364,7 @@ bool RegisterClasses(HINSTANCE inst) {
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
   UiGdiplusInit();
-  MapEngine_Init();
+  MapEngine::Instance().Init();
   if (!RegisterClasses(hInst)) {
     UiGdiplusShutdown();
     return 1;

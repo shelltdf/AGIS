@@ -6,7 +6,7 @@
 
 ---
 
-## 核心类型与继承（map_engine.h + 实现类）
+## 核心类型与继承（map_layer.h / map_document.h + map_engine.cpp 实现类）
 
 ```mermaid
 classDiagram
@@ -109,6 +109,55 @@ classDiagram
 
 ---
 
+## 地图引擎单例（map_engine.h）
+
+应用内通过 **`MapEngine::Instance()`** 访问唯一引擎实例；**`MapDocument doc_`** 为引擎私有成员，对外经 **`Document()` / `Document() const`** 暴露。地图子窗口过程 **`MapHostProc`** 声明为 **`friend`**，可直接访问引擎内部状态（如 `doc_`、`mapHwnd_`、中键平移状态等）。GDAL 图层工厂仍见 `map_engine_internal.h` / `agis_detail`（`map_engine.cpp`）。
+
+```mermaid
+classDiagram
+  direction TB
+  class MapEngine {
+    <<singleton>>
+    +Instance() static MapEngine ref
+    +Init() void
+    +Shutdown() void
+    +Document() MapDocument&
+    +SetRenderBackend(b) void
+    +GetRenderBackend() MapRenderBackend
+    +RefreshLayerList(listbox) void
+    +MeasureLayerListItem(mis) void
+    +PaintLayerListItem(dis) void
+    +OnLayerListClick(listbox, x, y) bool
+    +GetLayerCount() int
+    +OnAddLayerFromDialog(owner, layerList) void
+    +GetLayerInfoForUi(...) void
+    +IsRasterGdalLayer(index) bool
+    +BuildOverviewsForLayer(...) bool
+    +ClearOverviewsForLayer(...) bool
+    +ReplaceLayerSourceFromUi(...) bool
+    +ShowLayerDriverDialog(...) bool
+    +SaveMapScreenshotToFile(...) bool
+    +PromptSaveMapScreenshot(...) void
+    +UpdateMapChrome() void
+    -doc_ MapDocument
+    -mapHwnd_ HWND
+    -mapRenderBackend_ MapRenderBackend
+    -mapChromeScale_ HWND
+    -mapShortcutExpanded_ bool
+    -mapVisExpanded_ bool
+    -mlast_ POINT
+    -mdrag_ bool
+  }
+  MapEngine *-- "1" MapDocument : doc_
+  class MapHostProc {
+    <<global C callback>>
+    LRESULT(hwnd, msg, wp, lp)
+  }
+  MapHostProc ..> MapEngine : friend, uses Instance()
+```
+
+---
+
 ## 投影与空白地图（map_projection.h）
 
 `MapDocument` 持有 `MapDisplayProjection`，无图层时与 `MapProj_*` 配合做经纬网/拾取变换；有图层时仍以数据坐标为准（见头文件注释）。
@@ -150,7 +199,7 @@ classDiagram
 
 ## 呈现后端（map_gpu.h）
 
-地图客户区可在 GDI 与 GPU 呈现之间切换；`MapEngine_SetRenderBackend` / `MapEngine_GetRenderBackend` 与 `MapGpu_*` 协同（实现见 `map_gpu.cpp`，含匿名命名空间内 D3D11 / OpenGL 状态，此处不展开为类）。
+地图客户区可在 GDI 与 GPU 呈现之间切换；**`MapEngine::SetRenderBackend` / `MapEngine::GetRenderBackend`**（经 **`Instance()`**）与 **`MapGpu_*`** 协同（实现见 `map_gpu.cpp`，含匿名命名空间内 D3D11 / OpenGL 状态，此处不展开为类）。
 
 ```mermaid
 classDiagram
@@ -171,29 +220,29 @@ classDiagram
     +MapGpu_GetActiveBackend() MapRenderBackend
   }
 
-  class MapEngineRender {
-    <<namespace C API>>
-    +MapEngine_SetRenderBackend(b) void
-    +MapEngine_GetRenderBackend() MapRenderBackend
+  class MapEngineGpu {
+    <<MapEngine 成员>>
+    +SetRenderBackend(b) void
+    +GetRenderBackend() MapRenderBackend
   }
 
   MapGpu ..> MapRenderBackend
-  MapEngineRender ..> MapRenderBackend
+  MapEngineGpu ..> MapRenderBackend
 ```
 
 ---
 
-## 引擎门面 API（map_engine.h，节选）
+## MapEngine 成员与 UI 对应（节选）
 
-以下为**非成员函数**集合，供 Win32 窗口过程与 UI 调用；与 `MapDocument` 单例及全局 GDAL 生命周期配合。
+宿主与主窗口通过 **`MapEngine::Instance().…`** 调用（例如 `main.cpp`）。**`Init` / `Shutdown`** 内配合 **`MapProj_SystemInit` / `MapProj_SystemShutdown`** 与（若启用 GDAL）**`GDALAllRegister`**。
 
-| 分组 | 代表符号 |
-|------|----------|
-| 生命周期 | `MapEngine_Init`, `MapEngine_Shutdown`, `MapEngine_Document` |
-| 宿主窗口 | `MapHostProc`, `MapEngine_UpdateMapChrome` |
-| 图层列表 UI | `MapEngine_RefreshLayerList`, `MapEngine_MeasureLayerListItem`, `MapEngine_PaintLayerListItem`, `MapEngine_OnLayerListClick` |
-| 图层与属性 | `MapEngine_GetLayerCount`, `MapEngine_OnAddLayerFromDialog`, `MapEngine_GetLayerInfoForUi`, `MapEngine_IsRasterGdalLayer`, `MapEngine_BuildOverviewsForLayer`, `MapEngine_ClearOverviewsForLayer`, `MapEngine_ReplaceLayerSourceFromUi`, `MapEngine_ShowLayerDriverDialog` |
-| 截图 | `MapEngine_SaveMapScreenshotToFile`, `MapEngine_PromptSaveMapScreenshot` |
+| 分组 | 成员函数（经 `Instance()`） |
+|------|-----------------------------|
+| 生命周期 | `Init`, `Shutdown`, `Document` |
+| 宿主与叠层 | `UpdateMapChrome`；`MapHostProc`（全局 C 回调，非成员） |
+| 图层列表 UI | `RefreshLayerList`, `MeasureLayerListItem`, `PaintLayerListItem`, `OnLayerListClick` |
+| 图层与属性 | `GetLayerCount`, `OnAddLayerFromDialog`, `GetLayerInfoForUi`, `IsRasterGdalLayer`, `BuildOverviewsForLayer`, `ClearOverviewsForLayer`, `ReplaceLayerSourceFromUi`, `ShowLayerDriverDialog` |
+| 截图 | `SaveMapScreenshotToFile`, `PromptSaveMapScreenshot` |
 
 ---
 

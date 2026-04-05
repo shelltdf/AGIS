@@ -5,7 +5,7 @@
 | 程序入口 | `gis-desktop-win32/src/app/main.cpp` → `wWinMain` |
 | 主窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `MainProc` |
 | 图层子窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `LayerPaneProc` |
-| 地图宿主 / GDAL+GDI | `gis-desktop-win32/src/map/map_engine.cpp` → `MapHostProc`、`MapDocument`、`agis_detail::RasterMapLayer` / `VectorMapLayer` |
+| 地图宿主 / GDAL+GDI | `gis-desktop-win32/src/map/map_engine.h` / `map_engine.cpp` → **`MapEngine::Instance()`**、`MapHostProc`、`MapDocument`（引擎持有）、`agis_detail::RasterMapLayer` / `VectorMapLayer` |
 | 投影 / 拾取 | `gis-desktop-win32/src/map/map_projection.cpp` / `map_projection.h` |
 | GPU 呈现 | `gis-desktop-win32/src/map/map_gpu.cpp` / `map_gpu.h` |
 | GDI+ UI | `gis-desktop-win32/src/ui/gdiplus_ui.cpp` |
