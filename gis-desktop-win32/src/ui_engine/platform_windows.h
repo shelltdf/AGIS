@@ -17,7 +17,7 @@ void PlatformWindowsReleaseDemoResources(PlatformWindows* p);
 
 /**
  * Win32 USER32 消息循环（`GetMessage` / `DispatchMessage`）。
- * `PlatformWindows(HINSTANCE, …)` 与 `wWinMain` 仅在定义 `AGIS_BUILD_UI_ENGINE_DEMO` 时于 `platform_windows.cpp` 编译。
+ * `PlatformWindows(HINSTANCE, …)` 仅在定义 `AGIS_BUILD_UI_ENGINE_DEMO` 时于 `platform_windows.cpp` 编译；进程入口 `wWinMain` 在 `ui_engine_demo_main.cpp`。
  */
 class PlatformWindows : public IGuiPlatform {
  public:

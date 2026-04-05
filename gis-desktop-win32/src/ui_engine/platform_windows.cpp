@@ -18,8 +18,6 @@ PlatformWindows::PlatformWindows() = default;
 
 #if defined(AGIS_BUILD_UI_ENGINE_DEMO)
 
-App* g_uiApp = nullptr;
-
 namespace {
 
 std::unique_ptr<MainFrame> g_demoRoot;
@@ -53,8 +51,7 @@ void DemoPaintClient(HDC hdc, const RECT& client) {
 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, RGB(20, 24, 32));
-  const std::wstring line =
-      g_uiApp ? FormatUiEngineDemoStatusLine(*g_uiApp, g_demoRoot.get()) : std::wstring{};
+  const std::wstring line = FormatUiEngineDemoStatusLine(App::instance(), g_demoRoot.get());
   RECT rcText{client.left + 12, client.bottom - 72, client.right - 12, client.bottom - 36};
   DrawTextW(hdc, line.c_str(), static_cast<int>(line.size()), &rcText, DT_LEFT | DT_WORDBREAK);
 }
@@ -67,8 +64,8 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       PostQuitMessage(0);
       return 0;
     case WM_KEYDOWN:
-      if (wParam == VK_ESCAPE && g_uiApp) {
-        g_uiApp->requestQuit();
+      if (wParam == VK_ESCAPE) {
+        App::instance().requestQuit();
       }
       return 0;
     case WM_PAINT: {
@@ -175,27 +172,3 @@ void PlatformWindowsReleaseDemoResources(PlatformWindows* p) {
 }  // namespace detail
 
 }  // namespace agis::ui
-
-#if defined(AGIS_BUILD_UI_ENGINE_DEMO)
-
-int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int show) {
-  using agis::ui::App;
-  using agis::ui::g_uiApp;
-  using agis::ui::PlatformWindows;
-
-  App app;
-  g_uiApp = &app;
-
-  auto platform = std::make_unique<PlatformWindows>(hInst, show);
-  if (!platform->ok()) {
-    g_uiApp = nullptr;
-    return 1;
-  }
-
-  app.setPlatform(std::move(platform));
-  const int code = app.exec();
-  g_uiApp = nullptr;
-  return code;
-}
-
-#endif

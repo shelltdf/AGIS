@@ -2,7 +2,7 @@
 
 /**
  * ui_engine 演示：与操作系统无关的 Widget 树构建与状态摘要（供各平台壳层调用）。
- * Windows 下原生壳与 GDI+ 与 `wWinMain` 见 `ui_engine/platform_windows.cpp`（`ui_engine_demo` 目标定义 `AGIS_BUILD_UI_ENGINE_DEMO` 时编译）。
+ * Windows 下进程入口 `wWinMain` 见 `ui_engine_demo_main.cpp`；演示 HWND / GDI+ 壳见 `ui_engine/platform_windows.cpp`（`AGIS_BUILD_UI_ENGINE_DEMO`）。
  */
 
 #include <memory>

@@ -33,6 +33,11 @@ class NullGuiPlatform final : public IGuiPlatform {
 
 }  // namespace
 
+App& App::instance() {
+  static App inst;
+  return inst;
+}
+
 App::App() {
 #if defined(_WIN32)
   platform_ = std::make_unique<PlatformWindows>();

@@ -2,7 +2,7 @@
 
 **源码根**：[`gis-desktop-win32/src/ui_engine/`](../../../gis-desktop-win32/src/ui_engine/)
 
-**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。**`App` 可栈上构造**（`App app; app.setPlatform(...); app.exec();`），`exec()` 内部调用各平台 `runEventLoop`，即**操作系统消息循环封装在 `IGuiPlatform` 实现中**，由 `App::exec` 统一触发。未设置平台时 `exec` 使用 `null` 后端立即返回；与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui_engine/gdiplus_ui.h) 全局绘制 API **并存**，主程序也可仍由 Win32 消息泵自管。
+**定位**：**`agis::ui`** 为与 Qt 类似的**抽象本地 GUI 模型**（`App` + `Widget` 树 + 若干控件子类）；**绘制与事件循环**通过 **`IGuiPlatform`** 按操作系统切换后端（Win32、Linux XCB/Xlib、macOS Cocoa 等）。**`App` 为进程内单例**（`App::instance()`），`setPlatform` / `exec()` 均作用于同一实例；`exec()` 内部调用各平台 `runEventLoop`，即**操作系统消息循环封装在 `IGuiPlatform` 实现中**，由 `App::exec` 统一触发。未设置平台时 `exec` 使用 `null` 后端立即返回；与现有 [`gdiplus_ui.h`](../../../gis-desktop-win32/src/ui_engine/gdiplus_ui.h) 全局绘制 API **并存**，主程序也可仍由 Win32 消息泵自管。
 
 ---
 
