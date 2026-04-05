@@ -78,13 +78,15 @@ if(AGIS_USE_GDAL)
 endif()
 
 add_executable(agis_desktop WIN32
-  src/main.cpp
-  src/map_engine.cpp
-  src/map_gpu.cpp
-  src/map_projection.cpp
-  src/app_log.cpp
-  src/gdiplus_ui.cpp
+  src/app/main.cpp
+  src/map/map_engine.cpp
+  src/map/map_gpu.cpp
+  src/map/map_projection.cpp
+  src/core/app_log.cpp
+  src/ui/gdiplus_ui.cpp
 )
+
+target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 set_target_properties(agis_desktop PROPERTIES
   OUTPUT_NAME "AGIS"

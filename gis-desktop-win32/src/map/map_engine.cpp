@@ -1,4 +1,4 @@
-#include "map_engine.h"
+#include "map/map_engine.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,9 +12,12 @@
 #include <windowsx.h>
 #include <commdlg.h>
 
-#include "app_log.h"
-#include "gdiplus_ui.h"
-#include "resource.h"
+#include <gdiplus.h>
+
+#include "app/resource.h"
+#include "app/ui_font.h"
+#include "core/app_log.h"
+#include "ui/gdiplus_ui.h"
 
 #pragma comment(lib, "comdlg32.lib")
 
@@ -27,6 +30,17 @@
 #endif
 
 namespace {
+
+/** 左侧图层自绘列表：每项高度与左侧可见性点击区宽度。 */
+constexpr int kLayerListItemHeight = 80;
+constexpr int kVisToggleWidth = 32;
+
+void ApplyUiFontToChildren(HWND parent) {
+  const HFONT f = UiGetAppFont();
+  for (HWND c = GetWindow(parent, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+    SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(f), TRUE);
+  }
+}
 
 std::string Utf8FromWide(const std::wstring& w) {
   if (w.empty()) {
@@ -55,6 +69,38 @@ std::wstring WideFromUtf8(const char* s) {
 }
 
 }  // namespace
+
+const wchar_t* MapLayerKindLabel(MapLayerKind k) {
+  switch (k) {
+    case MapLayerKind::kRasterGdal:
+      return L"栅格（GDAL）";
+    case MapLayerKind::kVectorGdal:
+      return L"矢量（GDAL）";
+    case MapLayerKind::kOther:
+    default:
+      return L"其他";
+  }
+}
+
+/** 列表块内一行显示用的短驱动名（避免过长）。 */
+static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
+  switch (k) {
+    case MapLayerDriverKind::kGdalFile:
+      return L"GDAL 文件";
+    case MapLayerDriverKind::kTmsXyz:
+      return L"TMS/XYZ";
+    case MapLayerDriverKind::kWmts:
+      return L"WMTS";
+    case MapLayerDriverKind::kArcGisRestJson:
+      return L"ArcGIS JSON";
+    case MapLayerDriverKind::kSoapPlaceholder:
+      return L"SOAP（占位）";
+    case MapLayerDriverKind::kWmsPlaceholder:
+      return L"WMS（占位）";
+    default:
+      return L"未知";
+  }
+}
 
 const wchar_t* MapLayerDriverKindLabel(MapLayerDriverKind k) {
   switch (k) {
@@ -554,7 +600,22 @@ class RasterMapLayer final : public MapLayer {
     DeleteDC(hdcMem);
   }
 
-  void AppendDetailedProperties(std::wstring* out) const override {
+  void AppendSourceProperties(std::wstring* out) const override {
+    if (!out) {
+      return;
+    }
+    *out += L"【数据源】\r\n";
+    *out += sourcePath_.empty() ? L"（未记录）\r\n" : sourcePath_ + L"\r\n";
+    const char* ddesc = ds_->GetDescription();
+    *out += L"\r\n【GDALDataset 描述 GetDescription】\r\n";
+    *out += (ddesc && ddesc[0]) ? WideFromUtf8(ddesc) : L"（空）";
+    *out += L"\r\n\r\n";
+    AppendDatasetFileList(ds_, out);
+    *out += L"【数据集级元数据 GDALDataset 各域（含 IMAGE_STRUCTURE、SUBDATASETS 等）】\r\n";
+    AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds_), out);
+  }
+
+  void AppendDriverProperties(std::wstring* out) const override {
     if (!out) {
       return;
     }
@@ -568,13 +629,6 @@ class RasterMapLayer final : public MapLayer {
     } else if (driverKind_ == MapLayerDriverKind::kTmsXyz) {
       *out += L"【说明】 使用 GDAL XYZ/ZXY 模板 URL（含 {z}{x}{y}）。\r\n";
     }
-    *out += L"【数据源】\r\n";
-    *out += sourcePath_.empty() ? L"（未记录）\r\n" : sourcePath_ + L"\r\n";
-    const char* ddesc = ds_->GetDescription();
-    *out += L"\r\n【GDALDataset 描述 GetDescription】\r\n";
-    *out += (ddesc && ddesc[0]) ? WideFromUtf8(ddesc) : L"（空）";
-    *out += L"\r\n\r\n";
-    AppendDatasetFileList(ds_, out);
     GDALDriver* drv = ds_->GetDriver();
     if (drv) {
       AppendDriverMetadata(drv, out);
@@ -609,8 +663,6 @@ class RasterMapLayer final : public MapLayer {
       *out += L"（无）\r\n";
     }
     AppendGcpSummary(ds_, out);
-    *out += L"【数据集级元数据 GDALDataset 各域（含 IMAGE_STRUCTURE、SUBDATASETS 等）】\r\n";
-    AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds_), out);
 
     *out += L"【波段详情 GDALRasterBand】\r\n";
     for (int bi = 1; bi <= ds_->GetRasterCount(); ++bi) {
@@ -830,18 +882,28 @@ class VectorMapLayer final : public MapLayer {
     DeleteObject(pen);
   }
 
-  void AppendDetailedProperties(std::wstring* out) const override {
+  void AppendSourceProperties(std::wstring* out) const override {
+    if (!out) {
+      return;
+    }
+    *out += L"【数据源】\r\n";
+    *out += name_.empty() ? L"（未记录）\r\n" : name_ + L"\r\n";
+    const char* ddesc = ds_->GetDescription();
+    *out += L"\r\n【GDALDataset 描述 GetDescription】\r\n";
+    *out += (ddesc && ddesc[0]) ? WideFromUtf8(ddesc) : L"（空）";
+    *out += L"\r\n\r\n";
+    AppendDatasetFileList(ds_, out);
+    *out += L"【数据集级元数据 GDALDataset 各域】\r\n";
+    AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds_), out);
+  }
+
+  void AppendDriverProperties(std::wstring* out) const override {
     if (!out) {
       return;
     }
     *out += L"【AGIS 驱动方式】 ";
     *out += MapLayerDriverKindLabel(driverKind_);
     *out += L"\r\n";
-    const char* ddesc = ds_->GetDescription();
-    *out += L"【GDALDataset 描述 GetDescription】\r\n";
-    *out += (ddesc && ddesc[0]) ? WideFromUtf8(ddesc) : L"（空）";
-    *out += L"\r\n\r\n";
-    AppendDatasetFileList(ds_, out);
     GDALDriver* drv = ds_->GetDriver();
     if (drv) {
       AppendDriverMetadata(drv, out);
@@ -862,8 +924,6 @@ class VectorMapLayer final : public MapLayer {
     } else {
       *out += L"（无）\r\n\r\n";
     }
-    *out += L"【数据集级元数据 GDALDataset 各域】\r\n";
-    AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds_), out);
     for (int i = 0; i < ds_->GetLayerCount(); ++i) {
       OGRLayer* lay = ds_->GetLayer(i);
       if (!lay) {
@@ -1230,8 +1290,8 @@ void DrawScaleBar(HDC hdc, const RECT& inner, const ViewExtent& view) {
   } else {
     _snwprintf_s(cap, _TRUNCATE, L"%.2f m", niceM);
   }
-  HFONT fnt = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  HFONT fnt = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
   if (fnt) {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB(35, 40, 50));
@@ -1369,10 +1429,10 @@ void DrawLatLonGrid(HDC hdc, const RECT& inner, const ViewExtent& view, MapDispl
   DeleteObject(penPrime);
 
   HFONT fnt = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
   if (fnt) {
     HFONT fntBold = CreateFontW(-12, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
     const HGDIOBJ oldF = SelectObject(hdc, fnt);
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB(55, 65, 85));
@@ -1492,6 +1552,9 @@ void MapDocument::FitViewToLayers() {
   ViewExtent e{};
   bool any = false;
   for (const auto& layer : layers) {
+    if (!layer->IsLayerVisible()) {
+      continue;
+    }
     ViewExtent le{};
     if (!layer->GetExtent(le)) {
       continue;
@@ -1725,6 +1788,9 @@ void MapDocument::Draw(HDC hdcMem, const RECT& client) {
 
 #if GIS_DESKTOP_HAVE_GDAL
   for (const auto& layer : layers) {
+    if (!layer->IsLayerVisible()) {
+      continue;
+    }
     layer->Draw(hdcMem, innerLocal, view);
   }
 #else
@@ -1942,33 +2008,166 @@ void MapEngine_RefreshLayerList(HWND listbox) {
   if (g_doc.layers.empty()) {
     SendMessageW(listbox, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"（无图层，使用「图层」菜单添加）"));
   }
+  SendMessageW(listbox, LB_SETITEMHEIGHT, 0, MAKELPARAM(kLayerListItemHeight, 0));
+}
+
+void MapEngine_MeasureLayerListItem(LPMEASUREITEMSTRUCT mis) {
+  if (!mis) {
+    return;
+  }
+  mis->itemHeight = kLayerListItemHeight;
+}
+
+void MapEngine_PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
+  if (!dis || dis->CtlType != ODT_LISTBOX) {
+    return;
+  }
+  const int item = static_cast<int>(dis->itemID);
+  HDC hdc = dis->hDC;
+  const RECT rc = dis->rcItem;
+  const int w = rc.right - rc.left;
+  const int h = rc.bottom - rc.top;
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  Gdiplus::Graphics g(hdc);
+  g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+  g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+  const bool sel = (dis->itemState & ODS_SELECTED) != 0;
+  const bool focus = (dis->itemState & ODS_FOCUS) != 0;
+  Gdiplus::Color bg(255, 252, 252, 255);
+  if (sel) {
+    bg = Gdiplus::Color(255, 210, 230, 255);
+  } else if (item % 2 == 1) {
+    bg = Gdiplus::Color(255, 245, 248, 252);
+  }
+  Gdiplus::SolidBrush bgBr(bg);
+  g.FillRectangle(&bgBr, static_cast<Gdiplus::REAL>(rc.left), static_cast<Gdiplus::REAL>(rc.top),
+                  static_cast<Gdiplus::REAL>(w), static_cast<Gdiplus::REAL>(h));
+
+  Gdiplus::Pen sep(Gdiplus::Color(200, 210, 220, 230), 1.0f);
+  g.DrawLine(&sep, static_cast<Gdiplus::REAL>(rc.left), static_cast<Gdiplus::REAL>(rc.bottom - 1),
+             static_cast<Gdiplus::REAL>(rc.right), static_cast<Gdiplus::REAL>(rc.bottom - 1));
+
+  Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
+  Gdiplus::Font titleF(&fam, 12.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+  Gdiplus::Font metaF(&fam, 10.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  Gdiplus::SolidBrush fg(Gdiplus::Color(255, 28, 45, 72));
+  Gdiplus::SolidBrush metaFg(Gdiplus::Color(255, 75, 90, 110));
+  Gdiplus::StringFormat fmt{};
+  fmt.SetAlignment(Gdiplus::StringAlignmentNear);
+  fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
+  fmt.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+
+  const int n = static_cast<int>(g_doc.layers.size());
+  if (n == 0 && item == 0) {
+    Gdiplus::SolidBrush hint(Gdiplus::Color(255, 130, 135, 150));
+    g.DrawString(L"（无图层，使用「图层」菜单添加）", -1, &metaF,
+                 Gdiplus::RectF(static_cast<Gdiplus::REAL>(rc.left + 10), static_cast<Gdiplus::REAL>(rc.top + 8),
+                                static_cast<Gdiplus::REAL>(w - 20), static_cast<Gdiplus::REAL>(h - 16)),
+                 &fmt, &hint);
+    (void)focus;
+    return;
+  }
+  if (item < 0 || item >= n) {
+    return;
+  }
+  const auto& layer = g_doc.layers[static_cast<size_t>(item)];
+  const bool vis = layer->IsLayerVisible();
+  Gdiplus::SolidBrush eyeBr(vis ? Gdiplus::Color(255, 0, 140, 90) : Gdiplus::Color(255, 180, 185, 195));
+  Gdiplus::Font eyeF(&fam, 16.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+  const float eyeX = static_cast<float>(rc.left + 8);
+  const float eyeY = static_cast<float>(rc.top + 6);
+  g.DrawString(vis ? L"●" : L"○", -1, &eyeF, Gdiplus::RectF(eyeX, eyeY, 22.0f, 22.0f), &fmt, &eyeBr);
+
+  const float textL = static_cast<float>(rc.left + 36);
+  const float nameW = static_cast<float>(w - 40);
+  std::wstring name = layer->DisplayName();
+  g.DrawString(name.c_str(), -1, &titleF, Gdiplus::RectF(textL, static_cast<float>(rc.top + 4), nameW, 20.0f), &fmt,
+               &fg);
+
+  wchar_t line2[256]{};
+  _snwprintf_s(line2, _TRUNCATE, L"可见：%s    驱动：%s", vis ? L"显示" : L"隐藏",
+               MapLayerDriverKindShort(layer->DriverKind()));
+  g.DrawString(line2, -1, &metaF,
+               Gdiplus::RectF(static_cast<float>(rc.left + 8), static_cast<float>(rc.top + 28),
+                              static_cast<float>(w - 16), 18.0f),
+               &fmt, &metaFg);
+
+  wchar_t line3[128]{};
+  _snwprintf_s(line3, _TRUNCATE, L"数据：%s", MapLayerKindLabel(layer->GetKind()));
+  g.DrawString(line3, -1, &metaF,
+               Gdiplus::RectF(static_cast<float>(rc.left + 8), static_cast<float>(rc.top + 48),
+                              static_cast<float>(w - 16), 18.0f),
+               &fmt, &metaFg);
+  (void)focus;
+}
+
+bool MapEngine_OnLayerListClick(HWND listbox, int x, int y) {
+  if (!listbox) {
+    return false;
+  }
+  const LRESULT lr = SendMessageW(listbox, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
+  if (lr == static_cast<LRESULT>(-1)) {
+    return false;
+  }
+  const int hit = static_cast<int>(LOWORD(lr));
+  const int n = static_cast<int>(g_doc.layers.size());
+  if (n <= 0 || hit < 0 || hit >= n) {
+    return false;
+  }
+  RECT ir{};
+  if (SendMessageW(listbox, LB_GETITEMRECT, static_cast<WPARAM>(hit), reinterpret_cast<LPARAM>(&ir)) == LB_ERR) {
+    return false;
+  }
+  const int lx = x - ir.left;
+  if (lx < 0 || lx >= kVisToggleWidth) {
+    return false;
+  }
+  auto& lyr = g_doc.layers[static_cast<size_t>(hit)];
+  lyr->SetLayerVisible(!lyr->IsLayerVisible());
+  InvalidateRect(listbox, nullptr, FALSE);
+  if (g_mapHwnd && IsWindow(g_mapHwnd)) {
+    InvalidateRect(g_mapHwnd, nullptr, FALSE);
+  }
+  return true;
 }
 
 int MapEngine_GetLayerCount() { return static_cast<int>(g_doc.layers.size()); }
 
-void MapEngine_GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring* outBody) {
-  if (!outTitle || !outBody) {
+void MapEngine_GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring* outDriverProps,
+                                 std::wstring* outSourceProps) {
+  if (!outTitle || !outDriverProps || !outSourceProps) {
     return;
   }
   outTitle->clear();
-  outBody->clear();
+  outDriverProps->clear();
+  outSourceProps->clear();
 #if GIS_DESKTOP_HAVE_GDAL
   if (index < 0 || index >= static_cast<int>(g_doc.layers.size())) {
     *outTitle = L"未选择图层";
-    *outBody = L"在左侧「图层」列表中单击一行，可在此查看详细信息。";
+    *outDriverProps = L"在左侧「图层」列表中单击一行，可在此查看驱动与格式相关属性。";
+    *outSourceProps = L"选中图层后，此处显示数据源路径、文件列表与数据集描述等。";
     return;
   }
   const auto& layer = g_doc.layers[static_cast<size_t>(index)];
   *outTitle = layer->DisplayName();
   *outTitle += L" · ";
   *outTitle += MapLayerDriverKindLabel(layer->DriverKind());
-  layer->AppendDetailedProperties(outBody);
-  if (outBody->empty()) {
-    *outBody = L"（无附加属性）";
+  layer->AppendDriverProperties(outDriverProps);
+  layer->AppendSourceProperties(outSourceProps);
+  if (outDriverProps->empty()) {
+    *outDriverProps = L"（无驱动侧附加属性）";
+  }
+  if (outSourceProps->empty()) {
+    *outSourceProps = L"（无数据源侧附加属性）";
   }
 #else
   *outTitle = L"图层属性";
-  *outBody = L"当前构建未启用 GDAL，无矢量/栅格图层信息。";
+  *outDriverProps = L"当前构建未启用 GDAL。";
+  *outSourceProps = L"无矢量/栅格图层信息。";
 #endif
 }
 
@@ -2250,6 +2449,7 @@ LRESULT CALLBACK LayerDriverDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DLG_OK)), inst, nullptr);
       CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 330, 408, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DLG_CANCEL)), inst, nullptr);
+      ApplyUiFontToChildren(hwnd);
       return 0;
     }
     case WM_COMMAND: {
@@ -2338,16 +2538,23 @@ bool MapEngine_ShowLayerDriverDialog(HWND owner, MapLayerDriverKind* outKind, st
   outUrl->clear();
   int x = CW_USEDEFAULT;
   int y = CW_USEDEFAULT;
-  constexpr int dw = 460;
-  constexpr int dh = 456;
+  // CreateWindow 的宽高为**含非客户区**的整个窗口；原先固定 dh=456 导致客户区高度不足，底部「确定/取消」被裁切。
+  constexpr int kDlgClientW = 460;
+  // 最底控件：按钮 top=408 height=26 → 底边 434，留少量下边距
+  constexpr int kDlgClientH = 448;
+  RECT wr{0, 0, kDlgClientW, kDlgClientH};
+  const DWORD kDlgStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+  const DWORD kDlgEx = WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE;
+  AdjustWindowRectEx(&wr, kDlgStyle, FALSE, kDlgEx);
+  const int dw = wr.right - wr.left;
+  const int dh = wr.bottom - wr.top;
   RECT rc{};
   if (owner && GetWindowRect(owner, &rc)) {
     x = rc.left + ((rc.right - rc.left) - dw) / 2;
     y = rc.top + ((rc.bottom - rc.top) - dh) / 2;
   }
-  HWND dlg = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE, kLayerDriverDlgClass, L"添加图层 — 数据源",
-                             WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, dw, dh, owner, nullptr, GetModuleHandleW(nullptr),
-                             &ctx);
+  HWND dlg = CreateWindowExW(kDlgEx, kLayerDriverDlgClass, L"添加图层 — 数据源", kDlgStyle, x, y, dw, dh, owner, nullptr,
+                             GetModuleHandleW(nullptr), &ctx);
   if (!dlg) {
     return false;
   }
@@ -2709,6 +2916,7 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         CreateWindowW(L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 100, 228, 28, 22, hwnd,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_ZOOM_IN)), inst, nullptr);
         LayoutMapOverlayControls(hwnd);
+        ApplyUiFontToChildren(hwnd);
         MapEngine_UpdateMapChrome();
       }
       return 0;

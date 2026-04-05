@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy AGIS.exe into dist/: incremental build first, then copy."""
+"""Copy AGIS.exe into dist/: build if needed (agis_build_util), then copy."""
 import glob
 import os
 import shutil

@@ -47,7 +47,7 @@ python run.py
 python test.py
 ```
 
-`test.py` 会先调用 `build.py`（增量编译），再检查 `AGIS.exe` 是否存在；`run.py`、`publish.py` 同样在运行/复制前先构建。若流水线已编译，可设环境变量 **`AGIS_SKIP_BUILD=1`** 跳过前置构建。
+`test.py` / `run.py` / `publish.py` 通过 `agis_build_util.ensure_project_built()` 决定是否需要构建：**当 `build/.../AGIS.exe` 已存在且不比 `src/**` 源码与 `CMakeLists.txt`、`cmake/`、`app.manifest` 旧时，会跳过整个 `build.py` 调用**（节省重复配置与链接时间）。需要强制构建时设 **`AGIS_ALWAYS_BUILD=1`**。直接运行 **`python build.py`** 时：若 CMake 缓存已存在且上述 CMake 相关文件未比 `CMakeCache.txt` 更新，则**跳过 `cmake -B` 配置步骤**，仅执行 `cmake --build`（仍由 MSBuild 做增量编译）；需要重配时设 **`AGIS_FORCE_CONFIGURE=1`** 或删除 `build/`。流水线已编译时可设 **`AGIS_SKIP_BUILD=1`** 跳过前置构建。
 
 ## 4. 发布
 

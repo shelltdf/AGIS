@@ -1,6 +1,6 @@
-#include "map_projection.h"
+#include "map/map_projection.h"
 
-#include "map_engine.h"
+#include "map/map_engine.h"
 
 #include <algorithm>
 #include <cmath>

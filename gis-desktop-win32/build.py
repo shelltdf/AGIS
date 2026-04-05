@@ -6,7 +6,13 @@
 - With GDAL on, CMake uses bundled **proj-9.8.0** / **gdal-3.12.3** or existing `*-install` prefixes; see
   `3rdparty/README-GDAL-BUILD.md`.
 
-`test.py` / `run.py` / `publish.py` call this first; `cmake --build` only recompiles changed sources.
+`test.py` / `run.py` / `publish.py` use `agis_build_util.ensure_project_built()` which **skips**
+invoking this script when ``AGIS.exe`` is newer than ``src/**`` and CMake inputs (set
+``AGIS_ALWAYS_BUILD=1`` to force).
+
+This script **only re-runs ``cmake -B`` (configure)** when ``CMakeCache.txt`` is missing or
+CMake-related files are newer than the cache; otherwise only ``cmake --build`` runs
+(incremental link/compile). Use ``AGIS_FORCE_CONFIGURE=1`` to always configure.
 """
 import os
 import shutil
@@ -53,6 +59,44 @@ def cmake_prefix_path() -> Optional[str]:
             seen.add(key)
             out.append(p)
     return ";".join(x.replace("\\", "/") for x in out)
+
+
+def needs_cmake_configure() -> bool:
+    """True if we must run ``cmake -B`` (first time or CMake inputs changed vs cache)."""
+    env = os.environ.get("AGIS_FORCE_CONFIGURE", "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    cache = os.path.join(BUILD, "CMakeCache.txt")
+    if not os.path.isfile(cache):
+        return True
+    try:
+        t_cache = os.path.getmtime(cache)
+    except OSError:
+        return True
+
+    def cmake_input_paths() -> list[str]:
+        out: list[str] = []
+        cm = os.path.join(ROOT, "CMakeLists.txt")
+        if os.path.isfile(cm):
+            out.append(cm)
+        mf = os.path.join(ROOT, "app.manifest")
+        if os.path.isfile(mf):
+            out.append(mf)
+        cmake_dir = os.path.join(ROOT, "cmake")
+        if os.path.isdir(cmake_dir):
+            for dp, _, fns in os.walk(cmake_dir):
+                for fn in fns:
+                    if fn.endswith((".cmake", ".txt")):
+                        out.append(os.path.join(dp, fn))
+        return out
+
+    for p in cmake_input_paths():
+        try:
+            if os.path.isfile(p) and os.path.getmtime(p) > t_cache:
+                return True
+        except OSError:
+            return True
+    return False
 
 
 def cmake_build_args() -> list[str]:
@@ -118,7 +162,10 @@ def main() -> int:
             "AGIS_USE_GDAL=ON: ensure PROJ is built from source (see 3rdparty/README-GDAL-BUILD.md).",
             file=sys.stderr,
         )
-    subprocess.check_call(cfg)
+    if needs_cmake_configure():
+        subprocess.check_call(cfg)
+    else:
+        print("CMake configure skipped (unchanged); use AGIS_FORCE_CONFIGURE=1 to re-run.")
     bargs = [cmake] + cmake_build_args()
     if sys.platform == "win32" and not os.environ.get("AGIS_BUILD_PARALLEL", "").strip():
         print(

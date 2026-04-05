@@ -1,4 +1,4 @@
-#include "gdiplus_ui.h"
+#include "ui/gdiplus_ui.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -49,9 +49,9 @@ void UiPaintLayerPanel(HDC hdc, const RECT& rc) {
   Gdiplus::Pen edge(&hairline, 1.0f);
   g.DrawRectangle(&edge, bounds.X, bounds.Y, bounds.Width - 1.0f, bounds.Height - 1.0f);
 
-  Gdiplus::FontFamily fam(L"Segoe UI");
-  Gdiplus::Font titleFont(&fam, 14.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-  Gdiplus::Font subFont(&fam, 10.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
+  Gdiplus::Font titleFont(&fam, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+  Gdiplus::Font subFont(&fam, 11.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
   Gdiplus::SolidBrush titleBrush(Gdiplus::Color(255, 30, 55, 95));
   Gdiplus::SolidBrush subBrush(Gdiplus::Color(220, 90, 105, 130));
   Gdiplus::SolidBrush chipBg(Gdiplus::Color(180, 230, 240, 255));
@@ -109,9 +109,9 @@ void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, co
   Gdiplus::Pen edge(&edgeCol, 1.0f);
   g.DrawRectangle(&edge, bounds.X, bounds.Y, bounds.Width - 1.0f, bounds.Height - 1.0f);
 
-  Gdiplus::FontFamily fam(L"Segoe UI");
-  Gdiplus::Font titleFont(&fam, 14.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-  Gdiplus::Font subFont(&fam, 10.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
+  Gdiplus::Font titleFont(&fam, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+  Gdiplus::Font subFont(&fam, 11.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
   Gdiplus::Font bodyFont(&fam, 12.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
   Gdiplus::SolidBrush titleBr(Gdiplus::Color(255, 35, 60, 100));
   Gdiplus::SolidBrush subBr(Gdiplus::Color(210, 95, 110, 135));
@@ -188,7 +188,72 @@ void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, co
   }
 }
 
-void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc) {
+namespace {
+
+void FillRoundRectPath(Gdiplus::GraphicsPath* path, float x, float y, float rw, float rh, float cornerR) {
+  const float cr = std::min(cornerR, std::min(rw, rh) * 0.5f);
+  path->AddArc(x + rw - 2.0f * cr, y, 2.0f * cr, 2.0f * cr, 270, 90);
+  path->AddLine(x + rw, y + cr, x + rw, y + rh - cr);
+  path->AddArc(x + rw - 2.0f * cr, y + rh - 2.0f * cr, 2.0f * cr, 2.0f * cr, 0, 90);
+  path->AddLine(x + rw - cr, y + rh, x + cr, y + rh);
+  path->AddArc(x, y + rh - 2.0f * cr, 2.0f * cr, 2.0f * cr, 90, 90);
+  path->AddLine(x, y + rh - cr, x, y + cr);
+  path->AddArc(x, y, 2.0f * cr, 2.0f * cr, 180, 90);
+  path->CloseFigure();
+}
+
+void PaintPropsSectionCard(Gdiplus::Graphics& g, const RECT& rc, const Gdiplus::Color& fill, const Gdiplus::Color& stroke) {
+  const float x = static_cast<float>(rc.left);
+  const float y = static_cast<float>(rc.top);
+  const float rw = static_cast<float>(rc.right - rc.left);
+  const float rh = static_cast<float>(rc.bottom - rc.top);
+  if (rw < 12.0f || rh < 12.0f) {
+    return;
+  }
+  Gdiplus::GraphicsPath card;
+  FillRoundRectPath(&card, x, y, rw, rh, 9.0f);
+  Gdiplus::SolidBrush bFill(fill);
+  Gdiplus::Pen pen(stroke, 1.0f);
+  g.FillPath(&bFill, &card);
+  g.DrawPath(&pen, &card);
+}
+
+/** 卡片顶部：左侧强调条 + 主标题 + 灰色副标题（与 main LayoutPropsPane 预留区对齐）。 */
+void DrawPropsCardHeader(Gdiplus::Graphics& g, const RECT& cardRc, const wchar_t* title, const wchar_t* subtitle,
+                         const Gdiplus::Color& accent) {
+  if (!title || !title[0]) {
+    return;
+  }
+  const float x = static_cast<float>(cardRc.left);
+  const float y = static_cast<float>(cardRc.top);
+  const float w = static_cast<float>(cardRc.right - cardRc.left);
+  const float headerH = 28.0f;
+  if (w < 24.0f) {
+    return;
+  }
+  Gdiplus::SolidBrush bar(accent);
+  g.FillRectangle(&bar, x + 3.0f, y + 5.0f, 4.0f, headerH - 10.0f);
+
+  Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
+  Gdiplus::Font titleF(&fam, 12.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+  Gdiplus::Font subF(&fam, 9.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  Gdiplus::SolidBrush titleBr(Gdiplus::Color(255, 32, 52, 92));
+  Gdiplus::SolidBrush subBr(Gdiplus::Color(230, 105, 115, 135));
+  Gdiplus::StringFormat fmt{};
+  fmt.SetAlignment(Gdiplus::StringAlignmentNear);
+  fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
+  fmt.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+
+  g.DrawString(title, -1, &titleF, Gdiplus::RectF(x + 14.0f, y + 5.0f, w - 20.0f, 16.0f), &fmt, &titleBr);
+  if (subtitle && subtitle[0]) {
+    g.DrawString(subtitle, -1, &subF, Gdiplus::RectF(x + 14.0f, y + 17.0f, w - 20.0f, 14.0f), &fmt, &subBr);
+  }
+}
+
+}  // namespace
+
+void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard, const RECT* sourceCard,
+                                const wchar_t* layerSubtitleLine) {
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
   g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
@@ -208,9 +273,9 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc) {
   Gdiplus::Pen edge(&edgeCol, 1.0f);
   g.DrawRectangle(&edge, bounds.X, bounds.Y, bounds.Width - 1.0f, bounds.Height - 1.0f);
 
-  Gdiplus::FontFamily fam(L"Segoe UI");
-  Gdiplus::Font titleFont(&fam, 14.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-  Gdiplus::Font subFont(&fam, 10.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
+  Gdiplus::Font titleFont(&fam, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+  Gdiplus::Font subFont(&fam, 11.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
   Gdiplus::SolidBrush titleBr(Gdiplus::Color(255, 35, 60, 100));
   Gdiplus::SolidBrush subBr(Gdiplus::Color(210, 95, 110, 135));
   Gdiplus::StringFormat fmt{};
@@ -223,7 +288,9 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc) {
   const float reserveRight = showChip ? (chipW + 16.0f) : 12.0f;
   const float textW = std::max(40.0f, static_cast<float>(w) - 24.0f - reserveRight);
   g.DrawString(L"图层属性", -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBr);
-  g.DrawString(L"Dock · 选中项", -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 18.0f), &fmt, &subBr);
+  const wchar_t* sub =
+      (layerSubtitleLine && layerSubtitleLine[0]) ? layerSubtitleLine : L"Dock · 选中项";
+  g.DrawString(sub, -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 36.0f), &fmt, &subBr);
 
   if (showChip) {
     const float chipX = x0 + static_cast<float>(w) - chipW - 12.0f;
@@ -247,26 +314,28 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc) {
     g.DrawString(L"右", -1, &subFont, Gdiplus::RectF(chipX, chipY, chipW, chipH), &cfmt, &chipFg);
   }
 
-  const float cardX = x0 + 12.0f;
-  const float cardY = y0 + 54.0f;
-  const float cardW = static_cast<float>(w) - 24.0f;
-  const float cardH = static_cast<float>(h) - 66.0f;
-  if (cardW > 20.0f && cardH > 40.0f) {
-    Gdiplus::GraphicsPath card;
-    const float cr = 10.0f;
-    card.AddArc(cardX + cardW - 2.0f * cr, cardY, 2.0f * cr, 2.0f * cr, 270, 90);
-    card.AddLine(cardX + cardW, cardY + cr, cardX + cardW, cardY + cardH - cr);
-    card.AddArc(cardX + cardW - 2.0f * cr, cardY + cardH - 2.0f * cr, 2.0f * cr, 2.0f * cr, 0, 90);
-    card.AddLine(cardX + cardW - cr, cardY + cardH, cardX + cr, cardY + cardH);
-    card.AddArc(cardX, cardY + cardH - 2.0f * cr, 2.0f * cr, 2.0f * cr, 90, 90);
-    card.AddLine(cardX, cardY + cardH - cr, cardX, cardY + cr);
-    card.AddArc(cardX, cardY, 2.0f * cr, 2.0f * cr, 180, 90);
-    card.CloseFigure();
-    Gdiplus::SolidBrush cardFill(Gdiplus::Color(245, 255, 255, 255));
-    Gdiplus::SolidBrush cardSh(Gdiplus::Color(80, 200, 210, 230));
-    Gdiplus::Pen cardPen(&cardSh, 1.0f);
-    g.FillPath(&cardFill, &card);
-    g.DrawPath(&cardPen, &card);
+  const bool dual = driverCard && sourceCard && driverCard->right > driverCard->left + 8 &&
+                    sourceCard->right > sourceCard->left + 8;
+  if (dual) {
+    PaintPropsSectionCard(g, *driverCard, Gdiplus::Color(255, 252, 254, 255), Gdiplus::Color(100, 175, 205, 235));
+    DrawPropsCardHeader(g, *driverCard, L"驱动属性", L"驱动类型、金字塔与数据集访问",
+                        Gdiplus::Color(255, 0, 130, 175));
+    PaintPropsSectionCard(g, *sourceCard, Gdiplus::Color(255, 254, 255, 252), Gdiplus::Color(100, 195, 210, 220));
+    DrawPropsCardHeader(g, *sourceCard, L"数据源属性", L"路径、连接串与 GDAL 元数据",
+                        Gdiplus::Color(255, 0, 150, 130));
+  } else {
+    const float cardX = x0 + 12.0f;
+    const float cardY = y0 + 54.0f;
+    const float cardW = static_cast<float>(w) - 24.0f;
+    const float cardH = static_cast<float>(h) - 66.0f;
+    if (cardW > 20.0f && cardH > 40.0f) {
+      RECT fallback{};
+      fallback.left = static_cast<LONG>(cardX);
+      fallback.top = static_cast<LONG>(cardY);
+      fallback.right = static_cast<LONG>(cardX + cardW);
+      fallback.bottom = static_cast<LONG>(cardY + cardH);
+      PaintPropsSectionCard(g, fallback, Gdiplus::Color(245, 255, 255, 255), Gdiplus::Color(80, 200, 210, 230));
+    }
   }
 }
 
@@ -277,8 +346,8 @@ void UiPaintMapHintOverlay(HDC hdc, const RECT& client, const wchar_t* hint) {
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
   g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
-  Gdiplus::FontFamily fam(L"Segoe UI");
-  Gdiplus::Font font(&fam, 11.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
+  Gdiplus::Font font(&fam, 11.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 
   Gdiplus::StringFormat fmt;
   fmt.SetAlignment(Gdiplus::StringAlignmentNear);
@@ -360,8 +429,8 @@ void UiPaintMapCenterHint(HDC hdc, const RECT& client, const wchar_t* text) {
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
   g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
-  Gdiplus::FontFamily fam(L"Segoe UI");
-  Gdiplus::Font font(&fam, 12.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
+  Gdiplus::Font font(&fam, 12.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 
   Gdiplus::StringFormat fmt;
   fmt.SetAlignment(Gdiplus::StringAlignmentCenter);

@@ -6,9 +6,12 @@
 #include <string>
 #include <vector>
 
-#include "map_gpu.h"
+#include "map/map_gpu.h"
 
 enum class MapLayerKind { kRasterGdal, kVectorGdal, kOther };
+
+/** UI 与列表块用短标签（UTF-16）。 */
+const wchar_t* MapLayerKindLabel(MapLayerKind k);
 
 struct ViewExtent {
   double minX = 0;
@@ -18,7 +21,7 @@ struct ViewExtent {
   bool valid() const { return maxX > minX && maxY > minY; }
 };
 
-#include "map_projection.h"
+#include "map/map_projection.h"
 
 enum class MapLayerDriverKind {
   kGdalFile,
@@ -44,10 +47,27 @@ class MapLayer {
   virtual MapLayerKind GetKind() const { return MapLayerKind::kOther; }
   /** 本图层选用的数据源驱动（每种驱动对应不同属性语义与更换数据源方式）。 */
   virtual MapLayerDriverKind DriverKind() const { return MapLayerDriverKind::kGdalFile; }
-  /** 属性面板多行正文（驱动、尺寸、金字塔等）。 */
-  virtual void AppendDetailedProperties(std::wstring* out) const { (void)out; }
+  /** 属性面板：驱动侧（GDAL/OGR 能力、仿射、波段/图层几何等）。 */
+  virtual void AppendDriverProperties(std::wstring* out) const { (void)out; }
+  /** 属性面板：数据源侧（路径、文件列表、数据集描述与元数据域等）。 */
+  virtual void AppendSourceProperties(std::wstring* out) const { (void)out; }
+  /** 合并驱动 + 数据源（兼容旧调用）。 */
+  void AppendDetailedProperties(std::wstring* out) const {
+    if (!out) {
+      return;
+    }
+    AppendDriverProperties(out);
+    AppendSourceProperties(out);
+  }
   virtual bool BuildOverviews(std::wstring& err);
   virtual bool ClearOverviews(std::wstring& err);
+
+  bool IsLayerVisible() const { return layerVisible_; }
+  void SetLayerVisible(bool on) { layerVisible_ = on; }
+
+ protected:
+  /** 列表与地图是否绘制该图层（独立于经纬网等全局可见性）。 */
+  bool layerVisible_{true};
 };
 
 struct MapDocument {
@@ -110,12 +130,19 @@ MapRenderBackend MapEngine_GetRenderBackend();
 
 LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void MapEngine_RefreshLayerList(HWND listbox);
+/** 自绘列表：父窗口 WM_MEASUREITEM / WM_DRAWITEM。 */
+void MapEngine_MeasureLayerListItem(LPMEASUREITEMSTRUCT mis);
+void MapEngine_PaintLayerListItem(const DRAWITEMSTRUCT* dis);
+/** 自绘列表内点击：点在左侧可见性区域时切换可见性并返回 true。 */
+bool MapEngine_OnLayerListClick(HWND listbox, int x, int y);
+
 /** 当前文档图层数（用于 UI 校验选中下标）。 */
 int MapEngine_GetLayerCount();
 void MapEngine_OnAddLayerFromDialog(HWND owner, HWND layerList);
 
 /** 供「图层属性」Dock 显示：index 为列表选中下标，越界或无效时返回占位文案。 */
-void MapEngine_GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring* outBody);
+void MapEngine_GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstring* outDriverProps,
+                                 std::wstring* outSourceProps);
 
 bool MapEngine_IsRasterGdalLayer(int index);
 bool MapEngine_BuildOverviewsForLayer(int index, std::wstring& err);

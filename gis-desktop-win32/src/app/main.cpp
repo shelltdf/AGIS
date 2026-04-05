@@ -5,19 +5,35 @@
 #include <algorithm>
 #include <string>
 
-#include "app_log.h"
-#include "gdiplus_ui.h"
-#include "map_engine.h"
-#include "map_projection.h"
-#include "resource.h"
+#include "app/resource.h"
+#include "app/ui_font.h"
+#include "core/app_log.h"
+#include "map/map_engine.h"
+#include "map/map_projection.h"
+#include "ui/gdiplus_ui.h"
 
 #pragma comment(lib, "comctl32.lib")
+
+static HFONT g_appUiFont = nullptr;
+static bool g_appUiFontOwned = false;
+
+static HFONT CreateAppUiFont() {
+  HFONT f = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+  return f;
+}
+
+HFONT UiGetAppFont() {
+  return g_appUiFont ? g_appUiFont : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+}
 
 namespace {
 
 constexpr int kSplitterW = 6;
 /** Dock 缘条（折叠按钮区域）宽度，与 Dock View 兄弟并列 */
-constexpr int kDockStripW = 24;
+constexpr int kDockStripW = 20;
+/** 缘条上折叠钮高度（纵向居中，避免占满整列显得过长） */
+constexpr int kDockStripBtnH = 48;
 constexpr int kLayerMin = 160;
 constexpr int kLayerMax = 520;
 constexpr int kPropsMin = 180;
@@ -41,6 +57,9 @@ int g_layerContentW = 236;
 /** 右侧 Dock View 内属性区宽度（不含缘条） */
 int g_propsContentW = 256;
 int g_layerSelIndex = -1;
+static std::wstring g_propsLayerSubtitleForPaint;
+static RECT g_propsDriverCardRc{};
+static RECT g_propsSourceCardRc{};
 int g_splitterDrag = 0;  // 0=none, 1=left, 2=right
 bool g_view3d = false;
 bool g_showLayerDock = true;
@@ -262,10 +281,11 @@ void LayoutChildren() {
   const int mapLeft = layerTotalW2 + splitL;
   mapW = totalW - layerTotalW2 - splitL - propsTotalW2 - splitR;
 
+  const int stripY = top;
   if (g_hwndLayerStrip) {
     if (g_showLayerDock) {
       ShowWindow(g_hwndLayerStrip, SW_SHOW);
-      MoveWindow(g_hwndLayerStrip, 0, top, kDockStripW, innerH, TRUE);
+      MoveWindow(g_hwndLayerStrip, 0, stripY, kDockStripW, kDockStripBtnH, TRUE);
       SetWindowTextW(g_hwndLayerStrip, g_layerDockExpanded ? L"‹" : L"›");
     } else {
       ShowWindow(g_hwndLayerStrip, SW_HIDE);
@@ -286,7 +306,7 @@ void LayoutChildren() {
   if (g_hwndPropsStrip) {
     if (g_showPropsDock) {
       ShowWindow(g_hwndPropsStrip, SW_SHOW);
-      MoveWindow(g_hwndPropsStrip, totalW - kDockStripW, top, kDockStripW, innerH, TRUE);
+      MoveWindow(g_hwndPropsStrip, totalW - kDockStripW, stripY, kDockStripW, kDockStripBtnH, TRUE);
       SetWindowTextW(g_hwndPropsStrip, g_propsDockExpanded ? L"›" : L"‹");
     } else {
       ShowWindow(g_hwndPropsStrip, SW_HIDE);
@@ -369,7 +389,7 @@ HWND CreateMainToolbar(HWND parent, HINSTANCE inst) {
   if (g_toolbarImageList) {
     SendMessageW(tb, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(g_toolbarImageList));
   }
-  SendMessageW(tb, TB_SETBUTTONSIZE, 0, MAKELPARAM(24, 22));
+  SendMessageW(tb, TB_SETBUTTONSIZE, 0, MAKELPARAM(28, 26));
 
   TBBUTTON bt[8]{};
   auto setBtn = [](TBBUTTON* b, int image, int cmd) {
@@ -419,6 +439,21 @@ static void LayerListSyncUiAfterOp(HWND listbox, HWND mainFrame, int newSelIndex
 
 LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR,
                                        DWORD_PTR refData) {
+  if (msg == WM_LBUTTONDOWN) {
+    const int x = GET_X_LPARAM(lParam);
+    const int y = GET_Y_LPARAM(lParam);
+    if (MapEngine_OnLayerListClick(hwnd, x, y)) {
+      HWND layerPane = reinterpret_cast<HWND>(refData);
+      HWND mainFr = GetParent(layerPane);
+      const LRESULT lr = SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, MAKELPARAM(x, y));
+      if (lr != static_cast<LRESULT>(-1)) {
+        const int hit = static_cast<int>(LOWORD(lr));
+        SendMessageW(hwnd, LB_SETCURSEL, static_cast<WPARAM>(hit), 0);
+        PostMessageW(mainFr, WM_APP_LAYER_SEL, 0, static_cast<LPARAM>(hit));
+      }
+      return 0;
+    }
+  }
   if (msg == WM_CONTEXTMENU) {
     HWND layerPane = reinterpret_cast<HWND>(refData);
     HWND mainFr = GetParent(layerPane);
@@ -522,11 +557,12 @@ LRESULT CALLBACK LayerPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       break;
     case WM_CREATE:
       CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTBOXW, L"",
-                      WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL, 8, 52, 200, 200, hwnd,
-                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_LIST)), GetModuleHandleW(nullptr),
-                      nullptr);
+                      WS_CHILD | WS_VISIBLE | LBS_OWNERDRAWFIXED | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY | WS_VSCROLL, 8, 52,
+                      200, 200, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_LIST)),
+                      GetModuleHandleW(nullptr), nullptr);
       if (HWND lb = GetDlgItem(hwnd, IDC_LAYER_LIST)) {
         SetWindowSubclass(lb, LayerListSubclassProc, kLayerListSubclassId, reinterpret_cast<DWORD_PTR>(hwnd));
+        SendMessageW(lb, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
       }
       return 0;
     case WM_DESTROY:
@@ -553,6 +589,22 @@ LRESULT CALLBACK LayerPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       }
       return 0;
     }
+    case WM_MEASUREITEM: {
+      auto* mis = reinterpret_cast<LPMEASUREITEMSTRUCT>(lParam);
+      if (mis && mis->CtlID == IDC_LAYER_LIST) {
+        MapEngine_MeasureLayerListItem(mis);
+        return TRUE;
+      }
+      break;
+    }
+    case WM_DRAWITEM: {
+      const DRAWITEMSTRUCT* dis = reinterpret_cast<LPDRAWITEMSTRUCT>(lParam);
+      if (dis && dis->CtlID == IDC_LAYER_LIST) {
+        MapEngine_PaintLayerListItem(dis);
+        return TRUE;
+      }
+      break;
+    }
     case WM_ERASEBKGND:
       return 1;
     case WM_PAINT: {
@@ -570,20 +622,82 @@ LRESULT CALLBACK LayerPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+static void LayoutPropsPane(HWND hwnd) {
+  RECT r{};
+  GetClientRect(hwnd, &r);
+  const int rw = r.right;
+  const int rh = r.bottom;
+  constexpr int kBtnRow = 36;
+  constexpr int kContentTop = 56;
+  constexpr int kPadBottom = 8;
+  /** 与 gdiplus_ui DrawPropsCardHeader 的标题带高度一致。 */
+  constexpr int kSectionHeader = 28;
+  constexpr int kInnerPad = 6;
+  constexpr int kCardBottom = 5;
+  constexpr int g2 = 10;
+  const int btnTop = std::max(0, rh - kBtnRow);
+  const int avail = btnTop - kContentTop - kPadBottom;
+  /** 两段：每段 (标题+内边距) + 编辑区 + 卡片底边；中间 g2。 */
+  const int perSection = kSectionHeader + kInnerPad + kCardBottom;
+  const int bothEd = avail - 2 * perSection - g2;
+  const int edH = std::max(32, bothEd / 2);
+  const int x = 12;
+  const int w = std::max(40, rw - 24);
+  const int yDriverEd = kContentTop + kSectionHeader + kInnerPad;
+  const int ySrcEd = yDriverEd + edH + kCardBottom + g2 + kSectionHeader + kInnerPad;
+  if (HWND h = GetDlgItem(hwnd, IDC_PROPS_LBL_DRIVER)) {
+    MoveWindow(h, x, kContentTop, w, kSectionHeader, FALSE);
+    ShowWindow(h, SW_HIDE);
+  }
+  if (HWND h = GetDlgItem(hwnd, IDC_PROPS_DRIVER_EDIT)) {
+    MoveWindow(h, x, yDriverEd, w, edH, TRUE);
+  }
+  if (HWND h = GetDlgItem(hwnd, IDC_PROPS_LBL_SOURCE)) {
+    MoveWindow(h, x, yDriverEd + edH + kCardBottom + g2, w, kSectionHeader, FALSE);
+    ShowWindow(h, SW_HIDE);
+  }
+  if (HWND h = GetDlgItem(hwnd, IDC_PROPS_SOURCE_EDIT)) {
+    MoveWindow(h, x, ySrcEd, w, edH, TRUE);
+  }
+  g_propsDriverCardRc.left = x - 6;
+  g_propsDriverCardRc.top = kContentTop - 3;
+  g_propsDriverCardRc.right = x + w + 6;
+  g_propsDriverCardRc.bottom = yDriverEd + edH + kCardBottom;
+  g_propsSourceCardRc.left = x - 6;
+  g_propsSourceCardRc.top = yDriverEd + edH + kCardBottom + g2 - 3;
+  g_propsSourceCardRc.right = x + w + 6;
+  g_propsSourceCardRc.bottom = ySrcEd + edH + kCardBottom;
+  const int bw = std::max(60, (rw - 32) / 3);
+  if (HWND b1 = GetDlgItem(hwnd, IDC_PROPS_BUILD_OV)) {
+    MoveWindow(b1, 12, btnTop, bw, 28, TRUE);
+  }
+  if (HWND b2 = GetDlgItem(hwnd, IDC_PROPS_CLEAR_OV)) {
+    MoveWindow(b2, 16 + bw, btnTop, bw, 28, TRUE);
+  }
+  if (HWND b3 = GetDlgItem(hwnd, IDC_PROPS_CHANGE_SRC)) {
+    MoveWindow(b3, 20 + 2 * bw, btnTop, std::max(60, rw - 32 - 2 * bw), 28, TRUE);
+  }
+}
+
 void RefreshPropsPanel(HWND hwndProps) {
   if (!hwndProps) {
     return;
   }
-  HWND ed = GetDlgItem(hwndProps, IDC_PROPS_BODY_EDIT);
+  HWND edDriver = GetDlgItem(hwndProps, IDC_PROPS_DRIVER_EDIT);
+  HWND edSrc = GetDlgItem(hwndProps, IDC_PROPS_SOURCE_EDIT);
   HWND b1 = GetDlgItem(hwndProps, IDC_PROPS_BUILD_OV);
   HWND b2 = GetDlgItem(hwndProps, IDC_PROPS_CLEAR_OV);
   HWND b3 = GetDlgItem(hwndProps, IDC_PROPS_CHANGE_SRC);
   std::wstring title;
-  std::wstring body;
-  MapEngine_GetLayerInfoForUi(g_layerSelIndex, &title, &body);
-  if (ed) {
-    const std::wstring full = title + L"\r\n\r\n" + body;
-    SetWindowTextW(ed, full.c_str());
+  std::wstring driverTxt;
+  std::wstring sourceTxt;
+  MapEngine_GetLayerInfoForUi(g_layerSelIndex, &title, &driverTxt, &sourceTxt);
+  g_propsLayerSubtitleForPaint = title;
+  if (edDriver) {
+    SetWindowTextW(edDriver, driverTxt.c_str());
+  }
+  if (edSrc) {
+    SetWindowTextW(edSrc, sourceTxt.c_str());
   }
   const bool raster = MapEngine_IsRasterGdalLayer(g_layerSelIndex);
   const bool layerOk = g_layerSelIndex >= 0 && g_layerSelIndex < MapEngine_GetLayerCount();
@@ -596,6 +710,7 @@ void RefreshPropsPanel(HWND hwndProps) {
   if (b3) {
     EnableWindow(b3, layerOk ? TRUE : FALSE);
   }
+  InvalidateRect(hwndProps, nullptr, FALSE);
 }
 
 LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -607,46 +722,49 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       break;
     case WM_CREATE: {
       HINSTANCE inst = GetModuleHandleW(nullptr);
+      CreateWindowW(L"STATIC", L"驱动属性", WS_CHILD | SS_LEFT, 12, 56, 100, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_LBL_DRIVER)), inst, nullptr);
       CreateWindowExW(
           WS_EX_CLIENTEDGE, L"EDIT", L"",
-          WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP, 12, 56, 100,
-          100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_BODY_EDIT)), inst, nullptr);
+          WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP, 12, 78, 100,
+          80, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_DRIVER_EDIT)), inst, nullptr);
+      CreateWindowW(L"STATIC", L"数据源属性", WS_CHILD | SS_LEFT, 12, 164, 100, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_LBL_SOURCE)), inst, nullptr);
+      CreateWindowExW(
+          WS_EX_CLIENTEDGE, L"EDIT", L"",
+          WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP, 12, 186, 100,
+          80, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_SOURCE_EDIT)), inst, nullptr);
       CreateWindowW(L"BUTTON", L"生成金字塔", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 12, 0, 90, 28,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_BUILD_OV)), inst, nullptr);
       CreateWindowW(L"BUTTON", L"删除金字塔", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 108, 0, 90, 28,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_CLEAR_OV)), inst, nullptr);
       CreateWindowW(L"BUTTON", L"更换数据源…", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 204, 0, 120, 28,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_CHANGE_SRC)), inst, nullptr);
-      SendMessageW(GetDlgItem(hwnd, IDC_PROPS_BODY_EDIT), WM_SETFONT,
-                   reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+      for (int cid :
+           {IDC_PROPS_LBL_DRIVER, IDC_PROPS_LBL_SOURCE, IDC_PROPS_DRIVER_EDIT, IDC_PROPS_SOURCE_EDIT}) {
+        if (HWND c = GetDlgItem(hwnd, cid)) {
+          SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+        }
+      }
+      if (HWND ed = GetDlgItem(hwnd, IDC_PROPS_DRIVER_EDIT)) {
+        SendMessageW(ed, EM_SETMARGINS, static_cast<WPARAM>(0x0001u | 0x0002u),
+                     static_cast<LPARAM>(MAKELPARAM(10, 10)));
+      }
+      if (HWND ed = GetDlgItem(hwnd, IDC_PROPS_SOURCE_EDIT)) {
+        SendMessageW(ed, EM_SETMARGINS, static_cast<WPARAM>(0x0001u | 0x0002u),
+                     static_cast<LPARAM>(MAKELPARAM(10, 10)));
+      }
+      for (int bid : {IDC_PROPS_BUILD_OV, IDC_PROPS_CLEAR_OV, IDC_PROPS_CHANGE_SRC}) {
+        if (HWND b = GetDlgItem(hwnd, bid)) {
+          SendMessageW(b, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+        }
+      }
+      LayoutPropsPane(hwnd);
       RefreshPropsPanel(hwnd);
       return 0;
     }
     case WM_SIZE: {
-      RECT r{};
-      GetClientRect(hwnd, &r);
-      const int rw = static_cast<int>(r.right);
-      const int rh = static_cast<int>(r.bottom);
-      constexpr int kBtnRow = 36;
-      const int btnTop = std::max(0, rh - kBtnRow);
-      const int edH = std::max(40, btnTop - 56 - 8);
-      HWND ed = GetDlgItem(hwnd, IDC_PROPS_BODY_EDIT);
-      if (ed) {
-        MoveWindow(ed, 12, 56, std::max(40, rw - 24), edH, TRUE);
-      }
-      const int bw = std::max(60, (rw - 32) / 3);
-      HWND b1 = GetDlgItem(hwnd, IDC_PROPS_BUILD_OV);
-      HWND b2 = GetDlgItem(hwnd, IDC_PROPS_CLEAR_OV);
-      HWND b3 = GetDlgItem(hwnd, IDC_PROPS_CHANGE_SRC);
-      if (b1) {
-        MoveWindow(b1, 12, btnTop, bw, 28, TRUE);
-      }
-      if (b2) {
-        MoveWindow(b2, 16 + bw, btnTop, bw, 28, TRUE);
-      }
-      if (b3) {
-        MoveWindow(b3, 20 + 2 * bw, btnTop, std::max(60, rw - 32 - 2 * bw), 28, TRUE);
-      }
+      LayoutPropsPane(hwnd);
       return 0;
     }
     case WM_COMMAND: {
@@ -701,7 +819,8 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       HDC hdc = BeginPaint(hwnd, &ps);
       RECT r{};
       GetClientRect(hwnd, &r);
-      UiPaintLayerPropsDockFrame(hdc, r);
+      UiPaintLayerPropsDockFrame(hdc, r, &g_propsDriverCardRc, &g_propsSourceCardRc,
+                                 g_propsLayerSubtitleForPaint.c_str());
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -730,6 +849,12 @@ LRESULT CALLBACK LogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     nullptr);
       AppLogSetEdit(ed);
       AppLogFlushToEdit();
+      if (ed) {
+        SendMessageW(ed, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+      }
+      if (HWND bt = GetDlgItem(hwnd, IDC_LOG_COPY)) {
+        SendMessageW(bt, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+      }
       return 0;
     }
     case WM_SIZE: {
@@ -870,12 +995,20 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       g_hwndMain = hwnd;
       INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES};
       InitCommonControlsEx(&icc);
+      g_appUiFont = CreateAppUiFont();
+      if (g_appUiFont) {
+        g_appUiFontOwned = true;
+      } else {
+        g_appUiFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        g_appUiFontOwned = false;
+      }
       HMENU menu = BuildMenu();
       SetMenu(hwnd, menu);
 
       g_hwndToolbar = CreateMainToolbar(hwnd, GetModuleHandleW(nullptr));
       if (g_hwndToolbar) {
         SetWindowSubclass(g_hwndToolbar, ToolbarWheelSubclass, 3, 0);
+        SendMessageW(g_hwndToolbar, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
       }
 
       g_hwndStatus = CreateWindowExW(0, STATUSCLASSNAMEW, L"",
@@ -883,14 +1016,16 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                      0, 0, 0, 0, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
       if (g_hwndStatus) {
         SetWindowSubclass(g_hwndStatus, StatusSubclass, 1, 0);
+        SendMessageW(g_hwndStatus, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
       }
 
       {
         HINSTANCE hi = GetModuleHandleW(nullptr);
         g_hwndLayerStrip =
             CreateWindowW(L"BUTTON", L"‹", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, kDockStripW,
-                          100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DOCK_STRIP_BTN)), hi,
-                          nullptr);
+                          kDockStripBtnH, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DOCK_STRIP_BTN)),
+                          hi, nullptr);
+        SendMessageW(g_hwndLayerStrip, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
       }
       g_hwndLayer = CreateWindowExW(0, kLayerClass, L"",
                                     WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
@@ -905,8 +1040,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         HINSTANCE hi = GetModuleHandleW(nullptr);
         g_hwndPropsStrip =
             CreateWindowW(L"BUTTON", L"›", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, kDockStripW,
-                          100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_DOCK_STRIP_BTN)), hi,
-                          nullptr);
+                          kDockStripBtnH, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_DOCK_STRIP_BTN)),
+                          hi, nullptr);
+        SendMessageW(g_hwndPropsStrip, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
       }
 
       MapEngine_RefreshLayerList(GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
@@ -1172,6 +1308,11 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       if (g_toolbarImageList) {
         ImageList_Destroy(g_toolbarImageList);
         g_toolbarImageList = nullptr;
+      }
+      if (g_appUiFontOwned && g_appUiFont) {
+        DeleteObject(g_appUiFont);
+        g_appUiFont = nullptr;
+        g_appUiFontOwned = false;
       }
       MapEngine_Shutdown();
       PostQuitMessage(0);

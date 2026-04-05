@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run AGIS.exe: incremental build first, then launch."""
+"""Run AGIS.exe: build only if sources/CMake newer than AGIS.exe (see agis_build_util), then launch."""
 import glob
 import os
 import subprocess

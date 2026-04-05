@@ -60,7 +60,7 @@
 | ID_HELP_ABOUT | 40201 | 关于 |
 | ID_LAYER_ADD | 40501 | 添加数据图层 |
 
-实现可在 `resource.h` 中定义，与 `mapping.md` 同步。
+实现可在 `src/app/resource.h` 中定义，与 `mapping.md` 同步。
 
 ## 4. 错误与日志
 

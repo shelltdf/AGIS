@@ -9,4 +9,5 @@
 
 - **规格**：[spec.md](spec.md)  
 - **映射**：[mapping.md](mapping.md)  
-- **类图**：[uml-class.md](uml-class.md)
+- **类图**：[uml-class.md](uml-class.md)（应用壳过程入口）  
+- **map 模块类图**：[uml-class-map.md](uml-class-map.md)（`src/map/`：图层、文档、投影、GPU 后端）

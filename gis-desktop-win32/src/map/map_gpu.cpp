@@ -1,4 +1,4 @@
-#include "map_gpu.h"
+#include "map/map_gpu.h"
 
 #include <GL/gl.h>
 
