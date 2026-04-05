@@ -180,7 +180,10 @@ add_executable(ui_engine_demo WIN32
 )
 
 if(WIN32)
-  target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_windows.cpp)
+  target_sources(ui_engine_demo PRIVATE
+    src/ui_engine/platform_windows.cpp
+    src/app/ui_engine_demo_platform_win32.cpp
+  )
 elseif(APPLE)
   target_sources(ui_engine_demo PRIVATE src/ui_engine/platform_cocoa.mm)
   target_link_libraries(ui_engine_demo PRIVATE "-framework" "Cocoa")
