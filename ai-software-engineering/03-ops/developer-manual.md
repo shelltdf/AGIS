@@ -13,7 +13,7 @@
 ## 2. 构建
 
 - 前置：**CMake 3.20+**、**C++17 编译器**（Visual Studio 2022 或 Clang/LLVM on Windows、或 MinGW）。  
-- **GDAL（`CMakeLists.txt` 默认 `AGIS_USE_GDAL=ON`；`build.py` 在存在 `3rdparty/gdal-3.12.3` 时默认开启）**  
+- **GDAL（`CMakeLists.txt` 与 `build.py` 均默认 `AGIS_USE_GDAL=ON`；未设置环境变量时脚本始终传入开启）**  
   - CMake 优先 **`find_package(PROJ/GDAL)`**（如 **`3rdparty/proj-install`**、**`3rdparty/gdal-install`**）；否则对 **`3rdparty/proj-9.8.0`**、**`3rdparty/gdal-3.12.3`** 做 **`add_subdirectory`** 捆绑编译，见 **`3rdparty/README-GDAL-BUILD.md`**（含 SQLite3 / `sqlite3.exe` 前提）。  
   - 显式 **`AGIS_USE_GDAL=off`** 可编无 GIS 壳程序；脚本会合并已有 `proj-install` / `gdal-install` 到 **`CMAKE_PREFIX_PATH`**。  
 - 无 GDAL 或暂不想链接时：

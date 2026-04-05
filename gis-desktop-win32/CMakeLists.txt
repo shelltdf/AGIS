@@ -90,7 +90,7 @@ add_executable(agis_desktop WIN32
   src/ui_engine/app.cpp
   src/ui_engine/widget.cpp
   src/ui_engine/widgets.cpp
-  src/ui_engine/widgets_shell.cpp
+  src/ui_engine/widgets_mainframe.cpp
   src/ui_engine/gdiplus_ui.cpp
 )
 
@@ -147,7 +147,7 @@ add_executable(ui_engine_demo WIN32
   src/ui_engine/app.cpp
   src/ui_engine/widget.cpp
   src/ui_engine/widgets.cpp
-  src/ui_engine/widgets_shell.cpp
+  src/ui_engine/widgets_mainframe.cpp
   src/ui_engine/gdiplus_ui.cpp
 )
 target_include_directories(ui_engine_demo PRIVATE ${CMAKE_SOURCE_DIR}/src)

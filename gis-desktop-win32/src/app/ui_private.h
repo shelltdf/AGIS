@@ -2,11 +2,11 @@
 
 /**
  * 主程序 / 宿主 HWND 强绑定的 Widget 声明（与 `main.cpp` 资源 ID、子类过程对应）。
- * 基类与共用壳层类型见 `ui_engine/widgets_shell.h`；实现见 `ui_engine/widgets_shell.cpp`。
- * 需要完整类型表时与 `widgets_shell.h` 一并包含本头，或使用 `ui_engine/widgets_all.h`。
+ * 基类与共用壳层类型见 `ui_engine/widgets_mainframe.h`；实现见 `ui_engine/widgets_mainframe.cpp`。
+ * 需要完整类型表时与 `widgets_mainframe.h` 一并包含本头，或使用 `ui_engine/widgets_all.h`。
  */
 
-#include "ui_engine/widgets_shell.h"
+#include "ui_engine/widgets_mainframe.h"
 
 namespace agis::ui {
 
@@ -47,6 +47,43 @@ class LayerDriverDialog : public DialogWindow {
 class LayerListContextMenu : public PopupMenu {
  public:
   LayerListContextMenu() = default;
+  void paintEvent(PaintContext& ctx) override;
+};
+
+/** 画布右上角：要素可见性面板（`IDC_MAP_VIS_TOGGLE` / `IDC_MAP_VIS_GRID`）。 */
+class LayerVisibilityPanel : public Widget {
+ public:
+  LayerVisibilityPanel() = default;
+  void paintEvent(PaintContext& ctx) override;
+};
+
+/** 画布左下：比例与适应/原点/还原、加减（`IDC_MAP_SCALE_TEXT` 等）。 */
+class MapZoomBar : public Widget {
+ public:
+  MapZoomBar() = default;
+  void paintEvent(PaintContext& ctx) override;
+};
+
+/** 画布右下：半透明提示条（`UiPaintMapHintOverlay` 绘制区）。 */
+class MapHintOverlay : public Widget {
+ public:
+  MapHintOverlay() = default;
+  void paintEvent(PaintContext& ctx) override;
+};
+
+/** 无 GDAL 等时在地图区中央的提示卡片（`UiPaintMapCenterHint`）。 */
+class MapCenterHintOverlay : public Widget {
+ public:
+  MapCenterHintOverlay() = default;
+  void paintEvent(PaintContext& ctx) override;
+};
+
+/**
+ * 地图区右键菜单（预留：`MapHostProc` 当前对 `WM_CONTEXTMENU` 直接 `return 0`，无弹出项）。
+ */
+class MapContextMenu : public PopupMenu {
+ public:
+  MapContextMenu() = default;
   void paintEvent(PaintContext& ctx) override;
 };
 

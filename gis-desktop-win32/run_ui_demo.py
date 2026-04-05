@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""配置并构建 `gis-desktop-win32` 的 `ui_engine_demo`，然后启动该可执行文件。
+"""配置并构建本目录下的 ``ui_engine_demo``，然后启动该可执行文件。
 
-用法（在仓库根目录）::
+用法（在 ``gis-desktop-win32`` 目录下）::
 
-    python run_demo.py
+    python run_ui_demo.py
 
-环境变量与 `gis-desktop-win32/build.py` 一致（如 ``AGIS_USE_GDAL``、``AGIS_FORCE_CONFIGURE``）；
+环境变量与 ``build.py`` 一致（如 ``AGIS_USE_GDAL``、``AGIS_FORCE_CONFIGURE``）；
 本脚本在完整构建后仅增量编译 ``ui_engine_demo`` 目标以节省时间。
 """
 from __future__ import annotations
@@ -16,19 +16,14 @@ import subprocess
 import sys
 
 
-def _repo_root() -> str:
+def _project_root() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def main() -> int:
-    root = _repo_root()
-    proj = os.path.join(root, "gis-desktop-win32")
+    proj = _project_root()
     build = os.path.join(proj, "build")
-    if not os.path.isdir(proj):
-        print("error: gis-desktop-win32 not found next to run_demo.py", file=sys.stderr)
-        return 1
 
-    # 先走与主工程相同的 configure + 全量构建，保证 CMake 缓存与依赖一致
     r = subprocess.run([sys.executable, os.path.join(proj, "build.py")], cwd=proj)
     if r.returncode != 0:
         return r.returncode
@@ -38,7 +33,6 @@ def main() -> int:
         print("cmake not found in PATH", file=sys.stderr)
         return 1
 
-    # MSVC 多配置生成器通常不写 CMAKE_BUILD_TYPE；与 build.py 一致默认 Release
     cfg = os.environ.get("CMAKE_CONFIG", "").strip() or "Release"
     try:
         cache = os.path.join(build, "CMakeCache.txt")

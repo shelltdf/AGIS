@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Configure and build AGIS (CMake).
 
-- **GDAL default ON** when `../3rdparty/gdal-3.12.3/CMakeLists.txt` exists; set **`AGIS_USE_GDAL=off`**
-  to build a shell without GIS (no PROJ/SQLite needed).
-- With GDAL on, CMake uses bundled **proj-9.8.0** / **gdal-3.12.3** or existing `*-install` prefixes; see
-  `3rdparty/README-GDAL-BUILD.md`.
+- **GDAL default ON**：未设置环境变量时始终向 CMake 传入 ``AGIS_USE_GDAL=ON``（与仓库内 ``3rdparty`` 源码及
+  ``CMakeLists.txt`` 默认一致）。仅需**无 GIS 的壳程序**时设置 **`AGIS_USE_GDAL=off`**。
+- 启用 GDAL 时，CMake 使用捆绑的 **proj** / **gdal** 源码或已有 ``*-install`` 前缀；见
+  `3rdparty/README-GDAL-BUILD.md`。
 
 `test.py` / `run.py` / `publish.py` use `agis_build_util.ensure_project_built()` which **skips**
 invoking this script when ``AGIS.exe`` is newer than ``src/**`` and CMake inputs (set
@@ -144,11 +144,8 @@ def main() -> int:
         print("cmake not found in PATH", file=sys.stderr)
         return 1
     gdal_env = os.environ.get("AGIS_USE_GDAL", "").strip().lower()
-    bundled_gdal = os.path.isfile(
-        os.path.join(ROOT, "..", "3rdparty", "gdal-3.12.3", "CMakeLists.txt")
-    )
     if not gdal_env:
-        use_gdal = bundled_gdal
+        use_gdal = True
     else:
         use_gdal = gdal_env not in ("0", "off", "false", "no")
     cfg = [cmake, "-B", BUILD, "-DCMAKE_BUILD_TYPE=Release"]

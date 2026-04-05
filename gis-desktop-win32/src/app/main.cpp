@@ -14,6 +14,10 @@
 
 #pragma comment(lib, "comctl32.lib")
 
+#ifndef GIS_DESKTOP_HAVE_GDAL
+#define GIS_DESKTOP_HAVE_GDAL 0
+#endif
+
 static HFONT g_appUiFont = nullptr;
 static bool g_appUiFontOwned = false;
 
@@ -407,6 +411,9 @@ HWND CreateMainToolbar(HWND parent, HINSTANCE inst) {
     b->iString = 0;
   };
   setBtn(&bt[0], 0, ID_LAYER_ADD);
+#if !GIS_DESKTOP_HAVE_GDAL
+  bt[0].fsState = 0;
+#endif
   setSep(&bt[1]);
   setBtn(&bt[2], 1, ID_FILE_SCREENSHOT);
   setSep(&bt[3]);
@@ -474,7 +481,9 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     const bool canDown = onLayer && hit < n - 1;
 
     HMENU pop = CreatePopupMenu();
-    AppendMenuW(pop, MF_STRING, ID_LAYER_CTX_ADD, L"添加图层…");
+    AppendMenuW(pop,
+                MF_STRING | (GIS_DESKTOP_HAVE_GDAL ? MF_ENABLED : MF_GRAYED),
+                ID_LAYER_CTX_ADD, L"添加图层…");
     AppendMenuW(pop, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(pop, MF_STRING | (onLayer ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_DELETE, L"删除");
     AppendMenuW(pop, MF_STRING | (canUp ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_UP, L"上移");
@@ -490,6 +499,9 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
     switch (cmd) {
       case ID_LAYER_CTX_ADD:
+#if !GIS_DESKTOP_HAVE_GDAL
+        return 0;
+#else
         MapEngine::Instance().OnAddLayerFromDialog(mainFr, hwnd);
         {
           const int nn = MapEngine::Instance().GetLayerCount();
@@ -503,6 +515,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         }
         AppLogLine(L"[图层] 已通过右键菜单发起添加。");
         return 0;
+#endif
       case ID_LAYER_CTX_DELETE: {
         if (!onLayer) {
           return 0;
@@ -960,7 +973,8 @@ HMENU BuildMenu() {
   AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(win), L"窗口(&W)");
 
   HMENU layer = CreateMenu();
-  AppendMenuW(layer, MF_STRING, ID_LAYER_ADD, L"添加数据图层(&A)...");
+  AppendMenuW(layer, MF_STRING | (GIS_DESKTOP_HAVE_GDAL ? MF_ENABLED : MF_GRAYED), ID_LAYER_ADD,
+              L"添加数据图层(&A)...");
   AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(layer), L"图层(&Y)");
 
   HMENU lang = CreateMenu();
@@ -1047,6 +1061,13 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
       MapEngine::Instance().RefreshLayerList(GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
       AppLogLine(L"AGIS 启动完成。");
+#if GIS_DESKTOP_HAVE_GDAL
+      AppLogLine(L"[GIS] GDAL 已启用：可添加数据图层。");
+#else
+      AppLogLine(L"[GIS] 本构建未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）；「添加数据图层」入口已禁用。需要 GIS 时在 "
+                 L"gis-desktop-win32 下设置 AGIS_USE_GDAL=on 并重新运行 python build.py（依赖见 "
+                 L"3rdparty/README-GDAL-BUILD.md）。");
+#endif
       SetWindowTextW(hwnd, L"AGIS — 地图视图（单文档 SDI）");
       SyncViewMenu(hwnd);
       SyncWindowMenu(hwnd);
@@ -1092,7 +1113,11 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         const wchar_t* s = L"";
         switch (tip->iItem) {
           case ID_LAYER_ADD:
+#if GIS_DESKTOP_HAVE_GDAL
             s = L"添加图层（先选择 GDAL / TMS / WMS） — 无全局快捷键";
+#else
+            s = L"添加图层（本构建未启用 GDAL，已禁用） — 无全局快捷键";
+#endif
             break;
           case ID_FILE_SCREENSHOT:
             s = L"将当前地图视图保存为 PNG — 无全局快捷键";
@@ -1205,7 +1230,15 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
       }
       if (id == ID_LAYER_ADD) {
+#if !GIS_DESKTOP_HAVE_GDAL
+        MessageBoxW(hwnd,
+                    L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。\n\n请在 gis-desktop-win32 下用 "
+                    L"AGIS_USE_GDAL=on 重新运行 python build.py，并确保 CMake 能找到 GDAL（见 "
+                    L"3rdparty/README-GDAL-BUILD.md）。",
+                    L"AGIS", MB_OK | MB_ICONINFORMATION);
+#else
         MapEngine::Instance().OnAddLayerFromDialog(hwnd, GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
+#endif
         return 0;
       }
       if (id == ID_HELP_ABOUT) {

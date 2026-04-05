@@ -1,4 +1,4 @@
-#include "ui_engine/widgets_shell.h"
+#include "ui_engine/widgets_mainframe.h"
 #include "app/ui_private.h"
 
 namespace agis::ui {

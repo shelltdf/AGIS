@@ -97,7 +97,7 @@ void BuildDemoWidgetTree() {
   status->setGeometry({0, 584, 960, 56});
   root->addChild(std::move(status));
 
-  // 通用 widgets.h：Frame / Label / PushButton / LineEdit / ScrollArea / Splitter / Dialog / Popup
+  // 通用 widget_core.h：Frame / Label / PushButton / LineEdit / ScrollArea / Splitter / Dialog / Popup
   auto frame = std::make_unique<agis::ui::Frame>();
   frame->setGeometry({300, 200, 360, 200});
   {

@@ -2,11 +2,11 @@
 
 /**
  * AGIS 桌面端专用 Widget：与当前 `main.cpp` / `map_engine` 中 HWND、资源 ID、布局一一对应的类型。
- * 通用基元（Window、Label、Splitter、Canvas2D、DialogWindow、PopupMenu 等）见 `widgets.h`。
- * 与主窗口 HWND 强绑定的部分类型（图层 Dock、地图画布、图层对话框、图层右键菜单等）见 `app/ui_private.h`。
+ * 通用基元（Window、Label、Splitter、Canvas2D、DialogWindow、PopupMenu 等）见 `widget_core.h`。
+ * 与主窗口 HWND 强绑定的部分类型（图层 Dock、地图画布、地图叠层与菜单、图层对话框等）见 `app/ui_private.h`。
  */
 
-#include "ui_engine/widgets.h"
+#include "ui_engine/widget_core.h"
 
 namespace agis::ui {
 
@@ -92,47 +92,10 @@ class ShortcutHelpPanel : public Widget {
   void paintEvent(PaintContext& ctx) override;
 };
 
-/** 画布右上角：要素可见性面板（`IDC_MAP_VIS_TOGGLE` / `IDC_MAP_VIS_GRID`）。 */
-class LayerVisibilityPanel : public Widget {
- public:
-  LayerVisibilityPanel() = default;
-  void paintEvent(PaintContext& ctx) override;
-};
-
-/** 画布左下：比例与适应/原点/还原、加减（`IDC_MAP_SCALE_TEXT` 等）。 */
-class MapZoomBar : public Widget {
- public:
-  MapZoomBar() = default;
-  void paintEvent(PaintContext& ctx) override;
-};
-
-/** 画布右下：半透明提示条（`UiPaintMapHintOverlay` 绘制区）。 */
-class MapHintOverlay : public Widget {
- public:
-  MapHintOverlay() = default;
-  void paintEvent(PaintContext& ctx) override;
-};
-
-/** 无 GDAL 等时在地图区中央的提示卡片（`UiPaintMapCenterHint`）。 */
-class MapCenterHintOverlay : public Widget {
- public:
-  MapCenterHintOverlay() = default;
-  void paintEvent(PaintContext& ctx) override;
-};
-
 /** 日志窗口顶层壳（`kLogClass` / `AGISLogWindow`，`ShowLogDialog`）；正文区见 `LogPanel`。 */
 class LogWindow : public Window {
  public:
   LogWindow() = default;
-  void paintEvent(PaintContext& ctx) override;
-};
-
-/**
- * 地图区右键菜单（预留：`MapHostProc` 当前对 `WM_CONTEXTMENU` 直接 `return 0`，无弹出项）。
- */
-class MapContextMenu : public PopupMenu {
- public:
-  MapContextMenu() = default;
   void paintEvent(PaintContext& ctx) override;
 };
 

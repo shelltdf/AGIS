@@ -2,7 +2,7 @@
 
 /**
  * 通用 Widget 子类：与 Qt 基元类似，可在任意采用 `agis::ui` 的应用中复用。
- * 本工程（AGIS 主窗口、地图、Dock 等）专用类型见 `widgets_shell.h`。
+ * 本工程（AGIS 主窗口、地图、Dock 等）专用类型见 `widgets_mainframe.h`。
  */
 
 #include "ui_engine/widget.h"
