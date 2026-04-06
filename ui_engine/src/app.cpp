@@ -36,6 +36,9 @@ void App::setPlatform(std::unique_ptr<IGuiPlatform> platform) {
 void App::clearRootWidgets() {
   rootWidgets_.clear();
   open_drop_down_menu_ = nullptr;
+  middle_drag_canvas_ = nullptr;
+  demo_map_canvas_ = nullptr;
+  invalidate_all_ = {};
 }
 
 int App::exec() {

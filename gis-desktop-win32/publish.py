@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy AGIS.exe into dist/: build if needed (agis_build_util), then copy."""
+"""先运行 ``build.py``，再将 ``AGIS.exe`` 复制到 ``dist/``。"""
 import glob
 import os
 import shutil

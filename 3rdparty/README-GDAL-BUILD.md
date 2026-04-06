@@ -26,6 +26,7 @@
 |------|------|
 | `3rdparty/sqlite-amalgamation-3510300/` | **SQLite amalgamation**（官方 zip，直接可编） |
 | `3rdparty/curl-8.19.0/` | 捆绑 **libcurl**（供 PROJ `ENABLE_CURL`；Schannel） |
+| `3rdparty/tiff-4.7.1/` | 捆绑 **libtiff**（供 PROJ `ENABLE_TIFF`；**不**由 CMake 下载，请自备官方包如 `tiff-4.7.1.tar.gz` 解压到此路径） |
 | `3rdparty/proj-9.8.0/` | 捆绑 **PROJ 9.8.0**（内联编译） |
 | `3rdparty/gdal-3.12.3/` | 捆绑 **GDAL**（内联编译） |
 | `3rdparty/proj-install/` | （可选）你已单独安装的 PROJ 前缀 |

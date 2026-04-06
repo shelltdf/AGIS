@@ -92,17 +92,35 @@ class AGIS_UI_API MenuItem : public Widget {
   bool enabled_{true};
 };
 
-/** 主工具栏（实现侧：`CreateToolbarEx` / `IDC_MAIN_TOOLBAR`）。 */
+/** 工具栏上的图标/文字按钮（演示壳自绘；可置于 `ToolBarWidget` 子节点）。 */
+class AGIS_UI_API ToolButton : public Widget {
+ public:
+  ToolButton() = default;
+
+  void setText(std::wstring t) { text_ = std::move(t); }
+  const std::wstring& text() const { return text_; }
+
+  /** 与 `RelayoutToolBarChildren` 配合的近似宽度（像素）。 */
+  int intrinsicWidth() const;
+
+  void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
+
+ private:
+  std::wstring text_;
+};
+
+/**
+ * 主工具栏（实现侧：`CreateToolbarEx` / `IDC_MAIN_TOOLBAR`）。
+ * 演示：子节点为若干 `ToolButton`（或其它 `Widget`），由 `RelayoutToolBarChildren` 横向排布。
+ */
 class AGIS_UI_API ToolBarWidget : public Widget {
  public:
   ToolBarWidget() = default;
   void paintEvent(PaintContext& ctx) override;
   void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
   void mousePressEvent(int client_x, int client_y, int button) override;
-
- private:
-  /** 演示文案四段：New / Open / Save / 其余；`-1` 表示未落在栏内。 */
-  int toolbar_hover_segment_{-1};
 };
 
 /** 状态栏（实现侧：底部 `STATUSCLASSNAME`，双击打开日志）。 */
@@ -123,10 +141,15 @@ class AGIS_UI_API DockArea : public Widget {
   void setDockEdge(DockEdge e) { edge_ = e; }
   DockEdge dockEdge() const { return edge_; }
 
+  /** 与缘条联动：`false` 时仅保留折叠条宽度，隐藏 Dock View 内容区。 */
+  void setContentExpanded(bool on) { content_expanded_ = on; }
+  bool contentExpanded() const { return content_expanded_; }
+
   void paintEvent(PaintContext& ctx) override;
 
  private:
   DockEdge edge_{DockEdge::kLeft};
+  bool content_expanded_{true};
 };
 
 /** 折叠按钮区域 / Dock Button Bar（实现侧：`IDC_LAYER_DOCK_STRIP_BTN` / `IDC_PROPS_DOCK_STRIP_BTN`）。 */
@@ -134,6 +157,8 @@ class AGIS_UI_API DockButtonStrip : public Widget {
  public:
   DockButtonStrip() = default;
   void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
 };
 
 /** Dock View：展开时承载具体面板内容（不含缘条）。 */
@@ -158,6 +183,14 @@ class AGIS_UI_API ShortcutHelpPanel : public Widget {
  public:
   ShortcutHelpPanel() = default;
   void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
+
+  bool expanded() const { return expanded_; }
+
+ private:
+  /** 与产品一致：默认折叠，仅显示标题条。 */
+  bool expanded_{false};
 };
 
 /** 日志窗口顶层壳（`kLogClass` / `AGISLogWindow`，`ShowLogDialog`）；正文区见 `LogPanel`。 */

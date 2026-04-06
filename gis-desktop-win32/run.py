@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run AGIS.exe: build only if sources/CMake newer than AGIS.exe (see agis_build_util), then launch."""
+"""先运行 ``build.py``，再启动 ``AGIS.exe``。"""
 import glob
 import os
 import subprocess

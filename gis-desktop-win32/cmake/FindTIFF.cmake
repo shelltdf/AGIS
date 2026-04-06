@@ -10,7 +10,7 @@ if(TARGET tiff)
     set(TIFF_INCLUDE_DIRS "")
   endif()
   set(TIFF_LIBRARIES TIFF::TIFF)
-  set(TIFF_VERSION_STRING "4.6.0")
+  set(TIFF_VERSION_STRING "4.7.1")
   include(FindPackageHandleStandardArgs)
   find_package_handle_standard_args(TIFF
     FOUND_VAR TIFF_FOUND

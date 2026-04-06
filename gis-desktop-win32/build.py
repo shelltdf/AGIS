@@ -1,27 +1,16 @@
 #!/usr/bin/env python3
 """Configure and build AGIS (CMake).
 
-- **GDAL 默认 ON**：仓库已含 ``../3rdparty/gdal-*`` 等源码；未设置 ``AGIS_USE_GDAL`` 时向 CMake 传入
-  ``AGIS_USE_GDAL=ON``（与 ``CMakeLists.txt`` 一致）。仅需**无 GIS 的壳程序**时设 **`AGIS_USE_GDAL=off`**。
-- 启用 GDAL 时，CMake 使用捆绑的 **proj** / **gdal** 源码或已有 ``*-install`` 前缀；见
-  `3rdparty/README-GDAL-BUILD.md`。
+调用顺序固定：**先** ``cmake -B`` **再** ``cmake --build``；是否增量编译/链接由 **MSBuild / Ninja** 等后端自行决定，本脚本不对「是否需要配置」或「并行度」做启发式判断。
 
-`test.py` / `run.py` / `publish.py` use `agis_build_util.ensure_project_built()` which **skips**
-invoking this script when ``AGIS.exe`` is newer than: local tooling scripts
-(``build.py``, ``run.py``, ``test.py``, ``publish.py``, ``agis_build_util.py``), ``src/**``,
-``../ui_engine/**``, and CMake inputs (``CMakeLists.txt``, ``cmake/**``, ``app.manifest``). Set
-``AGIS_ALWAYS_BUILD=1`` to force.
-
-This script **only re-runs ``cmake -B`` (configure)** when ``CMakeCache.txt`` is missing or
-CMake-related files are newer than the cache; otherwise only ``cmake --build`` runs
-(incremental link/compile). Use ``AGIS_FORCE_CONFIGURE=1`` to always configure.
+- **GDAL**：未设置 ``AGIS_USE_GDAL`` 时向 CMake 传入 ``AGIS_USE_GDAL=ON``（与 ``CMakeLists.txt`` 一致）。仅需无 GIS 壳程序时设 ``AGIS_USE_GDAL=off``。
+- 启用 GDAL 时若需 SQLite/Expat 预构建，仍由 ``_reconfigure_gdal_after_bundled_deps`` 在配置后尝试（与增量判断无关；详见 ``3rdparty/README-GDAL-BUILD.md``）。
 """
 import os
 import shutil
 import subprocess
 import sys
 from typing import Optional
-
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(ROOT, "build")
@@ -52,7 +41,6 @@ def cmake_prefix_path() -> Optional[str]:
         parts.extend(x.strip() for x in existing.split(os.pathsep) if x.strip())
     if not parts:
         return None
-    # stable unique order
     seen: set[str] = set()
     out: list[str] = []
     for p in parts:
@@ -63,51 +51,8 @@ def cmake_prefix_path() -> Optional[str]:
     return ";".join(x.replace("\\", "/") for x in out)
 
 
-def needs_cmake_configure() -> bool:
-    """True if we must run ``cmake -B`` (first time or CMake inputs changed vs cache)."""
-    env = os.environ.get("AGIS_FORCE_CONFIGURE", "").strip().lower()
-    if env in ("1", "true", "yes", "on"):
-        return True
-    cache = os.path.join(BUILD, "CMakeCache.txt")
-    if not os.path.isfile(cache):
-        return True
-    try:
-        t_cache = os.path.getmtime(cache)
-    except OSError:
-        return True
-
-    def cmake_input_paths() -> list[str]:
-        out: list[str] = []
-        cm = os.path.join(ROOT, "CMakeLists.txt")
-        if os.path.isfile(cm):
-            out.append(cm)
-        mf = os.path.join(ROOT, "app.manifest")
-        if os.path.isfile(mf):
-            out.append(mf)
-        cmake_dir = os.path.join(ROOT, "cmake")
-        if os.path.isdir(cmake_dir):
-            for dp, _, fns in os.walk(cmake_dir):
-                for fn in fns:
-                    if fn.endswith((".cmake", ".txt")):
-                        out.append(os.path.join(dp, fn))
-        return out
-
-    for p in cmake_input_paths():
-        try:
-            if os.path.isfile(p) and os.path.getmtime(p) > t_cache:
-                return True
-        except OSError:
-            return True
-    return False
-
-
 def _reconfigure_gdal_after_bundled_deps(cmake: str, cfg: list[str]) -> None:
-    """PROJ builds ``agis_sqlite3``; bundled Expat builds ``expat``. GDAL needs those ``.lib`` files at
-    configure time for OGR OSM/GPKG and XML-based drivers.
-
-    First ``cmake -B`` often runs before the libs exist; build those targets, clear stale cache
-    entries, and configure again.
-    """
+    """PROJ builds ``agis_sqlite3``; bundled Expat builds ``expat``. GDAL needs those ``.lib`` at configure time."""
     r = subprocess.run(
         [cmake, "--build", BUILD, "--config", "Release", "--target", "agis_sqlite3", "--target", "expat"],
         cwd=ROOT,
@@ -135,44 +80,6 @@ def _reconfigure_gdal_after_bundled_deps(cmake: str, cfg: list[str]) -> None:
     subprocess.check_call(cfg2)
 
 
-def cmake_build_args() -> list[str]:
-    """Args after ``cmake`` for ``--build`` (parallelism).
-
-    On Windows, unbounded parallel MSVC builds of large trees (e.g. bundled GDAL) can hit
-    MSB6003 / C1083 Permission denied on ``.obj`` / ``.tlog`` when many ``cl.exe`` / MSBuild
-    tasks contend, or when two builds target the same ``build/`` dir at once.
-
-    - **AGIS_BUILD_PARALLEL**: ``1`` | ``4`` | ``max`` | empty (default below).
-    - Default on **win32**: ``--parallel N`` with ``N = max(1, min(8, cpu//2))``.
-    - Default elsewhere: ``--parallel`` (tool default, usually all cores).
-    """
-    cmd = ["--build", BUILD, "--config", "Release"]
-    env = os.environ.get("AGIS_BUILD_PARALLEL", "").strip()
-    if env:
-        el = env.lower()
-        if el in ("1", "single", "one"):
-            cmd.extend(["--parallel", "1"])
-        elif el in ("max", "all"):
-            cmd.append("--parallel")
-        elif env.isdigit() and int(env) >= 1:
-            cmd.extend(["--parallel", env])
-        else:
-            print(f"warning: ignoring invalid AGIS_BUILD_PARALLEL={env!r}, using Windows default", file=sys.stderr)
-            if sys.platform == "win32":
-                cpu = os.cpu_count() or 4
-                cmd.extend(["--parallel", str(max(1, min(8, cpu // 2)))])
-            else:
-                cmd.append("--parallel")
-        return cmd
-    if sys.platform == "win32":
-        cpu = os.cpu_count() or 4
-        n = max(1, min(8, cpu // 2))
-        cmd.extend(["--parallel", str(n)])
-    else:
-        cmd.append("--parallel")
-    return cmd
-
-
 def main() -> int:
     os.chdir(ROOT)
     cmake = shutil.which("cmake")
@@ -195,20 +102,10 @@ def main() -> int:
             "AGIS_USE_GDAL=ON: ensure PROJ is built from source (see 3rdparty/README-GDAL-BUILD.md).",
             file=sys.stderr,
         )
-    if needs_cmake_configure():
-        subprocess.check_call(cfg)
-    else:
-        print("CMake configure skipped (unchanged); use AGIS_FORCE_CONFIGURE=1 to re-run.")
+    subprocess.check_call(cfg)
     if use_gdal:
         _reconfigure_gdal_after_bundled_deps(cmake, cfg)
-    bargs = [cmake] + cmake_build_args()
-    if sys.platform == "win32" and not os.environ.get("AGIS_BUILD_PARALLEL", "").strip():
-        print(
-            "Windows build: using limited parallelism (see AGIS_BUILD_PARALLEL in build.py). "
-            "Do not run two builds on the same build/ folder.",
-            file=sys.stderr,
-        )
-    subprocess.check_call(bargs)
+    subprocess.check_call([cmake, "--build", BUILD, "--config", "Release", "--parallel"])
     print("Build OK:", BUILD)
     return 0
 

@@ -12,6 +12,7 @@
 namespace agis::ui {
 
 class Menu;
+class MapCanvas2D;
 
 /**
  * 应用程序对象（类似 QApplication）：**进程内单例**，持有 GUI 后端，统一 `exec()` / `quit`。
@@ -88,14 +89,43 @@ class AGIS_UI_API App {
   using ClientResizeHandler = std::function<void(Widget* root, int client_w, int client_h)>;
   void setClientResizeHandler(ClientResizeHandler h) { client_resize_handler_ = std::move(h); }
   void notifyClientResize(Widget* root, int client_w, int client_h) {
+    last_client_w_ = client_w;
+    last_client_h_ = client_h;
     if (client_resize_handler_) {
       client_resize_handler_(root, client_w, client_h);
     }
   }
 
+  /** 在子控件无窗口尺寸信息时，用最近一次 `notifyClientResize` 的客户区再次调用 `ClientResizeHandler`。 */
+  void relayoutFromLastClientSize() {
+    if (!client_resize_handler_ || rootWidgets_.empty() || last_client_w_ <= 0 || last_client_h_ <= 0) {
+      return;
+    }
+    client_resize_handler_(rootWidgets_.front().get(), last_client_w_, last_client_h_);
+  }
+
   /** 当前在菜单栏展开的 `Menu`（下拉可见）；`nullptr` 表示未展开。由平台在点击外部时关闭。 */
   void setOpenDropDownMenu(Menu* m);
   Menu* openDropDownMenu() const { return open_drop_down_menu_; }
+
+  /**
+   * 演示壳：请求重绘所有已创建顶层窗口（由 Win32 等平台在 `exec()` 里注册）。
+   * 用于子控件在无 `HWND` 情况下触发 `InvalidateRect`（如 Dock 缘条折叠）。
+   */
+  void setInvalidateAllHandler(std::function<void()> fn) { invalidate_all_ = std::move(fn); }
+  void invalidateAll() {
+    if (invalidate_all_) {
+      invalidate_all_();
+    }
+  }
+
+  /** 中键拖拽地图画布时，由平台持有拖拽目标（命中测试可能落在子控件外仍应继续平移）。 */
+  void setMiddleDragCanvas(MapCanvas2D* c) { middle_drag_canvas_ = c; }
+  MapCanvas2D* middleDragCanvas() const { return middle_drag_canvas_; }
+
+  /** `ui_engine_demo`：画布叠层（可见性 / 缩放条）与演示逻辑共用的主画布指针。 */
+  void setDemoMapCanvas(MapCanvas2D* m) { demo_map_canvas_ = m; }
+  MapCanvas2D* demoMapCanvas() const { return demo_map_canvas_; }
 
  private:
   App();
@@ -110,6 +140,12 @@ class AGIS_UI_API App {
   std::wstring status_hint_;
   ClientResizeHandler client_resize_handler_;
   Menu* open_drop_down_menu_{nullptr};
+
+  std::function<void()> invalidate_all_;
+  MapCanvas2D* middle_drag_canvas_{nullptr};
+  MapCanvas2D* demo_map_canvas_{nullptr};
+  int last_client_w_{0};
+  int last_client_h_{0};
 };
 
 }  // namespace agis::ui

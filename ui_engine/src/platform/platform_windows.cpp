@@ -6,10 +6,13 @@
 #include "ui_engine/widget_core.h"
 #include "ui_engine/widgets_mainframe.h"
 
+#include "app/ui_private.h"
+
 #include <algorithm>
 #include <string>
 
 #include <windows.h>
+#include <windowsx.h>
 
 namespace agis::ui {
 
@@ -184,13 +187,18 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       const int y = static_cast<short>(HIWORD(lParam));
       App& app = App::instance();
       app.setPointerClient(x, y);
-      Widget* hit = root ? HitTestWidget(root, x, y, 0, 0) : nullptr;
+      const unsigned buttons = static_cast<unsigned>(wParam) & 0xFFFFu;
+      Widget* hit = nullptr;
+      if (app.middleDragCanvas()) {
+        hit = app.middleDragCanvas();
+      } else {
+        hit = root ? HitTestWidget(root, x, y, 0, 0) : nullptr;
+      }
       Widget* prev = app.hoverWidget();
       const bool hover_changed = (hit != prev);
       if (hover_changed) {
         app.setHoverWidget(hit);
       }
-      const unsigned buttons = static_cast<unsigned>(wParam) & 0xFFFFu;
       if (hit) {
         hit->mouseMoveEvent(x, y, buttons);
       }
@@ -232,6 +240,62 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
           hit->mouseReleaseEvent(x, y, 1);
         }
         InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      return 0;
+    }
+    case WM_LBUTTONDBLCLK: {
+      const int x = static_cast<short>(LOWORD(lParam));
+      const int y = static_cast<short>(HIWORD(lParam));
+      App::instance().setPointerClient(x, y);
+      if (root) {
+        Widget* hit = HitTestWidget(root, x, y, 0, 0);
+        if (dynamic_cast<StatusBarWidget*>(hit)) {
+          App::instance().setStatusHint(
+              L"[Log 演示] GIS 主程序中双击状态栏打开纯文本日志窗；本演示仅更新状态栏文案。");
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      return 0;
+    }
+    case WM_MBUTTONDOWN: {
+      SetFocus(hwnd);
+      const int x = static_cast<short>(LOWORD(lParam));
+      const int y = static_cast<short>(HIWORD(lParam));
+      App::instance().setPointerClient(x, y);
+      if (root) {
+        Widget* hit = HitTestWidget(root, x, y, 0, 0);
+        if (auto* map = dynamic_cast<MapCanvas2D*>(hit)) {
+          App::instance().setMiddleDragCanvas(map);
+          map->middleDown(x, y);
+          SetCapture(hwnd);
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      return 0;
+    }
+    case WM_MBUTTONUP: {
+      const int x = static_cast<short>(LOWORD(lParam));
+      const int y = static_cast<short>(HIWORD(lParam));
+      App::instance().setPointerClient(x, y);
+      if (App::instance().middleDragCanvas()) {
+        App::instance().middleDragCanvas()->middleUp();
+        App::instance().setMiddleDragCanvas(nullptr);
+        ReleaseCapture();
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      return 0;
+    }
+    case WM_MOUSEWHEEL: {
+      const int delta = static_cast<short>(HIWORD(wParam));
+      POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+      ScreenToClient(hwnd, &pt);
+      App::instance().setPointerClient(pt.x, pt.y);
+      if (root) {
+        Widget* hit = HitTestWidget(root, pt.x, pt.y, 0, 0);
+        if (auto* map = dynamic_cast<MapCanvas2D*>(hit)) {
+          map->wheelAt(pt.x, pt.y, delta);
+          InvalidateRect(hwnd, nullptr, FALSE);
+        }
       }
       return 0;
     }
@@ -361,6 +425,13 @@ int PlatformWindows::runEventLoop(App& app) {
         app.notifyClientResize(rw, cw0, ch0);
       }
       root_windows_.push_back(hwnd);
+      app.setInvalidateAllHandler([this]() {
+        for (void* p : root_windows_) {
+          if (p) {
+            InvalidateRect(static_cast<HWND>(p), nullptr, FALSE);
+          }
+        }
+      });
       const int show = first ? show_window_command_ : SW_SHOW;
       ShowWindow(hwnd, show);
       UpdateWindow(hwnd);

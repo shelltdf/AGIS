@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke test: build if needed (same freshness rules as run.py), then verify AGIS.exe exists."""
+"""先运行 ``build.py``，再检查 ``AGIS.exe`` 是否存在。"""
 import glob
 import os
 import sys

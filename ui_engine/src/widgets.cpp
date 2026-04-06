@@ -2,6 +2,10 @@
 
 #include <utility>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace agis::ui {
 
 void Window::setTitle(std::wstring title) {
@@ -21,7 +25,19 @@ void Label::setText(std::wstring t) {
 }
 
 void Label::paintEvent(PaintContext& ctx) {
+#if defined(_WIN32)
+  HDC hdc = static_cast<HDC>(ctx.nativeDevice);
+  if (!hdc || ctx.clip.w <= 0 || ctx.clip.h <= 0) {
+    return;
+  }
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, RGB(90, 95, 105));
+  RECT rc{ctx.clip.x + 4, ctx.clip.y, ctx.clip.x + ctx.clip.w, ctx.clip.y + ctx.clip.h};
+  DrawTextW(hdc, text_.empty() ? L"" : text_.c_str(), -1, &rc,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+#else
   (void)ctx;
+#endif
 }
 
 void PushButton::setText(std::wstring t) {
