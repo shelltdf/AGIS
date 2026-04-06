@@ -1064,9 +1064,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 #if GIS_DESKTOP_HAVE_GDAL
       AppLogLine(L"[GIS] GDAL 已启用：可添加数据图层。");
 #else
-      AppLogLine(L"[GIS] 本构建未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）；「添加数据图层」入口已禁用。需要 GIS 时在 "
-                 L"gis-desktop-win32 下设置 AGIS_USE_GDAL=on 并重新运行 python build.py（依赖见 "
-                 L"3rdparty/README-GDAL-BUILD.md）。");
+      AppLogLine(L"[GIS] 本构建未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）；「添加数据图层」入口已禁用。默认构建应已启用 "
+                 L"GDAL（仓库含 3rdparty 源码）；若曾使用 AGIS_USE_GDAL=off，请去掉该设置后重新运行 python "
+                 L"build.py，并确保 CMake 能完成 GDAL/PROJ（见 3rdparty/README-GDAL-BUILD.md）。");
 #endif
       SetWindowTextW(hwnd, L"AGIS — 地图视图（单文档 SDI）");
       SyncViewMenu(hwnd);
@@ -1232,9 +1232,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       if (id == ID_LAYER_ADD) {
 #if !GIS_DESKTOP_HAVE_GDAL
         MessageBoxW(hwnd,
-                    L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。\n\n请在 gis-desktop-win32 下用 "
-                    L"AGIS_USE_GDAL=on 重新运行 python build.py，并确保 CMake 能找到 GDAL（见 "
-                    L"3rdparty/README-GDAL-BUILD.md）。",
+                    L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。\n\n默认构建应已启用 GDAL（仓库含 3rdparty "
+                    L"源码）。若曾设置 AGIS_USE_GDAL=off，请去掉后重新运行 python build.py；否则请检查 CMake 是否找到 "
+                    L"GDAL/PROJ（见 3rdparty/README-GDAL-BUILD.md）。",
                     L"AGIS", MB_OK | MB_ICONINFORMATION);
 #else
         MapEngine::Instance().OnAddLayerFromDialog(hwnd, GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));

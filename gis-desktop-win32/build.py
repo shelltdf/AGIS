@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Configure and build AGIS (CMake).
 
-- **GDAL default ON**：未设置环境变量时始终向 CMake 传入 ``AGIS_USE_GDAL=ON``（与仓库内 ``3rdparty`` 源码及
-  ``CMakeLists.txt`` 默认一致）。仅需**无 GIS 的壳程序**时设置 **`AGIS_USE_GDAL=off`**。
+- **GDAL 默认 ON**：仓库已含 ``../3rdparty/gdal-*`` 等源码；未设置 ``AGIS_USE_GDAL`` 时向 CMake 传入
+  ``AGIS_USE_GDAL=ON``（与 ``CMakeLists.txt`` 一致）。仅需**无 GIS 的壳程序**时设 **`AGIS_USE_GDAL=off`**。
 - 启用 GDAL 时，CMake 使用捆绑的 **proj** / **gdal** 源码或已有 ``*-install`` 前缀；见
   `3rdparty/README-GDAL-BUILD.md`。
 

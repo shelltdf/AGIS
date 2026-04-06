@@ -1,10 +1,10 @@
 # AGIS 桌面端（Win32）
 
-Windows **本地 Win32 API** 实现的 **SDI** 主程序；默认在含捆绑源码时启用 **GDAL**（可用 `AGIS_USE_GDAL=off` 关闭）。
+Windows **本地 Win32 API** 实现的 **SDI** 主程序。**GDAL 默认开启**：仓库已包含 **`../3rdparty/gdal-3.12.3`**（及 PROJ 等）源码，`CMakeLists.txt` 与 `build.py` 默认 **`AGIS_USE_GDAL=ON`**，无需额外下载 GDAL 才能“打开 GIS”。仅需无 GIS 的壳程序时设置 **`AGIS_USE_GDAL=off`**。
 
 ## 默认构建
 
-仓库含 **`../3rdparty/gdal-3.12.3`** 时，`python build.py` **默认 `AGIS_USE_GDAL=ON`**（链接 GDAL，需满足 `3rdparty/README-GDAL-BUILD.md` 中的依赖）。
+`python build.py` 在未设置环境变量时向 CMake 传入 **`AGIS_USE_GDAL=ON`**，与 `CMakeLists.txt` 默认一致；链接/捆绑 GDAL 的依赖与步骤见 **`../3rdparty/README-GDAL-BUILD.md`**。
 
 若仅需无 GIS 的壳程序（无需 PROJ/SQLite）：
 

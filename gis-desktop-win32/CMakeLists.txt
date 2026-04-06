@@ -16,8 +16,12 @@ if(APPLE)
   enable_language(OBJCXX)
 endif()
 
-option(AGIS_USE_GDAL "Link GDAL for raster/vector layers (needs PROJ + GDAL install or bundled GDAL source)" ON)
-option(AGIS_BUNDLE_GDAL "If no GDAL is found, build from ../3rdparty/gdal-3.12.3 (requires PROJ in CMAKE_PREFIX_PATH)" ON)
+option(AGIS_USE_GDAL
+  "Link GDAL for raster/vector layers. Default ON: repo includes ../3rdparty/gdal-* sources; use bundled build or gdal-install. Set OFF only for a minimal shell without GIS."
+  ON)
+option(AGIS_BUNDLE_GDAL
+  "If GDAL is not found via find_package, build from ../3rdparty/gdal-3.12.3 (PROJ must be available in CMAKE_PREFIX_PATH)"
+  ON)
 
 option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static" OFF)
 option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
