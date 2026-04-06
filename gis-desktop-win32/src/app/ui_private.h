@@ -9,6 +9,11 @@
 #include "ui_engine/export.h"
 #include "ui_engine/widgets_mainframe.h"
 
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
 namespace agis::ui {
 
 /** 左侧图层 Dock 内容（`IDC_LAYER_LIST`，宿主 `AGISLayerPane`）。 */
@@ -32,8 +37,10 @@ class AGIS_UI_API PropsDockPanel : public DockPanel {
 class AGIS_UI_API MapCanvas2D : public Canvas2D {
  public:
   MapCanvas2D() = default;
+  ~MapCanvas2D() override;
   void paintEvent(PaintContext& ctx) override;
   void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void wheelEvent(int client_x, int client_y, int delta) override;
 
   /** 客户区坐标；`delta` 为 Win32 `GET_WHEEL_DELTA_WPARAM` 有符号值。 */
   void wheelAt(int client_x, int client_y, int wheel_delta);
@@ -55,7 +62,22 @@ class AGIS_UI_API MapCanvas2D : public Canvas2D {
   /** 比例设为 100%，并以视口中心为锚点（与滚轮缩放同一套平移修正）。 */
   void resetZoom100();
 
+  /** 从文件加载位图/常见光栅（GDI+），失败返回 false。 */
+  bool loadImageFile(const wchar_t* path);
+  void clearImage();
+  bool hasImage() const { return bitmap_px_ > 0 && bitmap_py_ > 0; }
+
+  /** 当前文档路径（保存用）。 */
+  void setDocumentPath(std::wstring p) { doc_path_ = std::move(p); }
+  const std::wstring& documentPath() const { return doc_path_; }
+
+  /** 将当前位图保存为 PNG/BMP（依扩展名），无图像则 false。 */
+  bool saveImageToFile(const wchar_t* path) const;
+
  private:
+  void releaseBitmap();
+  void fitImageToView();
+
   double pan_x_{0.0};
   double pan_y_{0.0};
   double scale_{1.0};
@@ -63,6 +85,71 @@ class AGIS_UI_API MapCanvas2D : public Canvas2D {
   bool mdrag_{false};
   int mlast_x_{0};
   int mlast_y_{0};
+
+  std::wstring doc_path_;
+  /** GDI+ Bitmap*，不透明指针避免在头文件暴露 GDI+。 */
+  void* gdi_bitmap_{nullptr};
+  int bitmap_px_{0};
+  int bitmap_py_{0};
+};
+
+/** 左侧测试列表一行：`is_header` 表示分组标题行。 */
+struct AGIS_UI_API DemoTestRowSpec {
+  bool is_header{false};
+  std::wstring label;
+  /** `>=0` 可映射到测试工厂；标题行用 `-1`。 */
+  int test_id{-1};
+  /** 为 true 时双击/运行仅提示需组合测试，不挂载控件。 */
+  bool no_root_test{false};
+};
+
+/**
+ * 演示：左侧按头文件分组的控件测试列表（双击 / 右键）。
+ */
+class AGIS_UI_API DemoTestListPanel : public Widget {
+ public:
+  DemoTestListPanel() = default;
+
+  void setSpecs(std::vector<DemoTestRowSpec> specs) { specs_ = std::move(specs); }
+
+  void paintEvent(PaintContext& ctx) override;
+  void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
+  void mousePressEvent(int client_x, int client_y, int button) override;
+  void wheelEvent(int client_x, int client_y, int delta) override;
+
+  /** 由平台 `WM_LBUTTONDBLCLK` 调用。 */
+  void handleDoubleClickAt(int client_x, int client_y);
+
+  /** 客户区坐标下命中行（含滚动），失败返回 false。 */
+  bool computeRowAt(int client_x, int client_y, int* out_row) const;
+
+  void setSelectedRow(int row) { selected_row_ = row; }
+
+ private:
+  static constexpr int kRowH = 26;
+  int rowAtLocalY(int ly) const;
+  void activateRow(int row, bool details_only);
+
+  std::vector<DemoTestRowSpec> specs_;
+  int scroll_y_{0};
+  int hover_row_{-1};
+  int selected_row_{0};
+};
+
+/** 右侧单 Dock 区内三栏之一。 */
+class AGIS_UI_API DemoRightSlotPanel : public DockPanel {
+ public:
+  DemoRightSlotPanel() = default;
+
+  void setSlot(int slot, std::wstring title) {
+    slot_ = slot;
+    title_ = std::move(title);
+  }
+  void paintEvent(PaintContext& ctx) override;
+
+ private:
+  int slot_{0};
+  std::wstring title_;
 };
 
 /**

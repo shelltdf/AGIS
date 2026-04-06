@@ -23,4 +23,7 @@ void RelayoutMainFrameForClientSize(MainFrame* root, int client_w, int client_h)
 /** 工具栏内子控件（如 `ToolButton`）横向排布。 */
 void RelayoutToolBarChildren(ToolBarWidget* bar, int bar_w, int bar_h);
 
+/** 注册演示壳：测试列表回调、多语言菜单刷新。`BuildUiEngineDemoWidgetTree` 末尾已调用一次。 */
+void WireUiEngineDemoShell(MainFrame* root);
+
 }  // namespace agis::ui

@@ -9,10 +9,23 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace agis::ui {
 
 class Menu;
 class MapCanvas2D;
+
+/** 演示壳主题（影响自绘配色）。 */
+enum class UiTheme { kFollowSystem, kLight, kDark };
+
+/** 界面语言。 */
+enum class UiLanguage { kZhCN, kEnglish };
 
 /**
  * 应用程序对象（类似 QApplication）：**进程内单例**，持有 GUI 后端，统一 `exec()` / `quit`。
@@ -127,6 +140,42 @@ class AGIS_UI_API App {
   void setDemoMapCanvas(MapCanvas2D* m) { demo_map_canvas_ = m; }
   MapCanvas2D* demoMapCanvas() const { return demo_map_canvas_; }
 
+  void setUiTheme(UiTheme t);
+  UiTheme uiTheme() const { return ui_theme_; }
+
+  void setUiLanguage(UiLanguage l);
+  UiLanguage uiLanguage() const { return ui_language_; }
+
+#if defined(_WIN32)
+  /** 自绘用的表面/文字色（随主题与语言无关）。 */
+  COLORREF themeColorSurface() const;
+  COLORREF themeColorSurfaceAlt() const;
+  COLORREF themeColorText() const;
+  COLORREF themeColorMuted() const;
+  COLORREF themeColorAccent() const;
+#endif
+
+  using DemoShellInvalidatedHandler = std::function<void()>;
+  void setDemoShellInvalidatedHandler(DemoShellInvalidatedHandler h) { demo_shell_invalidated_ = std::move(h); }
+  void notifyDemoShellInvalidated() {
+    if (demo_shell_invalidated_) {
+      demo_shell_invalidated_();
+    }
+  }
+
+  /** `action`：0 运行、1 详情；`row` 为左侧列表扁平行号。 */
+  using DemoTestRunner = std::function<void(int action, int row)>;
+  void setDemoTestRunner(DemoTestRunner r) { demo_test_runner_ = std::move(r); }
+  void runDemoTestAction(int action, int row) {
+    if (demo_test_runner_) {
+      demo_test_runner_(action, row);
+    }
+  }
+
+  /** Win32 演示窗口句柄（`TaskDialog` / `ShellAbout` 父窗口；由平台在创建 HWND 后设置）。 */
+  void setDemoHostWindow(void* hwnd) { demo_host_hwnd_ = hwnd; }
+  void* demoHostWindow() const { return demo_host_hwnd_; }
+
  private:
   App();
 
@@ -146,6 +195,12 @@ class AGIS_UI_API App {
   MapCanvas2D* demo_map_canvas_{nullptr};
   int last_client_w_{0};
   int last_client_h_{0};
+
+  UiTheme ui_theme_{UiTheme::kLight};
+  UiLanguage ui_language_{UiLanguage::kZhCN};
+  DemoShellInvalidatedHandler demo_shell_invalidated_;
+  DemoTestRunner demo_test_runner_;
+  void* demo_host_hwnd_{nullptr};
 };
 
 }  // namespace agis::ui

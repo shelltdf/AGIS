@@ -290,5 +290,8 @@ if(WIN32 AND AGIS_UI_ENGINE_SHARED)
 endif()
 
 if(MSVC)
+  # 与主程序相同：嵌入 Common Controls 6，否则 `TaskDialog` 等符号在旧 comctl32 上会导致
+  # 进程启动失败（退出码 0xC0000138 STATUS_ORDINAL_NOT_FOUND）。
+  target_sources(ui_engine_demo PRIVATE app.manifest)
   target_compile_options(ui_engine_demo PRIVATE /utf-8)
 endif()

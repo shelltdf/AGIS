@@ -6,10 +6,14 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #include <stdio.h>
 #include <windows.h>
+#include <objidl.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
 #endif
 
 namespace agis::ui {
@@ -30,7 +34,7 @@ void WidgetRootClientOrigin(const Widget* w, int* ox, int* oy) {
 }
 
 /** 与 `ui_engine_demo` 中菜单栏行高、`syncGeometryWithBarCell(..., bar_h)` 一致。 */
-constexpr int kMenuDropItemRowHeight = 24;
+constexpr int kMenuDropItemRowHeight = 26;
 
 #if defined(_WIN32)
 void Win32Fill(PaintContext& ctx, COLORREF rgb) {
@@ -118,7 +122,7 @@ bool MenuBarWidget::containsPointForHitTest(int client_x, int client_y, int orig
 
 void MainFrame::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  Win32Fill(ctx, RGB(240, 242, 245));
+  Win32Fill(ctx, App::instance().themeColorSurface());
 #else
   (void)ctx;
 #endif
@@ -126,9 +130,10 @@ void MainFrame::paintEvent(PaintContext& ctx) {
 
 void MenuBarWidget::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  const bool hot = App::instance().hoverWidget() == this;
-  Win32Fill(ctx, hot ? RGB(232, 235, 240) : RGB(248, 249, 250));
-  Win32Edge(ctx, RGB(210, 214, 220));
+  const App& app = App::instance();
+  const bool hot = app.hoverWidget() == this;
+  Win32Fill(ctx, hot ? app.themeColorSurfaceAlt() : app.themeColorSurface());
+  Win32Edge(ctx, app.themeColorMuted());
 #else
   (void)ctx;
 #endif
@@ -185,17 +190,18 @@ void Menu::closeDropDownVisual() {
 
 void Menu::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  const bool hot = App::instance().hoverWidget() == this;
+  const App& app = App::instance();
+  const bool hot = app.hoverWidget() == this;
   const int strip = std::min(bar_strip_h_, ctx.clip.h);
   RECT rc_full{ctx.clip.x, ctx.clip.y, ctx.clip.x + ctx.clip.w, ctx.clip.y + ctx.clip.h};
   HDC hdc = static_cast<HDC>(ctx.nativeDevice);
   if (strip > 0 && strip <= ctx.clip.h) {
     RECT rc_top{ctx.clip.x, ctx.clip.y, ctx.clip.x + ctx.clip.w, ctx.clip.y + strip};
-    HBRUSH bt = CreateSolidBrush(hot ? RGB(220, 228, 238) : RGB(248, 249, 250));
+    HBRUSH bt = CreateSolidBrush(hot ? app.themeColorSurfaceAlt() : app.themeColorSurface());
     FillRect(hdc, &rc_top, bt);
     DeleteObject(bt);
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(28, 28, 32));
+    SetTextColor(hdc, app.themeColorText());
     RECT rc_title = rc_top;
     rc_title.left += 8;
     DrawTextW(hdc, title_.empty() ? L"Menu" : title_.c_str(), -1, &rc_title,
@@ -203,14 +209,14 @@ void Menu::paintEvent(PaintContext& ctx) {
   }
   if (ctx.clip.h > strip) {
     RECT rc_drop{ctx.clip.x, ctx.clip.y + strip, ctx.clip.x + ctx.clip.w, ctx.clip.y + ctx.clip.h};
-    HBRUSH bd = CreateSolidBrush(RGB(252, 252, 254));
+    HBRUSH bd = CreateSolidBrush(app.themeColorSurfaceAlt());
     FillRect(hdc, &rc_drop, bd);
     DeleteObject(bd);
-    HBRUSH be = CreateSolidBrush(RGB(200, 204, 212));
+    HBRUSH be = CreateSolidBrush(app.themeColorMuted());
     FrameRect(hdc, &rc_full, be);
     DeleteObject(be);
   } else {
-    HBRUSH be = CreateSolidBrush(RGB(210, 214, 220));
+    HBRUSH be = CreateSolidBrush(app.themeColorMuted());
     FrameRect(hdc, &rc_full, be);
     DeleteObject(be);
   }
@@ -252,9 +258,11 @@ void MenuItem::paintEvent(PaintContext& ctx) {
   if (!visible()) {
     return;
   }
-  const bool hot = App::instance().hoverWidget() == this;
-  Win32Fill(ctx, hot ? RGB(230, 236, 245) : RGB(252, 252, 253));
-  Win32DrawTextLeft(ctx, text_.empty() ? L"Item" : text_.c_str(), enabled_ ? RGB(25, 28, 35) : RGB(160, 160, 165));
+  const App& app = App::instance();
+  const bool hot = app.hoverWidget() == this;
+  Win32Fill(ctx, hot ? app.themeColorSurfaceAlt() : app.themeColorSurface());
+  Win32DrawTextLeft(ctx, text_.empty() ? L"Item" : text_.c_str(),
+                    enabled_ ? app.themeColorText() : app.themeColorMuted());
 #else
   (void)ctx;
 #endif
@@ -279,8 +287,12 @@ void MenuItem::mouseMoveEvent(int client_x, int client_y, unsigned buttons) {
 void MenuItem::mousePressEvent(int client_x, int client_y, int button) {
   (void)client_x;
   (void)client_y;
-  (void)button;
-  if (!enabled()) {
+  if (!enabled() || button != 1) {
+    return;
+  }
+  if (on_activate_) {
+    on_activate_();
+    App::instance().setOpenDropDownMenu(nullptr);
     return;
   }
   std::wstring hint = L"Choose: ";
@@ -298,10 +310,11 @@ int ToolButton::intrinsicWidth() const {
 
 void ToolButton::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  const bool hot = App::instance().hoverWidget() == this;
-  Win32Fill(ctx, hot ? RGB(210, 216, 226) : RGB(228, 232, 238));
-  Win32Edge(ctx, RGB(180, 186, 196));
-  Win32DrawTextCenter(ctx, text_.empty() ? L"?" : text_.c_str(), RGB(30, 34, 42));
+  const App& app = App::instance();
+  const bool hot = app.hoverWidget() == this;
+  Win32Fill(ctx, hot ? app.themeColorSurfaceAlt() : app.themeColorSurface());
+  Win32Edge(ctx, app.themeColorMuted());
+  Win32DrawTextCenter(ctx, text_.empty() ? L"?" : text_.c_str(), app.themeColorText());
 #else
   (void)ctx;
 #endif
@@ -323,6 +336,10 @@ void ToolButton::mousePressEvent(int client_x, int client_y, int button) {
   if (button != 1) {
     return;
   }
+  if (on_activate_) {
+    on_activate_();
+    return;
+  }
   std::wstring h = L"Toolbar 点击: ";
   h += text_.empty() ? L"(empty)" : text_;
   App::instance().setStatusHint(std::move(h));
@@ -330,9 +347,10 @@ void ToolButton::mousePressEvent(int client_x, int client_y, int button) {
 
 void ToolBarWidget::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  const bool hot = App::instance().hoverWidget() == this;
-  Win32Fill(ctx, hot ? RGB(220, 224, 230) : RGB(235, 238, 242));
-  Win32Edge(ctx, RGB(200, 204, 210));
+  const App& app = App::instance();
+  const bool hot = app.hoverWidget() == this;
+  Win32Fill(ctx, hot ? app.themeColorSurfaceAlt() : app.themeColorSurface());
+  Win32Edge(ctx, app.themeColorMuted());
 #else
   (void)ctx;
 #endif
@@ -354,13 +372,13 @@ void ToolBarWidget::mousePressEvent(int client_x, int client_y, int button) {
 
 void StatusBarWidget::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
-  Win32Fill(ctx, RGB(220, 223, 228));
-  Win32Edge(ctx, RGB(180, 184, 192));
-  wchar_t buf[512]{};
   const App& app = App::instance();
+  Win32Fill(ctx, app.themeColorSurfaceAlt());
+  Win32Edge(ctx, app.themeColorMuted());
+  wchar_t buf[512]{};
   const std::wstring& hint = app.statusHint();
   _snwprintf_s(buf, _TRUNCATE, L"Pointer: (%d, %d)   %ls", app.pointerClientX(), app.pointerClientY(), hint.c_str());
-  Win32DrawTextLeft(ctx, buf, RGB(25, 28, 35));
+  Win32DrawTextLeft(ctx, buf, app.themeColorText());
 #else
   (void)ctx;
 #endif
@@ -481,15 +499,128 @@ void PropsDockPanel::paintEvent(PaintContext& ctx) {
 #endif
 }
 
+MapCanvas2D::~MapCanvas2D() { releaseBitmap(); }
+
+void MapCanvas2D::releaseBitmap() {
+#if defined(_WIN32)
+  if (gdi_bitmap_) {
+    delete static_cast<Gdiplus::Bitmap*>(gdi_bitmap_);
+    gdi_bitmap_ = nullptr;
+  }
+#endif
+  bitmap_px_ = 0;
+  bitmap_py_ = 0;
+}
+
+void MapCanvas2D::clearImage() {
+  releaseBitmap();
+  doc_path_.clear();
+}
+
+bool MapCanvas2D::loadImageFile(const wchar_t* path) {
+#if defined(_WIN32)
+  if (!path || !path[0]) {
+    return false;
+  }
+  clearImage();
+  auto* b = Gdiplus::Bitmap::FromFile(path);
+  if (!b || b->GetLastStatus() != Gdiplus::Ok) {
+    delete b;
+    return false;
+  }
+  gdi_bitmap_ = b;
+  bitmap_px_ = static_cast<int>(b->GetWidth());
+  bitmap_py_ = static_cast<int>(b->GetHeight());
+  doc_path_ = path;
+  fitImageToView();
+  return true;
+#else
+  (void)path;
+  return false;
+#endif
+}
+
+#if defined(_WIN32)
+int GetImageEncoderClsid(const wchar_t* mime, CLSID* clsid) {
+  UINT n = 0;
+  UINT sz = 0;
+  Gdiplus::GetImageEncodersSize(&n, &sz);
+  if (sz == 0) {
+    return -1;
+  }
+  std::vector<BYTE> buf(sz);
+  auto* info = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buf.data());
+  Gdiplus::GetImageEncoders(n, sz, info);
+  for (UINT i = 0; i < n; ++i) {
+    if (wcscmp(info[i].MimeType, mime) == 0) {
+      *clsid = info[i].Clsid;
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+#endif
+
+bool MapCanvas2D::saveImageToFile(const wchar_t* path) const {
+#if defined(_WIN32)
+  if (!path || !path[0] || !gdi_bitmap_) {
+    return false;
+  }
+  const wchar_t* dot = wcsrchr(path, L'.');
+  CLSID clsid{};
+  if (dot && (_wcsicmp(dot, L".png") == 0)) {
+    if (GetImageEncoderClsid(L"image/png", &clsid) < 0) {
+      return false;
+    }
+  } else {
+    if (GetImageEncoderClsid(L"image/bmp", &clsid) < 0) {
+      return false;
+    }
+  }
+  auto* bmp = static_cast<Gdiplus::Bitmap*>(gdi_bitmap_);
+  return bmp->Save(path, &clsid, nullptr) == Gdiplus::Ok;
+#else
+  (void)path;
+  return false;
+#endif
+}
+
+void MapCanvas2D::fitImageToView() {
+  const int cw = geometry().w;
+  const int ch = geometry().h;
+  if (cw <= 0 || ch <= 0 || bitmap_px_ <= 0 || bitmap_py_ <= 0) {
+    return;
+  }
+  const double sx = static_cast<double>(cw) * 0.92 / static_cast<double>(bitmap_px_);
+  const double sy = static_cast<double>(ch) * 0.92 / static_cast<double>(bitmap_py_);
+  scale_ = std::clamp(std::min(sx, sy), 0.05, 8.0);
+  pan_x_ = (static_cast<double>(cw) - static_cast<double>(bitmap_px_) * scale_) * 0.5;
+  pan_y_ = (static_cast<double>(ch) - static_cast<double>(bitmap_py_) * scale_) * 0.5;
+}
+
 void MapCanvas2D::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
   HDC hdc = static_cast<HDC>(ctx.nativeDevice);
   if (!hdc || ctx.clip.w <= 0 || ctx.clip.h <= 0) {
     return;
   }
-  const bool hot = App::instance().hoverWidget() == this;
-  Win32Fill(ctx, hot ? RGB(232, 238, 250) : RGB(245, 248, 255));
-  Win32Edge(ctx, RGB(160, 175, 200));
+  const App& app = App::instance();
+  const bool hot = app.hoverWidget() == this;
+  Win32Fill(ctx, hot ? app.themeColorSurfaceAlt() : app.themeColorSurface());
+  Win32Edge(ctx, RGB(130, 150, 190));
+
+  if (gdi_bitmap_) {
+    Gdiplus::Graphics g(hdc);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    auto* bmp = static_cast<Gdiplus::Bitmap*>(gdi_bitmap_);
+    Gdiplus::Matrix m(
+        static_cast<Gdiplus::REAL>(scale_), 0.f, 0.f, static_cast<Gdiplus::REAL>(scale_),
+        static_cast<Gdiplus::REAL>(ctx.clip.x + pan_x_), static_cast<Gdiplus::REAL>(ctx.clip.y + pan_y_));
+    g.SetTransform(&m);
+    g.DrawImage(bmp, 0, 0, static_cast<INT>(bitmap_px_), static_cast<INT>(bitmap_py_));
+    g.ResetTransform();
+  }
 
   if (show_grid_) {
     const int step = std::max(8, static_cast<int>(40.0 * scale_));
@@ -511,12 +642,14 @@ void MapCanvas2D::paintEvent(PaintContext& ctx) {
 
   wchar_t buf[192]{};
   const int pct = static_cast<int>(std::lround(scale_ * 100.0));
-  _snwprintf_s(buf, _TRUNCATE, L"2D canvas — %d%% — 中键平移 · 滚轮缩放（指针锚点）", pct);
-  Win32DrawTextLeft(ctx, buf, RGB(45, 55, 75));
+  _snwprintf_s(buf, _TRUNCATE, L"2D · %d%% · 中键拖拽平移 · 滚轮缩放", pct);
+  Win32DrawTextLeft(ctx, buf, app.themeColorText());
 #else
   (void)ctx;
 #endif
 }
+
+void MapCanvas2D::wheelEvent(int client_x, int client_y, int delta) { wheelAt(client_x, client_y, delta); }
 
 void MapCanvas2D::wheelAt(int client_x, int client_y, int wheel_delta) {
 #if defined(_WIN32)
@@ -527,7 +660,7 @@ void MapCanvas2D::wheelAt(int client_x, int client_y, int wheel_delta) {
   const double ly = static_cast<double>(client_y - oy);
   const double factor = wheel_delta > 0 ? 1.1 : 1.0 / 1.1;
   const double old_s = scale_;
-  scale_ = std::clamp(scale_ * factor, 0.25, 4.0);
+  scale_ = std::clamp(scale_ * factor, 0.05, 8.0);
   const double ratio = scale_ / old_s;
   pan_x_ = lx - (lx - pan_x_) * ratio;
   pan_y_ = ly - (ly - pan_y_) * ratio;
@@ -555,16 +688,20 @@ void MapCanvas2D::zoomAtCenter(double factor) {
   const double lx = static_cast<double>(cw) * 0.5;
   const double ly = static_cast<double>(ch) * 0.5;
   const double old_s = scale_;
-  scale_ = std::clamp(scale_ * factor, 0.25, 4.0);
+  scale_ = std::clamp(scale_ * factor, 0.05, 8.0);
   const double ratio = scale_ / old_s;
   pan_x_ = lx - (lx - pan_x_) * ratio;
   pan_y_ = ly - (ly - pan_y_) * ratio;
 }
 
 void MapCanvas2D::fitViewDemo() {
-  pan_x_ = 0.0;
-  pan_y_ = 0.0;
-  scale_ = 1.0;
+  if (hasImage()) {
+    fitImageToView();
+  } else {
+    pan_x_ = 0.0;
+    pan_y_ = 0.0;
+    scale_ = 1.0;
+  }
 }
 
 void MapCanvas2D::originDemo() {
@@ -809,6 +946,172 @@ void MapCenterHintOverlay::paintEvent(PaintContext& ctx) {
 #if defined(_WIN32)
   Win32Fill(ctx, RGB(255, 255, 255));
   Win32Edge(ctx, RGB(150, 165, 190));
+#else
+  (void)ctx;
+#endif
+}
+
+int DemoTestListPanel::rowAtLocalY(int ly) const {
+  const int y = ly + scroll_y_;
+  if (y < 0) {
+    return -1;
+  }
+  return y / kRowH;
+}
+
+bool DemoTestListPanel::computeRowAt(int client_x, int client_y, int* out_row) const {
+  int ox = 0;
+  int oy = 0;
+  WidgetRootClientOrigin(this, &ox, &oy);
+  const int lx = client_x - ox;
+  const int ly = client_y - oy;
+  const Rect g = geometry();
+  if (lx < 0 || ly < 0 || lx >= g.w || ly >= g.h) {
+    return false;
+  }
+  const int r = rowAtLocalY(ly);
+  if (r < 0 || r >= static_cast<int>(specs_.size())) {
+    return false;
+  }
+  if (out_row) {
+    *out_row = r;
+  }
+  return true;
+}
+
+void DemoTestListPanel::activateRow(int row, bool details_only) {
+  if (row < 0 || row >= static_cast<int>(specs_.size())) {
+    return;
+  }
+  const auto& s = specs_[static_cast<size_t>(row)];
+  if (s.is_header) {
+    return;
+  }
+  App::instance().runDemoTestAction(details_only ? 1 : 0, row);
+}
+
+void DemoTestListPanel::paintEvent(PaintContext& ctx) {
+#if defined(_WIN32)
+  HDC hdc = static_cast<HDC>(ctx.nativeDevice);
+  const App& app = App::instance();
+  Win32Fill(ctx, app.themeColorSurfaceAlt());
+  Win32Edge(ctx, RGB(180, 188, 200));
+
+  const int total_h = static_cast<int>(specs_.size()) * kRowH;
+  const int view_h = ctx.clip.h;
+  const int max_scroll = std::max(0, total_h - view_h);
+  if (scroll_y_ > max_scroll) {
+    scroll_y_ = max_scroll;
+  }
+
+  SetBkMode(hdc, TRANSPARENT);
+  HFONT font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  const HGDIOBJ oldf = SelectObject(hdc, font);
+
+  for (int i = 0; i < static_cast<int>(specs_.size()); ++i) {
+    const int y = i * kRowH - scroll_y_;
+    if (y + kRowH < 0 || y > view_h) {
+      continue;
+    }
+    const auto& s = specs_[static_cast<size_t>(i)];
+    RECT row_rc{ctx.clip.x, ctx.clip.y + y, ctx.clip.x + ctx.clip.w, ctx.clip.y + y + kRowH};
+    if (i == selected_row_) {
+      HBRUSH hi = CreateSolidBrush(RGB(88, 120, 220));
+      FillRect(hdc, &row_rc, hi);
+      DeleteObject(hi);
+      SetTextColor(hdc, RGB(255, 255, 255));
+    } else if (i == hover_row_) {
+      HBRUSH hi = CreateSolidBrush(app.themeColorSurface());
+      FillRect(hdc, &row_rc, hi);
+      SetTextColor(hdc, app.themeColorText());
+    } else if (s.is_header) {
+      HBRUSH hi = CreateSolidBrush(RGB(230, 232, 238));
+      FillRect(hdc, &row_rc, hi);
+      SetTextColor(hdc, app.themeColorMuted());
+    } else {
+      SetTextColor(hdc, app.themeColorText());
+    }
+
+    RECT text_rc{row_rc.left + 10, row_rc.top + 2, row_rc.right - 6, row_rc.bottom - 2};
+    const wchar_t* prefix = s.is_header ? L"" : (s.no_root_test ? L"◆ " : L"  ");
+    std::wstring line = prefix;
+    line += s.label;
+    DrawTextW(hdc, line.c_str(), -1, &text_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  }
+
+  SelectObject(hdc, oldf);
+  DeleteObject(font);
+#else
+  (void)ctx;
+#endif
+}
+
+void DemoTestListPanel::mouseMoveEvent(int client_x, int client_y, unsigned buttons) {
+  (void)buttons;
+  int row = -1;
+  if (computeRowAt(client_x, client_y, &row)) {
+    hover_row_ = row;
+  } else {
+    hover_row_ = -1;
+  }
+  App::instance().setStatusHint(L"测试列表 — 双击运行；右键运行/详情");
+}
+
+void DemoTestListPanel::mousePressEvent(int client_x, int client_y, int button) {
+  if (button != 1) {
+    return;
+  }
+  int row = -1;
+  if (computeRowAt(client_x, client_y, &row)) {
+    selected_row_ = row;
+  }
+  App::instance().invalidateAll();
+}
+
+void DemoTestListPanel::wheelEvent(int client_x, int client_y, int delta) {
+  (void)client_x;
+  (void)client_y;
+  const int step = kRowH * 3;
+  scroll_y_ -= (delta / 120) * step;
+  if (scroll_y_ < 0) {
+    scroll_y_ = 0;
+  }
+  App::instance().invalidateAll();
+}
+
+void DemoTestListPanel::handleDoubleClickAt(int client_x, int client_y) {
+  int row = -1;
+  if (!computeRowAt(client_x, client_y, &row)) {
+    return;
+  }
+  const auto& s = specs_[static_cast<size_t>(row)];
+  if (s.is_header) {
+    return;
+  }
+#if defined(_WIN32)
+  if (s.no_root_test) {
+    MessageBoxW(static_cast<HWND>(App::instance().demoHostWindow()),
+                L"该项无法作为根控件单独测试。\n请通过主框架组合场景或其它集成测试查看。",
+                L"ui_engine 演示", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+#endif
+  activateRow(row, false);
+}
+
+void DemoRightSlotPanel::paintEvent(PaintContext& ctx) {
+#if defined(_WIN32)
+  const App& app = App::instance();
+  Win32Fill(ctx, app.themeColorSurfaceAlt());
+  Win32Edge(ctx, RGB(170, 178, 192));
+  wchar_t buf[128]{};
+  _snwprintf_s(buf, _TRUNCATE, L"Dock #%d — %s", slot_ + 1, title_.empty() ? L"（空）" : title_.c_str());
+  HDC hdc = static_cast<HDC>(ctx.nativeDevice);
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, app.themeColorMuted());
+  RECT rc{ctx.clip.x + 10, ctx.clip.y + 8, ctx.clip.x + ctx.clip.w - 8, ctx.clip.y + ctx.clip.h - 6};
+  DrawTextW(hdc, buf, -1, &rc, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 #else
   (void)ctx;
 #endif

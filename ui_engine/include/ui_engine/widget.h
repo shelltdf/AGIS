@@ -34,6 +34,9 @@ class AGIS_UI_API Widget {
 
   void addChild(std::unique_ptr<Widget> child);
 
+  /** 从父节点移除并销毁子控件（`child` 须为直接子节点）。 */
+  void removeChild(Widget* child);
+
   bool visible() const { return visible_; }
   void setVisible(bool on);
 
@@ -60,6 +63,13 @@ class AGIS_UI_API Widget {
     (void)client_x;
     (void)client_y;
     (void)button;
+  }
+
+  /** 滚轮：`delta` 为 Win32 `GET_WHEEL_DELTA_WPARAM` 有符号值（通常 ±120）。 */
+  virtual void wheelEvent(int client_x, int client_y, int delta) {
+    (void)client_x;
+    (void)client_y;
+    (void)delta;
   }
 
  protected:

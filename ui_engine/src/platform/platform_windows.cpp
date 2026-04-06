@@ -92,6 +92,47 @@ bool WidgetIsDescendantOf(Widget* w, Widget* ancestor) {
   return false;
 }
 
+/** 控件左上角在顶层客户区中的坐标（与命中测试一致）。 */
+void WidgetScreenOrigin(Widget* w, int* ox, int* oy) {
+  *ox = 0;
+  *oy = 0;
+  for (Widget* p = w; p; p = p->parent()) {
+    const Rect g = p->geometry();
+    *ox += g.x;
+    *oy += g.y;
+  }
+}
+
+bool ClientPointInWidget(Widget* w, int client_x, int client_y) {
+  if (!w || !w->visible()) {
+    return false;
+  }
+  int ox = 0;
+  int oy = 0;
+  WidgetScreenOrigin(w, &ox, &oy);
+  const Rect g = w->geometry();
+  return client_x >= ox && client_y >= oy && client_x < ox + g.w && client_y < oy + g.h;
+}
+
+void TrySetDemoWindowIcon(HWND hwnd, HINSTANCE hinst) {
+  wchar_t path[MAX_PATH]{};
+  if (GetModuleFileNameW(hinst, path, MAX_PATH) == 0) {
+    return;
+  }
+  wchar_t* slash = wcsrchr(path, L'\\');
+  if (!slash) {
+    return;
+  }
+  *(slash + 1) = L'\0';
+  wcscat_s(path, L"ui_engine_demo.ico");
+  HICON hi = static_cast<HICON>(LoadImageW(nullptr, path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE));
+  if (!hi) {
+    return;
+  }
+  SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hi));
+  SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(hi));
+}
+
 Widget* HitTestWidget(Widget* w, int client_x, int client_y, int origin_x, int origin_y) {
   if (!w || !w->visible()) {
     return nullptr;
@@ -243,13 +284,46 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       }
       return 0;
     }
+    case WM_RBUTTONDOWN: {
+      SetFocus(hwnd);
+      const int x = static_cast<short>(LOWORD(lParam));
+      const int y = static_cast<short>(HIWORD(lParam));
+      App::instance().setPointerClient(x, y);
+      if (!root) {
+        return 0;
+      }
+      Widget* hit = HitTestWidget(root, x, y, 0, 0);
+      if (auto* list = dynamic_cast<DemoTestListPanel*>(hit)) {
+        int row = 0;
+        if (list->computeRowAt(x, y, &row)) {
+          list->setSelectedRow(row);
+        }
+        HMENU menu = CreatePopupMenu();
+        const bool zh = App::instance().uiLanguage() == UiLanguage::kZhCN;
+        AppendMenuW(menu, MF_STRING, 1, zh ? L"运行" : L"Run");
+        AppendMenuW(menu, MF_STRING, 2, zh ? L"详情" : L"Details");
+        POINT pt{x, y};
+        ClientToScreen(hwnd, &pt);
+        const UINT cmd =
+            TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, nullptr);
+        DestroyMenu(menu);
+        if (cmd == 1 || cmd == 2) {
+          App::instance().runDemoTestAction(cmd == 2 ? 1 : 0, row);
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+      }
+      return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
     case WM_LBUTTONDBLCLK: {
       const int x = static_cast<short>(LOWORD(lParam));
       const int y = static_cast<short>(HIWORD(lParam));
       App::instance().setPointerClient(x, y);
       if (root) {
         Widget* hit = HitTestWidget(root, x, y, 0, 0);
-        if (dynamic_cast<StatusBarWidget*>(hit)) {
+        if (auto* list = dynamic_cast<DemoTestListPanel*>(hit)) {
+          list->handleDoubleClickAt(x, y);
+        } else if (dynamic_cast<StatusBarWidget*>(hit)) {
           App::instance().setStatusHint(
               L"[Log 演示] GIS 主程序中双击状态栏打开纯文本日志窗；本演示仅更新状态栏文案。");
         }
@@ -262,6 +336,14 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       const int x = static_cast<short>(LOWORD(lParam));
       const int y = static_cast<short>(HIWORD(lParam));
       App::instance().setPointerClient(x, y);
+      MapCanvas2D* demo_map = App::instance().demoMapCanvas();
+      if (demo_map && ClientPointInWidget(demo_map, x, y)) {
+        App::instance().setMiddleDragCanvas(demo_map);
+        demo_map->middleDown(x, y);
+        SetCapture(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+      }
       if (root) {
         Widget* hit = HitTestWidget(root, x, y, 0, 0);
         if (auto* map = dynamic_cast<MapCanvas2D*>(hit)) {
@@ -292,6 +374,17 @@ LRESULT CALLBACK DemoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       App::instance().setPointerClient(pt.x, pt.y);
       if (root) {
         Widget* hit = HitTestWidget(root, pt.x, pt.y, 0, 0);
+        if (auto* list = dynamic_cast<DemoTestListPanel*>(hit)) {
+          list->wheelEvent(pt.x, pt.y, delta);
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
+        MapCanvas2D* demo_map = App::instance().demoMapCanvas();
+        if (demo_map && ClientPointInWidget(demo_map, pt.x, pt.y)) {
+          demo_map->wheelAt(pt.x, pt.y, delta);
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
         if (auto* map = dynamic_cast<MapCanvas2D*>(hit)) {
           map->wheelAt(pt.x, pt.y, delta);
           InvalidateRect(hwnd, nullptr, FALSE);
@@ -416,6 +509,8 @@ int PlatformWindows::runEventLoop(App& app) {
       if (!hwnd) {
         continue;
       }
+      App::instance().setDemoHostWindow(hwnd);
+      TrySetDemoWindowIcon(hwnd, hinst);
       SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(rw));
       RECT crc{};
       GetClientRect(hwnd, &crc);

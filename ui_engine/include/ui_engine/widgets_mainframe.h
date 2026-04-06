@@ -9,6 +9,7 @@
 #include "ui_engine/export.h"
 #include "ui_engine/widget_core.h"
 
+#include <functional>
 #include <string>
 
 namespace agis::ui {
@@ -83,6 +84,9 @@ class AGIS_UI_API MenuItem : public Widget {
   void setEnabled(bool on) { enabled_ = on; }
   bool enabled() const { return enabled_; }
 
+  /** 若设置，点击时优先调用（用于演示菜单命令）。 */
+  void setOnActivate(std::function<void()> fn) { on_activate_ = std::move(fn); }
+
   void paintEvent(PaintContext& ctx) override;
   void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
   void mousePressEvent(int client_x, int client_y, int button) override;
@@ -90,6 +94,7 @@ class AGIS_UI_API MenuItem : public Widget {
  private:
   std::wstring text_;
   bool enabled_{true};
+  std::function<void()> on_activate_;
 };
 
 /** 工具栏上的图标/文字按钮（演示壳自绘；可置于 `ToolBarWidget` 子节点）。 */
@@ -103,12 +108,16 @@ class AGIS_UI_API ToolButton : public Widget {
   /** 与 `RelayoutToolBarChildren` 配合的近似宽度（像素）。 */
   int intrinsicWidth() const;
 
+  /** 若设置，左键点击时优先调用（用于与菜单项一致的演示命令）。 */
+  void setOnActivate(std::function<void()> fn) { on_activate_ = std::move(fn); }
+
   void paintEvent(PaintContext& ctx) override;
   void mouseMoveEvent(int client_x, int client_y, unsigned buttons) override;
   void mousePressEvent(int client_x, int client_y, int button) override;
 
  private:
   std::wstring text_;
+  std::function<void()> on_activate_;
 };
 
 /**
