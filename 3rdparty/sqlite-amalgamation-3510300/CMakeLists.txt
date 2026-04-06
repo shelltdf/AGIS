@@ -16,7 +16,10 @@ endif()
 
 add_library(agis_sqlite3 STATIC "${AGIS_SQLITE_ROOT}/sqlite3.c")
 target_include_directories(agis_sqlite3 PUBLIC "${AGIS_SQLITE_ROOT}")
-target_compile_definitions(agis_sqlite3 PRIVATE SQLITE_ENABLE_COLUMN_METADATA=1)
+target_compile_definitions(agis_sqlite3 PRIVATE
+  SQLITE_ENABLE_COLUMN_METADATA=1
+  SQLITE_ENABLE_RTREE=1
+)
 if(MSVC)
   # 与全工程 /MD 对齐；子目录内仅 CMP0091+MSVC_RUNTIME 在部分 CMake/生成器下仍生成空 RuntimeLibrary
   target_compile_options(agis_sqlite3 PRIVATE

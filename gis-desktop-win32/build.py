@@ -7,8 +7,10 @@
   `3rdparty/README-GDAL-BUILD.md`。
 
 `test.py` / `run.py` / `publish.py` use `agis_build_util.ensure_project_built()` which **skips**
-invoking this script when ``AGIS.exe`` is newer than ``src/**`` and CMake inputs (set
-``AGIS_ALWAYS_BUILD=1`` to force).
+invoking this script when ``AGIS.exe`` is newer than: local tooling scripts
+(``build.py``, ``run.py``, ``test.py``, ``publish.py``, ``agis_build_util.py``), ``src/**``,
+``../ui_engine/**``, and CMake inputs (``CMakeLists.txt``, ``cmake/**``, ``app.manifest``). Set
+``AGIS_ALWAYS_BUILD=1`` to force.
 
 This script **only re-runs ``cmake -B`` (configure)** when ``CMakeCache.txt`` is missing or
 CMake-related files are newer than the cache; otherwise only ``cmake --build`` runs
@@ -99,6 +101,40 @@ def needs_cmake_configure() -> bool:
     return False
 
 
+def _reconfigure_gdal_after_bundled_deps(cmake: str, cfg: list[str]) -> None:
+    """PROJ builds ``agis_sqlite3``; bundled Expat builds ``expat``. GDAL needs those ``.lib`` files at
+    configure time for OGR OSM/GPKG and XML-based drivers.
+
+    First ``cmake -B`` often runs before the libs exist; build those targets, clear stale cache
+    entries, and configure again.
+    """
+    r = subprocess.run(
+        [cmake, "--build", BUILD, "--config", "Release", "--target", "agis_sqlite3", "--target", "expat"],
+        cwd=ROOT,
+    )
+    if r.returncode != 0:
+        print(
+            "warning: prebuild of agis_sqlite3/expat failed; OGR OSM/GPKG or Expat-based drivers may remain disabled. "
+            "Build those targets manually then run `cmake -B build ...` again.",
+            file=sys.stderr,
+        )
+        return
+    cfg2 = list(cfg)
+    for uvar in (
+        "GDAL_USE_SQLITE3",
+        "SQLite3_LIBRARY",
+        "OGR_ENABLE_DRIVER_SQLITE",
+        "OGR_ENABLE_DRIVER_OSM",
+        "GDAL_USE_EXPAT",
+        "EXPAT_INCLUDE_DIR",
+        "EXPAT_LIBRARY",
+        "EXPAT_USE_STATIC_LIBS",
+    ):
+        cfg2.extend(["-U", uvar])
+    print("Re-running CMake so bundled GDAL picks up SQLite3 + Expat...", file=sys.stderr)
+    subprocess.check_call(cfg2)
+
+
 def cmake_build_args() -> list[str]:
     """Args after ``cmake`` for ``--build`` (parallelism).
 
@@ -163,6 +199,8 @@ def main() -> int:
         subprocess.check_call(cfg)
     else:
         print("CMake configure skipped (unchanged); use AGIS_FORCE_CONFIGURE=1 to re-run.")
+    if use_gdal:
+        _reconfigure_gdal_after_bundled_deps(cmake, cfg)
     bargs = [cmake] + cmake_build_args()
     if sys.platform == "win32" and not os.environ.get("AGIS_BUILD_PARALLEL", "").strip():
         print(

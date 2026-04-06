@@ -1255,7 +1255,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrFilter = L"栅格/矢量\0"
-                      L"*.tif;*.tiff;*.png;*.jpg;*.jp2;*.img;*.shp;*.geojson;*.json;*.gpkg;*.kml;*.vrt\0"
+                      L"*.tif;*.tiff;*.png;*.jpg;*.jp2;*.img;*.shp;*.geojson;*.json;*.gpkg;*.kml;*.vrt;*.osm;*.pbf\0"
                       L"所有文件\0"
                       L"*.*\0\0";
     ofn.nFilterIndex = 1;
@@ -1264,15 +1264,8 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
       return false;
     }
     const std::string utf8 = Utf8FromWide(path);
-    unsigned gflags = GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | GDAL_OF_UPDATE;
-    GDALDataset* ds = static_cast<GDALDataset*>(GDALOpenEx(utf8.c_str(), gflags, nullptr, nullptr, nullptr));
+    GDALDataset* ds = agis_detail::OpenGdalDatasetForLocalFile(path, utf8, err);
     if (!ds) {
-      gflags = GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED;
-      ds = static_cast<GDALDataset*>(GDALOpenEx(utf8.c_str(), gflags, nullptr, nullptr, nullptr));
-    }
-    if (!ds) {
-      err = L"无法打开数据源：";
-      err += path;
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
@@ -1672,7 +1665,7 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
   ofn.lpstrFilter = L"栅格/矢量\0"
-                    L"*.tif;*.tiff;*.png;*.jpg;*.jp2;*.img;*.shp;*.geojson;*.json;*.gpkg;*.kml;*.vrt\0"
+                    L"*.tif;*.tiff;*.png;*.jpg;*.jp2;*.img;*.shp;*.geojson;*.json;*.gpkg;*.kml;*.vrt;*.osm;*.pbf\0"
                     L"所有文件\0"
                     L"*.*\0\0";
   ofn.nFilterIndex = 1;

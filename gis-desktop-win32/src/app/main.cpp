@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <string>
 
+#include "app/help_data_drivers.h"
 #include "app/resource.h"
 #include "app/ui_font.h"
 #include "core/app_log.h"
@@ -989,6 +990,7 @@ HMENU BuildMenu() {
   AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(theme), L"主题(&T)");
 
   HMENU help = CreateMenu();
+  AppendMenuW(help, MF_STRING, ID_HELP_DATA_DRIVERS, L"数据驱动说明(&D)...");
   AppendMenuW(help, MF_STRING, ID_HELP_ABOUT, L"关于(&A)...");
   AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"帮助(&H)");
 
@@ -1098,6 +1100,12 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       }
       break;
     }
+    case WM_KEYDOWN:
+      if (wParam == VK_F1) {
+        ShowDataDriversHelp(hwnd);
+        return 0;
+      }
+      break;
     case WM_MOUSEWHEEL:
       if (ForwardWheelToMapIfOver(wParam, lParam)) {
         return 0;
@@ -1130,6 +1138,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
           case ID_VIEW_MODE_3D:
             s = L"3D 模式（占位） — 无全局快捷键";
+            break;
+          case ID_HELP_DATA_DRIVERS:
+            s = L"数据驱动说明（图层类型、GDAL 格式、输入方式） — F1";
             break;
           case ID_HELP_ABOUT:
             s = L"关于 AGIS — 无全局快捷键";
@@ -1239,6 +1250,10 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 #else
         MapEngine::Instance().OnAddLayerFromDialog(hwnd, GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
 #endif
+        return 0;
+      }
+      if (id == ID_HELP_DATA_DRIVERS) {
+        ShowDataDriversHelp(hwnd);
         return 0;
       }
       if (id == ID_HELP_ABOUT) {

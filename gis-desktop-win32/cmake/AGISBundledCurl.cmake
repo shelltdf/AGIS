@@ -25,4 +25,56 @@ set(CURL_ZLIB "OFF" CACHE STRING "curl: no zlib dep unless added to AGIS" FORCE)
 set(CURL_USE_LIBPSL OFF CACHE BOOL "curl: no libpsl (AGIS)" FORCE)
 set(CURL_USE_LIBSSH2 OFF CACHE BOOL "curl: no libssh2 (AGIS)" FORCE)
 
+# MSVC + CMake 4.1: empty or invalid CMAKE_RC_COMPILER makes CMakeRCInformation.cmake:14 call
+# get_filename_component(..., NAME_WE) with no path and fail inside curl's try_compile.
+if(MSVC)
+  set(_agis_rc_ok FALSE)
+  if(CMAKE_RC_COMPILER AND NOT CMAKE_RC_COMPILER STREQUAL "")
+    if(EXISTS "${CMAKE_RC_COMPILER}")
+      set(_agis_rc_ok TRUE)
+    endif()
+  endif()
+  if(NOT _agis_rc_ok)
+    unset(CMAKE_RC_COMPILER CACHE)
+    unset(_agis_rc CACHE)
+    find_program(_agis_rc NAMES rc.exe)
+    if(NOT _agis_rc AND DEFINED ENV{WindowsSdkDir})
+      foreach(_sub IN ITEMS "x64" "x86")
+        foreach(_ver IN ITEMS "$ENV{WindowsSDKVersion}" "10.0.0.0")
+          find_program(_agis_rc NAMES rc.exe
+            PATHS
+              "$ENV{WindowsSdkDir}/bin/${_ver}/${_sub}"
+              "$ENV{WindowsSdkDir}/bin/${_sub}"
+            NO_DEFAULT_PATH
+          )
+          if(_agis_rc)
+            break()
+          endif()
+        endforeach()
+        if(_agis_rc)
+          break()
+        endif()
+      endforeach()
+    endif()
+    if(NOT _agis_rc)
+      file(GLOB _agis_rc_glob
+        "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/rc.exe"
+        "C:/Program Files/Windows Kits/10/bin/*/x64/rc.exe"
+      )
+      if(_agis_rc_glob)
+        list(SORT _agis_rc_glob COMPARE NATURAL ORDER DESCENDING)
+        list(GET _agis_rc_glob 0 _agis_rc)
+      endif()
+    endif()
+    if(_agis_rc)
+      set(CMAKE_RC_COMPILER "${_agis_rc}" CACHE FILEPATH "Windows Resource Compiler (AGIS bundled curl)" FORCE)
+    else()
+      message(FATAL_ERROR
+        "AGIS: rc.exe not found (needed for MSVC resource tooling). "
+        "Install the Windows SDK (Visual Studio Installer → Individual components) or run CMake from "
+        "\"x64 Native Tools Command Prompt for VS\" so rc.exe is on PATH.")
+    endif()
+  endif()
+endif()
+
 add_subdirectory("${_agis_curl_src}" "${CMAKE_BINARY_DIR}/agis_bundled_curl")

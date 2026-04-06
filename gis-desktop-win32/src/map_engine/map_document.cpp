@@ -7,6 +7,7 @@
 #include "ui_engine/gdiplus_ui.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -504,18 +505,9 @@ bool MapDocument::AddLayerFromFile(const std::wstring& path, std::wstring& err) 
         L"python build.py 并确保 CMake 配置成功（依赖见 3rdparty/README-GDAL-BUILD.md）。若仅需壳程序，请用 AGIS_USE_GDAL=off 编译。";
   return false;
 #else
-  GDALAllRegister();
   const std::string utf8 = Utf8FromWide(path);
-  unsigned openFlags = GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | GDAL_OF_UPDATE;
-  GDALDataset* ds = static_cast<GDALDataset*>(
-      GDALOpenEx(utf8.c_str(), openFlags, nullptr, nullptr, nullptr));
+  GDALDataset* ds = agis_detail::OpenGdalDatasetForLocalFile(path, utf8, err);
   if (!ds) {
-    openFlags = GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED;
-    ds = static_cast<GDALDataset*>(GDALOpenEx(utf8.c_str(), openFlags, nullptr, nullptr, nullptr));
-  }
-  if (!ds) {
-    err = L"无法打开数据源：";
-    err += path;
     return false;
   }
   std::wstring base = path;
@@ -822,3 +814,145 @@ void MapDocument::SetDisplayProjection(MapDisplayProjection p) {
   displayProjection = p;
   MapProj_InvalidateBoundsCache();
 }
+
+#if GIS_DESKTOP_HAVE_GDAL
+namespace agis_detail {
+
+namespace {
+
+bool PathLooksLikeOsm(const std::string& u8) {
+  if (u8.size() < 4) {
+    return false;
+  }
+  auto tail_lower = [&u8](size_t len) {
+    std::string s = u8.substr(u8.size() - len);
+    for (char& c : s) {
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+  };
+  if (u8.size() >= 8 && tail_lower(8) == ".osm.pbf") {
+    return true;
+  }
+  if (tail_lower(4) == ".pbf") {
+    return true;
+  }
+  if (tail_lower(4) == ".osm") {
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+GDALDataset* OpenGdalDatasetForLocalFile(const std::wstring& pathWide, const std::string& utf8Path,
+                                         std::wstring& err) {
+  GDALAllRegister();
+  const unsigned kV = GDAL_OF_VERBOSE_ERROR;
+  /** 每次重试前会 `CPLErrorReset()`，须在当次失败后立刻记下 CPL 信息，否则最终被清空。 */
+  std::string last_cpl_utf8;
+
+  auto try_open = [&](unsigned flags, const char* const* allowed_drivers,
+                      const char* const* open_options) -> GDALDataset* {
+    CPLErrorReset();
+    GDALDataset* ds = static_cast<GDALDataset*>(
+        GDALOpenEx(utf8Path.c_str(), flags, allowed_drivers, open_options, nullptr));
+    if (!ds) {
+      const char* msg = CPLGetLastErrorMsg();
+      if (msg && msg[0]) {
+        last_cpl_utf8 = msg;
+      }
+    }
+    return ds;
+  };
+
+  static const char* kOsmOnly[] = {"OSM", nullptr};
+  static const char* kOsmSqliteIndex[] = {"USE_CUSTOM_INDEXING=NO", nullptr};
+
+  /** OSM Identify 在文件头中查找 `OSMHeader`；默认仅读入约 1KB，大文件首 blob 极罕见情况下可增大。 */
+  struct OsmHeaderIngestGuard {
+    const char* prev{};
+    OsmHeaderIngestGuard() {
+      prev = CPLGetThreadLocalConfigOption("GDAL_INGESTED_BYTES_AT_OPEN", nullptr);
+      CPLSetThreadLocalConfigOption("GDAL_INGESTED_BYTES_AT_OPEN", "1048576");
+    }
+    ~OsmHeaderIngestGuard() {
+      CPLSetThreadLocalConfigOption("GDAL_INGESTED_BYTES_AT_OPEN", prev);
+    }
+  };
+
+  if (PathLooksLikeOsm(utf8Path)) {
+    const OsmHeaderIngestGuard ingest_guard{};
+    if (GDALDataset* ds = try_open(GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, kOsmOnly, nullptr)) {
+      return ds;
+    }
+    if (GDALDataset* ds = try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, kOsmOnly, nullptr)) {
+      return ds;
+    }
+    if (GDALDataset* ds = try_open(GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, kOsmOnly, kOsmSqliteIndex)) {
+      return ds;
+    }
+    if (GDALDataset* ds =
+            try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, kOsmOnly, kOsmSqliteIndex)) {
+      return ds;
+    }
+  }
+
+  if (GDALDataset* ds = try_open(GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, nullptr, nullptr)) {
+    return ds;
+  }
+  if (GDALDataset* ds = try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, nullptr, nullptr)) {
+    return ds;
+  }
+  if (GDALDataset* ds = try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | GDAL_OF_UPDATE | kV, nullptr,
+                                 nullptr)) {
+    return ds;
+  }
+  if (GDALDataset* ds =
+          try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | GDAL_OF_UPDATE, nullptr, nullptr)) {
+    return ds;
+  }
+  if (GDALDataset* ds = try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED, nullptr, nullptr)) {
+    return ds;
+  }
+
+  if (PathLooksLikeOsm(utf8Path)) {
+    if (GDALDataset* ds = try_open(GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, nullptr, kOsmSqliteIndex)) {
+      return ds;
+    }
+    if (GDALDataset* ds = try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | kV, nullptr, kOsmSqliteIndex)) {
+      return ds;
+    }
+    if (GDALDataset* ds = try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED | GDAL_OF_UPDATE | kV, nullptr,
+                                   kOsmSqliteIndex)) {
+      return ds;
+    }
+    if (GDALDataset* ds = try_open(GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED, nullptr, kOsmSqliteIndex)) {
+      return ds;
+    }
+  }
+
+  err = L"无法打开数据源：";
+  err += pathWide;
+  err += L"\n";
+  if (!last_cpl_utf8.empty()) {
+    err += WideFromUtf8(last_cpl_utf8.c_str());
+    err += L"\n";
+  }
+  if (PathLooksLikeOsm(utf8Path) && !GDALGetDriverByName("OSM")) {
+    err += L"OGR 未注册 OSM 驱动（本 GDAL 构建可能未编入 OSM/SQLite；捆绑构建请在 CMake 中启用 GDAL_USE_SQLITE3 与 OGR_ENABLE_DRIVER_OSM）。\n";
+  }
+  if (last_cpl_utf8.empty()) {
+    VSIStatBufL st{};
+    if (VSIStatL(utf8Path.c_str(), &st) != 0) {
+      err += L"文件不存在或当前进程无法访问该路径（权限/占用/路径编码）。\n";
+    }
+  }
+  if (PathLooksLikeOsm(utf8Path)) {
+    err += L"（若为整 planet .osm.pbf，体积极大，OGR 可能无法打开或需极长时间；建议先用区域 extract 测试。）";
+  }
+  return nullptr;
+}
+
+}  // namespace agis_detail
+#endif  // GIS_DESKTOP_HAVE_GDAL

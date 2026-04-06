@@ -7,7 +7,10 @@ if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" CACHE STRING "MSVC CRT" FORCE)
 endif()
 
-project(agis_desktop LANGUAGES CXX)
+# C + CXX: bundled libcurl / PROJ / GDAL use C; MSVC also needs RC (rc.exe) initialized when C is
+# used — project(C CXX) sets CMAKE_RC_COMPILER early. CXX-only projects can leave RC unset so
+# CMake 4.1 try_compile in add_subdirectory(curl) fails in CMakeRCInformation.cmake.
+project(agis_desktop LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -177,6 +180,7 @@ endif()
 
 add_executable(agis_desktop WIN32
   src/app/main.cpp
+  src/app/help_data_drivers.cpp
   src/map_engine/map_layer.cpp
   src/map_engine/map_layer_driver.cpp
   src/map_engine/map_layer_driver_gdal.cpp

@@ -11,6 +11,7 @@
 /** 与 MapDisplayProjection 顺序一致，共 8 项（40150–40157） */
 #define ID_VIEW_PROJ_FIRST 40150
 #define ID_VIEW_PROJ_LAST 40157
+#define ID_HELP_DATA_DRIVERS 40200
 #define ID_HELP_ABOUT 40201
 #define ID_LANG_ZH 40301
 #define ID_LANG_EN 40302
