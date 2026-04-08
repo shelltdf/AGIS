@@ -295,3 +295,40 @@ if(MSVC)
   target_sources(ui_engine_demo PRIVATE app.manifest)
   target_compile_options(ui_engine_demo PRIVATE /utf-8)
 endif()
+
+# 6 个数据转换后端命令行工具（3 类型互转 => 6 过程）
+add_library(agis_convert_backend_common STATIC
+  src/tools/convert_backend_common.cpp
+)
+target_include_directories(agis_convert_backend_common PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(MSVC)
+  target_compile_options(agis_convert_backend_common PRIVATE /utf-8)
+endif()
+
+set(_agis_convert_tools
+  agis_convert_gis_to_model
+  agis_convert_gis_to_tile
+  agis_convert_model_to_gis
+  agis_convert_model_to_tile
+  agis_convert_tile_to_gis
+  agis_convert_tile_to_model
+)
+
+foreach(_tool IN LISTS _agis_convert_tools)
+  add_executable(${_tool} src/tools/${_tool}.cpp)
+  target_include_directories(${_tool} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(${_tool} PRIVATE agis_convert_backend_common)
+  if(MSVC)
+    target_compile_options(${_tool} PRIVATE /utf-8)
+  endif()
+endforeach()
+
+add_dependencies(agis_desktop ${_agis_convert_tools})
+if(WIN32)
+  foreach(_tool IN LISTS _agis_convert_tools)
+    add_custom_command(TARGET agis_desktop POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:${_tool}>
+        $<TARGET_FILE_DIR:agis_desktop>)
+  endforeach()
+endif()

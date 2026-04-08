@@ -51,6 +51,8 @@ class MapLayer {
 
   bool IsLayerVisible() const { return layerVisible_; }
   void SetLayerVisible(bool on) { layerVisible_ = on; }
+  /** 供 .gis 持久化使用的数据源标识（文件路径/URL/名称）。 */
+  std::wstring SourcePathForSave() const { return sourcePathForDriver(); }
 
  protected:
   explicit MapLayer(std::unique_ptr<MapLayerDriver> driver);

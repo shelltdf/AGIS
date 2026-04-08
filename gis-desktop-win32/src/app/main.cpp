@@ -1,9 +1,14 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #include "app/help_data_drivers.h"
 #include "app/resource.h"
@@ -56,6 +61,8 @@ HWND g_hwndProps = nullptr;
 HWND g_hwndPropsStrip = nullptr;
 HWND g_hwndStatus = nullptr;
 HWND g_hwndLogDlg = nullptr;
+HWND g_hwndConvertDlg = nullptr;
+std::wstring g_currentGisPath;
 
 /** 左侧 Dock View 内列表区宽度（不含缘条） */
 int g_layerContentW = 236;
@@ -83,6 +90,7 @@ const wchar_t kLayerClass[] = L"AGISLayerPane";
 const wchar_t kMapClass[] = L"AGISMapHost";
 const wchar_t kPropsClass[] = L"AGISPropsPane";
 const wchar_t kLogClass[] = L"AGISLogWindow";
+const wchar_t kConvertClass[] = L"AGISDataConvertWindow";
 
 /** WM_MOUSEWHEEL 发往焦点窗口；焦点在工具栏/侧栏时转发到地图，且 lParam 为屏幕坐标。 */
 static bool ForwardWheelToMapIfOver(WPARAM wParam, LPARAM lParam) {
@@ -939,9 +947,805 @@ void ShowAbout(HWND owner) {
   (void)owner;
 }
 
+void WriteConvertLog(HWND hwnd, const wchar_t* line) {
+  HWND hLog = GetDlgItem(hwnd, IDC_CONV_LOG);
+  if (!hLog || !line) {
+    return;
+  }
+  const int len = GetWindowTextLengthW(hLog);
+  SendMessageW(hLog, EM_SETSEL, static_cast<WPARAM>(len), static_cast<LPARAM>(len));
+  std::wstring s = line;
+  s += L"\r\n";
+  SendMessageW(hLog, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(s.c_str()));
+}
+
+std::wstring CurrentWindowTitle() {
+  if (g_currentGisPath.empty()) {
+    return L"AGIS — 地图视图（单文档 SDI）";
+  }
+  return std::wstring(L"AGIS — ") + g_currentGisPath;
+}
+
+void SyncMainTitle() {
+  if (g_hwndMain) {
+    SetWindowTextW(g_hwndMain, CurrentWindowTitle().c_str());
+  }
+}
+
+std::wstring XmlEscape(const std::wstring& s) {
+  std::wstring out;
+  out.reserve(s.size() + 16);
+  for (wchar_t ch : s) {
+    switch (ch) {
+      case L'&':
+        out += L"&amp;";
+        break;
+      case L'<':
+        out += L"&lt;";
+        break;
+      case L'>':
+        out += L"&gt;";
+        break;
+      case L'"':
+        out += L"&quot;";
+        break;
+      case L'\'':
+        out += L"&apos;";
+        break;
+      default:
+        out.push_back(ch);
+        break;
+    }
+  }
+  return out;
+}
+
+std::wstring XmlUnescape(const std::wstring& s) {
+  std::wstring out = s;
+  auto rep = [&out](const wchar_t* from, const wchar_t* to) {
+    size_t pos = 0;
+    const size_t fromLen = wcslen(from);
+    const size_t toLen = wcslen(to);
+    while ((pos = out.find(from, pos)) != std::wstring::npos) {
+      out.replace(pos, fromLen, to);
+      pos += toLen;
+    }
+  };
+  rep(L"&lt;", L"<");
+  rep(L"&gt;", L">");
+  rep(L"&quot;", L"\"");
+  rep(L"&apos;", L"'");
+  rep(L"&amp;", L"&");
+  return out;
+}
+
+std::wstring GetXmlAttr(const std::wstring& line, const wchar_t* key) {
+  const std::wstring k = std::wstring(key) + L"=\"";
+  const size_t p0 = line.find(k);
+  if (p0 == std::wstring::npos) {
+    return L"";
+  }
+  const size_t p1 = p0 + k.size();
+  const size_t p2 = line.find(L"\"", p1);
+  if (p2 == std::wstring::npos || p2 <= p1) {
+    return L"";
+  }
+  return XmlUnescape(line.substr(p1, p2 - p1));
+}
+
+bool ParseBoolAttr(const std::wstring& line, const wchar_t* key, bool def) {
+  const std::wstring s = GetXmlAttr(line, key);
+  if (s.empty()) {
+    return def;
+  }
+  return !(s == L"0" || s == L"false" || s == L"False" || s == L"FALSE");
+}
+
+int ParseIntAttr(const std::wstring& line, const wchar_t* key, int def) {
+  const std::wstring s = GetXmlAttr(line, key);
+  if (s.empty()) {
+    return def;
+  }
+  return _wtoi(s.c_str());
+}
+
+double ParseDoubleAttr(const std::wstring& line, const wchar_t* key, double def) {
+  const std::wstring s = GetXmlAttr(line, key);
+  if (s.empty()) {
+    return def;
+  }
+  return _wtof(s.c_str());
+}
+
+std::wstring DriverKindToTag(MapLayerDriverKind kind) {
+  switch (kind) {
+    case MapLayerDriverKind::kGdalFile:
+      return L"gdal-file";
+    case MapLayerDriverKind::kTmsXyz:
+      return L"tms-xyz";
+    case MapLayerDriverKind::kWmts:
+      return L"wmts";
+    case MapLayerDriverKind::kArcGisRestJson:
+      return L"arcgis-rest-json";
+    case MapLayerDriverKind::kSoapPlaceholder:
+      return L"soap";
+    case MapLayerDriverKind::kWmsPlaceholder:
+      return L"wms";
+    default:
+      return L"unknown";
+  }
+}
+
+MapLayerDriverKind DriverKindFromTag(const std::wstring& s) {
+  if (s == L"tms-xyz") {
+    return MapLayerDriverKind::kTmsXyz;
+  }
+  if (s == L"wmts") {
+    return MapLayerDriverKind::kWmts;
+  }
+  if (s == L"arcgis-rest-json") {
+    return MapLayerDriverKind::kArcGisRestJson;
+  }
+  if (s == L"soap") {
+    return MapLayerDriverKind::kSoapPlaceholder;
+  }
+  if (s == L"wms") {
+    return MapLayerDriverKind::kWmsPlaceholder;
+  }
+  return MapLayerDriverKind::kGdalFile;
+}
+
+void RefreshUiAfterDocumentReload() {
+  if (g_hwndLayer) {
+    if (HWND lb = GetDlgItem(g_hwndLayer, IDC_LAYER_LIST)) {
+      MapEngine::Instance().RefreshLayerList(lb);
+    }
+  }
+  g_layerSelIndex = -1;
+  if (g_hwndProps) {
+    RefreshPropsPanel(g_hwndProps);
+  }
+  if (g_hwndMap) {
+    InvalidateRect(g_hwndMap, nullptr, FALSE);
+  }
+}
+
+bool SaveGisXmlTo(const std::wstring& path) {
+  std::wofstream ofs(path);
+  if (!ofs.is_open()) {
+    return false;
+  }
+  const auto& doc = MapEngine::Instance().Document();
+  ofs << L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+  ofs << L"<agis-gis version=\"1.0\">\n";
+  ofs << L"  <display projection=\"" << static_cast<int>(doc.GetDisplayProjection()) << L"\"";
+  ofs << L" showGrid=\"" << (doc.GetShowLatLonGrid() ? 1 : 0) << L"\"";
+  ofs << L" viewMinX=\"" << doc.view.minX << L"\" viewMinY=\"" << doc.view.minY << L"\"";
+  ofs << L" viewMaxX=\"" << doc.view.maxX << L"\" viewMaxY=\"" << doc.view.maxY << L"\"/>\n";
+  ofs << L"  <layers count=\"" << doc.layers.size() << L"\">\n";
+  for (const auto& lyr : doc.layers) {
+    if (!lyr) {
+      continue;
+    }
+    const std::wstring src = lyr->SourcePathForSave();
+    const std::wstring name = lyr->DisplayName();
+    ofs << L"    <layer driver=\"" << DriverKindToTag(lyr->DriverKind()) << L"\"";
+    ofs << L" visible=\"" << (lyr->IsLayerVisible() ? 1 : 0) << L"\"";
+    ofs << L" source=\"" << XmlEscape(src) << L"\"";
+    ofs << L" name=\"" << XmlEscape(name) << L"\"/>\n";
+  }
+  ofs << L"  </layers>\n";
+  ofs << L"</agis-gis>\n";
+  return true;
+}
+
+std::wstring ParentDirOfPath(const std::wstring& path) {
+  const size_t p = path.find_last_of(L"\\/");
+  if (p == std::wstring::npos) {
+    return L"";
+  }
+  return path.substr(0, p);
+}
+
+bool IsLikelyAbsoluteOrUrl(const std::wstring& s) {
+  if (s.size() >= 2 && s[1] == L':') {
+    return true;  // C:\...
+  }
+  if (!s.empty() && (s[0] == L'\\' || s[0] == L'/')) {
+    return true;
+  }
+  return s.find(L"://") != std::wstring::npos || s.find(L":\\\\") != std::wstring::npos;
+}
+
+std::wstring JoinPathSimple(const std::wstring& dir, const std::wstring& file) {
+  if (dir.empty()) {
+    return file;
+  }
+  if (dir.back() == L'\\' || dir.back() == L'/') {
+    return dir + file;
+  }
+  return dir + L"\\" + file;
+}
+
+bool LoadGisXmlFrom(const std::wstring& path, std::wstring* err) {
+  std::wifstream ifs(path);
+  if (!ifs.is_open()) {
+    if (err) {
+      *err = L"无法打开文件。";
+    }
+    return false;
+  }
+  std::wstringstream ss;
+  ss << ifs.rdbuf();
+  const std::wstring xml = ss.str();
+  if (xml.find(L"<agis-gis") == std::wstring::npos) {
+    if (err) {
+      *err = L"不是有效的 .gis(XML) 文件。";
+    }
+    return false;
+  }
+  auto& doc = MapEngine::Instance().Document();
+  const std::wstring gisDir = ParentDirOfPath(path);
+  doc.layers.clear();
+  doc.SetDisplayProjection(static_cast<MapDisplayProjection>(ParseIntAttr(xml, L"projection", 0)));
+  doc.SetShowLatLonGrid(ParseBoolAttr(xml, L"showGrid", true));
+
+  doc.view.minX = ParseDoubleAttr(xml, L"viewMinX", doc.view.minX);
+  doc.view.minY = ParseDoubleAttr(xml, L"viewMinY", doc.view.minY);
+  doc.view.maxX = ParseDoubleAttr(xml, L"viewMaxX", doc.view.maxX);
+  doc.view.maxY = ParseDoubleAttr(xml, L"viewMaxY", doc.view.maxY);
+
+  size_t pos = 0;
+  int loaded = 0;
+  int failed = 0;
+  while ((pos = xml.find(L"<layer ", pos)) != std::wstring::npos) {
+    const size_t end = xml.find(L"/>", pos);
+    if (end == std::wstring::npos) {
+      break;
+    }
+    const std::wstring line = xml.substr(pos, end - pos + 2);
+    pos = end + 2;
+
+    const MapLayerDriverKind kind = DriverKindFromTag(GetXmlAttr(line, L"driver"));
+    const bool visible = ParseBoolAttr(line, L"visible", true);
+    std::wstring source = GetXmlAttr(line, L"source");
+    if (!source.empty() && !IsLikelyAbsoluteOrUrl(source)) {
+      source = JoinPathSimple(gisDir, source);
+    }
+
+    std::wstring loadErr;
+    bool ok = false;
+    switch (kind) {
+      case MapLayerDriverKind::kTmsXyz:
+        ok = doc.AddLayerFromTmsUrl(source, loadErr);
+        break;
+      case MapLayerDriverKind::kWmts:
+        ok = doc.AddLayerFromWmtsUrl(source, loadErr);
+        break;
+      case MapLayerDriverKind::kArcGisRestJson:
+        ok = doc.AddLayerFromArcGisRestJsonUrl(source, loadErr);
+        break;
+      default:
+        ok = doc.AddLayerFromFile(source, loadErr);
+        break;
+    }
+    if (!ok) {
+      ++failed;
+      AppLogLine(std::wstring(L"[GIS] 图层恢复失败：") + source + L"，原因：" + loadErr);
+      continue;
+    }
+    ++loaded;
+    if (!doc.layers.empty()) {
+      doc.layers.back()->SetLayerVisible(visible);
+    }
+  }
+  if (!doc.view.valid()) {
+    doc.FitViewToLayers();
+  }
+  AppLogLine(L"[GIS] 已读取 .gis 文件：图层与显示状态已恢复。");
+  AppLogLine(std::wstring(L"[GIS] 恢复图层成功/失败：") + std::to_wstring(loaded) + L"/" + std::to_wstring(failed));
+  return true;
+}
+
+std::wstring PromptOpenGisPath(HWND owner) {
+  wchar_t path[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = owner;
+  ofn.lpstrFilter = L"AGIS GIS 文件 (*.gis)\0*.gis\0XML 文件 (*.xml)\0*.xml\0所有文件 (*.*)\0*.*\0";
+  ofn.lpstrFile = path;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  if (GetOpenFileNameW(&ofn) == 0) {
+    return L"";
+  }
+  return path;
+}
+
+std::wstring PromptSaveGisPath(HWND owner, const std::wstring& seed) {
+  wchar_t path[MAX_PATH]{};
+  if (!seed.empty()) {
+    wcsncpy_s(path, seed.c_str(), _TRUNCATE);
+  }
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = owner;
+  ofn.lpstrFilter = L"AGIS GIS 文件 (*.gis)\0*.gis\0XML 文件 (*.xml)\0*.xml\0";
+  ofn.lpstrFile = path;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.lpstrDefExt = L"gis";
+  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+  if (GetSaveFileNameW(&ofn) == 0) {
+    return L"";
+  }
+  return path;
+}
+
+void GisNew(HWND owner) {
+  auto& doc = MapEngine::Instance().Document();
+  doc.layers.clear();
+  doc.SetDisplayProjection(MapDisplayProjection::kGeographicWgs84);
+  doc.SetShowLatLonGrid(true);
+  doc.view = DefaultGeographicView();
+  RefreshUiAfterDocumentReload();
+  g_currentGisPath.clear();
+  SyncMainTitle();
+  AppLogLine(L"[GIS] 新建 .gis 文档。");
+  MessageBoxW(owner, L"已新建空白 .gis 文档（XML）。", L"AGIS", MB_OK | MB_ICONINFORMATION);
+}
+
+void GisOpen(HWND owner) {
+  const std::wstring path = PromptOpenGisPath(owner);
+  if (path.empty()) {
+    return;
+  }
+  std::wstring err;
+  if (!LoadGisXmlFrom(path, &err)) {
+    MessageBoxW(owner, err.c_str(), L"打开 .gis 失败", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  g_currentGisPath = path;
+  RefreshUiAfterDocumentReload();
+  SyncMainTitle();
+  AppLogLine(std::wstring(L"[GIS] 打开文件：") + path);
+}
+
+void GisSaveAs(HWND owner) {
+  const std::wstring path = PromptSaveGisPath(owner, g_currentGisPath);
+  if (path.empty()) {
+    return;
+  }
+  if (!SaveGisXmlTo(path)) {
+    MessageBoxW(owner, L"保存失败。", L"保存 .gis", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  g_currentGisPath = path;
+  SyncMainTitle();
+  AppLogLine(std::wstring(L"[GIS] 已保存：") + path);
+}
+
+void GisSave(HWND owner) {
+  if (g_currentGisPath.empty()) {
+    GisSaveAs(owner);
+    return;
+  }
+  if (!SaveGisXmlTo(g_currentGisPath)) {
+    MessageBoxW(owner, L"保存失败。", L"保存 .gis", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  AppLogLine(std::wstring(L"[GIS] 已保存：") + g_currentGisPath);
+}
+
+void LayoutConvertWindow(HWND hwnd) {
+  RECT rc{};
+  GetClientRect(hwnd, &rc);
+  const int w = rc.right - rc.left;
+  const int h = rc.bottom - rc.top;
+  const int m = 10;
+  const int topH = std::max(180, h / 2);
+  const int colW = (w - m * 4) / 3;
+
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE), m, m + 20, colW, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE), m, m + 48, colW, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), m, m + 76, colW - 70, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_BROWSE), m + colW - 66, m + 76, 66, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_INFO), m, m + 106, colW, topH - 110, TRUE);
+
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_SETTING), m * 2 + colW, m + 20, colW, topH - 24, TRUE);
+
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), m * 3 + colW * 2, m + 20, colW, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE), m * 3 + colW * 2, m + 48, colW, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), m * 3 + colW * 2, m + 76, colW - 70, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_BROWSE), m * 3 + colW * 2 + colW - 66, m + 76, 66, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_INFO), m * 3 + colW * 2, m + 106, colW, topH - 110, TRUE);
+
+  const int y1 = m + topH + 8;
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m, y1, w - m * 2 - 90, 22, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 - 1, 100, 26, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG), m, y1 + 28, w - m * 2, 40, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_LOG), m, y1 + 72, w - m * 2, h - (y1 + 72) - m, TRUE);
+}
+
+void FillConvertTypeCombo(HWND combo) {
+  SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GIS数据（矢量/栅格）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"模型数据（TIN/DEM/3DMesh）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"瓦片数据（XYZ/TMS/WMTS）"));
+  SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+void FillConvertSubtypeCombo(HWND combo, int majorType) {
+  SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+  switch (majorType) {
+    case 0:
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"矢量（Shapefile/GeoJSON）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"栅格（GeoTIFF）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"空间数据库（GPKG）"));
+      break;
+    case 1:
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TIN（三角网）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"DEM（高程栅格）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3DMesh（网格模型）"));
+      break;
+    default:
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ（金字塔瓦片）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TMS（倒序行号）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"WMTS（服务化瓦片）"));
+      break;
+  }
+  SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+void SyncConvertInfoByType(HWND hwnd, bool inputSide) {
+  const int typeId = inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE;
+  const int subtypeId = inputSide ? IDC_CONV_INPUT_SUBTYPE : IDC_CONV_OUTPUT_SUBTYPE;
+  const int infoId = inputSide ? IDC_CONV_INPUT_INFO : IDC_CONV_OUTPUT_INFO;
+  HWND hType = GetDlgItem(hwnd, typeId);
+  HWND hSubtype = GetDlgItem(hwnd, subtypeId);
+  HWND hInfo = GetDlgItem(hwnd, infoId);
+  if (!hType || !hSubtype || !hInfo) {
+    return;
+  }
+  const int sel = static_cast<int>(SendMessageW(hType, CB_GETCURSEL, 0, 0));
+  const int t = sel < 0 ? 0 : sel;
+  FillConvertSubtypeCombo(hSubtype, t);
+  const wchar_t* preset = L"";
+  if (t == 0) {
+    preset = inputSide ? L"输入路径：\r\n编码：UTF-8\r\n几何类型：自动检测\r\nCRS：自动识别"
+                       : L"输出路径：\r\n目标CRS：WebMercator\r\n输出格式：GPKG\r\n精度：中";
+  } else if (t == 1) {
+    preset = inputSide ? L"输入路径：\r\n高程基准：\r\n网格密度：\r\n缺失值策略：插值"
+                       : L"输出路径：\r\n模型格式：3DMesh\r\nLOD：2\r\n压缩：开启";
+  } else {
+    preset = inputSide ? L"输入源：\r\n级别范围：0-14\r\n切片规则：XYZ/TMS\r\n并发读取：4"
+                       : L"输出目录：\r\n切片方案：XYZ\r\n压缩：PNG/JPEG\r\n并发写入：4";
+  }
+  SetWindowTextW(hInfo, preset);
+}
+
+std::wstring GetComboSelectedText(HWND combo) {
+  if (!combo) {
+    return L"";
+  }
+  const int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+  if (sel < 0) {
+    return L"";
+  }
+  wchar_t buf[256]{};
+  SendMessageW(combo, CB_GETLBTEXT, static_cast<WPARAM>(sel), reinterpret_cast<LPARAM>(buf));
+  return buf;
+}
+
+std::wstring PromptOpenInputPath(HWND owner) {
+  wchar_t path[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = owner;
+  ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0";
+  ofn.lpstrFile = path;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  return GetOpenFileNameW(&ofn) ? std::wstring(path) : L"";
+}
+
+std::wstring PromptSaveOutputPath(HWND owner) {
+  wchar_t path[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = owner;
+  ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0";
+  ofn.lpstrFile = path;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+  return GetSaveFileNameW(&ofn) ? std::wstring(path) : L"";
+}
+
+std::wstring PromptSelectOutputFolder(HWND owner) {
+  BROWSEINFOW bi{};
+  bi.hwndOwner = owner;
+  bi.lpszTitle = L"选择输出目录";
+  bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+  PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+  if (!pidl) {
+    return L"";
+  }
+  wchar_t folder[MAX_PATH]{};
+  const BOOL ok = SHGetPathFromIDListW(pidl, folder);
+  CoTaskMemFree(pidl);
+  return ok ? std::wstring(folder) : L"";
+}
+
+const wchar_t* ConvertToolExeName(int inMajor, int outMajor) {
+  if (inMajor == 0 && outMajor == 1) return L"agis_convert_gis_to_model.exe";
+  if (inMajor == 0 && outMajor == 2) return L"agis_convert_gis_to_tile.exe";
+  if (inMajor == 1 && outMajor == 0) return L"agis_convert_model_to_gis.exe";
+  if (inMajor == 1 && outMajor == 2) return L"agis_convert_model_to_tile.exe";
+  if (inMajor == 2 && outMajor == 0) return L"agis_convert_tile_to_gis.exe";
+  if (inMajor == 2 && outMajor == 1) return L"agis_convert_tile_to_model.exe";
+  return nullptr;
+}
+
+std::wstring QuoteArg(const std::wstring& s) {
+  std::wstring out = L"\"";
+  for (wchar_t ch : s) {
+    if (ch == L'"') {
+      out += L"\\\"";
+    } else {
+      out.push_back(ch);
+    }
+  }
+  out += L"\"";
+  return out;
+}
+
+bool RunConvertBackend(HWND hwnd) {
+  const int inMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE), CB_GETCURSEL, 0, 0));
+  const int outMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
+  if (inMajor < 0 || outMajor < 0 || inMajor == outMajor) {
+    MessageBoxW(hwnd, L"请选择不同的输入类型与输出类型。", L"数据转换", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  wchar_t inPath[1024]{};
+  wchar_t outPath[1024]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), inPath, 1024);
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), outPath, 1024);
+  if (inPath[0] == L'\0' || outPath[0] == L'\0') {
+    MessageBoxW(hwnd, L"请先设置输入和输出路径。", L"数据转换", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  const wchar_t* exeName = ConvertToolExeName(inMajor, outMajor);
+  if (!exeName) {
+    return false;
+  }
+  wchar_t modulePath[MAX_PATH]{};
+  GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+  std::wstring exeDir = modulePath;
+  const size_t slash = exeDir.find_last_of(L"\\/");
+  if (slash != std::wstring::npos) {
+    exeDir.resize(slash + 1);
+  }
+  const std::wstring exePath = exeDir + exeName;
+  const std::wstring inType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE));
+  const std::wstring inSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
+  const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
+  const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
+  std::wstring cmd = QuoteArg(exePath) + L" --input " + QuoteArg(inPath) + L" --output " + QuoteArg(outPath) +
+                     L" --input-type " + QuoteArg(inType) + L" --input-subtype " + QuoteArg(inSub) +
+                     L" --output-type " + QuoteArg(outType) + L" --output-subtype " + QuoteArg(outSub);
+  std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+  cmdBuf.push_back(L'\0');
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+    WriteConvertLog(hwnd, (std::wstring(L"[错误] 无法启动：") + exeName).c_str());
+    return false;
+  }
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  WriteConvertLog(hwnd, (std::wstring(L"[后端] 退出码：") + std::to_wstring(code)).c_str());
+  return code == 0;
+}
+
+void ShowDataConvertWindow(HWND owner) {
+  if (g_hwndConvertDlg && IsWindow(g_hwndConvertDlg)) {
+    ShowWindow(g_hwndConvertDlg, SW_SHOW);
+    SetForegroundWindow(g_hwndConvertDlg);
+    return;
+  }
+  g_hwndConvertDlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kConvertClass, L"数据转换",
+                                     WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 920, 620, owner,
+                                     nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
+LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  static HBRUSH s_bg = nullptr;
+  static HBRUSH s_edit_bg = nullptr;
+  switch (msg) {
+    case WM_CREATE: {
+      SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+      CreateWindowW(L"STATIC", L"输入类型与信息", WS_CHILD | WS_VISIBLE, 10, 8, 120, 16, hwnd, nullptr,
+                    GetModuleHandleW(nullptr), nullptr);
+      HWND inType = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 10, 30, 240,
+                                  240, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_TYPE)),
+                                  GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 10, 58, 240, 220, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_SUBTYPE)),
+                    GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 10, 86, 172, 24, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_PATH)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 186, 86, 64, 24, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_BROWSE)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 10,
+                    116, 240, 200, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_INFO)),
+                    GetModuleHandleW(nullptr), nullptr);
+
+      CreateWindowW(L"STATIC", L"转换设置", WS_CHILD | WS_VISIBLE, 280, 8, 90, 16, hwnd, nullptr,
+                    GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"EDIT",
+                    L"统一坐标系=WebMercator\r\n重采样=双线性\r\n精度=中\r\n（不同类型可扩展子类型参数）",
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 280, 30, 240, 230,
+                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_SETTING)), GetModuleHandleW(nullptr),
+                    nullptr);
+
+      CreateWindowW(L"STATIC", L"输出类型与信息", WS_CHILD | WS_VISIBLE, 550, 8, 120, 16, hwnd, nullptr,
+                    GetModuleHandleW(nullptr), nullptr);
+      HWND outType =
+          CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 550, 30, 240, 240,
+                        hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_TYPE)),
+                        GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 550, 58, 240, 220, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_SUBTYPE)),
+                    GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 550, 86, 172, 24, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_PATH)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 726, 86, 64, 24, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_BROWSE)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 550,
+                    116, 240, 200, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_INFO)),
+                    GetModuleHandleW(nullptr), nullptr);
+
+      CreateWindowW(PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 10, 280, 740, 22, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PROGRESS)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"BUTTON", L"执行转换", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 278, 100, 26, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RUN)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"STATIC", L"准备就绪。", WS_CHILD | WS_VISIBLE, 10, 308, 860, 20, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MSG)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 10,
+                    336, 860, 220, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_LOG)),
+                    GetModuleHandleW(nullptr), nullptr);
+
+      FillConvertTypeCombo(inType);
+      FillConvertTypeCombo(outType);
+      SyncConvertInfoByType(hwnd, true);
+      SyncConvertInfoByType(hwnd, false);
+      for (int cid : {IDC_CONV_INPUT_TYPE, IDC_CONV_INPUT_SUBTYPE, IDC_CONV_INPUT_PATH, IDC_CONV_INPUT_BROWSE,
+                      IDC_CONV_INPUT_INFO, IDC_CONV_SETTING, IDC_CONV_OUTPUT_TYPE, IDC_CONV_OUTPUT_SUBTYPE,
+                      IDC_CONV_OUTPUT_PATH, IDC_CONV_OUTPUT_BROWSE, IDC_CONV_OUTPUT_INFO, IDC_CONV_PROGRESS,
+                      IDC_CONV_RUN, IDC_CONV_MSG, IDC_CONV_LOG}) {
+        if (HWND c = GetDlgItem(hwnd, cid)) {
+          SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+        }
+      }
+      SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+      SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 0, 0);
+      WriteConvertLog(hwnd, L"[转换] 窗口已打开。");
+      WriteConvertLog(hwnd, L"[转换] 支持：GIS数据 / 模型数据 / 瓦片数据（含子类型）。");
+      LayoutConvertWindow(hwnd);
+      return 0;
+    }
+    case WM_CTLCOLORDLG: {
+      if (!s_bg) {
+        s_bg = CreateSolidBrush(RGB(245, 248, 252));
+      }
+      return reinterpret_cast<INT_PTR>(s_bg);
+    }
+    case WM_CTLCOLORSTATIC: {
+      HDC hdc = reinterpret_cast<HDC>(wParam);
+      SetBkMode(hdc, TRANSPARENT);
+      SetTextColor(hdc, RGB(30, 42, 62));
+      if (!s_bg) {
+        s_bg = CreateSolidBrush(RGB(245, 248, 252));
+      }
+      return reinterpret_cast<INT_PTR>(s_bg);
+    }
+    case WM_CTLCOLOREDIT: {
+      HDC hdc = reinterpret_cast<HDC>(wParam);
+      SetBkMode(hdc, OPAQUE);
+      SetBkColor(hdc, RGB(255, 255, 255));
+      SetTextColor(hdc, RGB(28, 36, 52));
+      if (!s_edit_bg) {
+        s_edit_bg = CreateSolidBrush(RGB(255, 255, 255));
+      }
+      return reinterpret_cast<INT_PTR>(s_edit_bg);
+    }
+    case WM_SIZE:
+      LayoutConvertWindow(hwnd);
+      return 0;
+    case WM_COMMAND:
+      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_INPUT_TYPE) {
+        SyncConvertInfoByType(hwnd, true);
+        return 0;
+      }
+      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_OUTPUT_TYPE) {
+        SyncConvertInfoByType(hwnd, false);
+        return 0;
+      }
+      if (LOWORD(wParam) == IDC_CONV_INPUT_BROWSE) {
+        const std::wstring p = PromptOpenInputPath(hwnd);
+        if (!p.empty()) {
+          SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), p.c_str());
+          WriteConvertLog(hwnd, (std::wstring(L"[路径] 输入：") + p).c_str());
+        }
+        return 0;
+      }
+      if (LOWORD(wParam) == IDC_CONV_OUTPUT_BROWSE) {
+        const int outMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
+        std::wstring p;
+        if (outMajor == 2) {
+          p = PromptSelectOutputFolder(hwnd);
+        } else {
+          p = PromptSaveOutputPath(hwnd);
+        }
+        if (!p.empty()) {
+          SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), p.c_str());
+          WriteConvertLog(hwnd, (std::wstring(L"[路径] 输出：") + p).c_str());
+        }
+        return 0;
+      }
+      if (LOWORD(wParam) == IDC_CONV_RUN) {
+        const std::wstring inType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE));
+        const std::wstring inSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
+        const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
+        const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
+        const std::wstring inLine = std::wstring(L"[任务] 输入：") + inType + L" / " + inSub;
+        const std::wstring outLine = std::wstring(L"[任务] 输出：") + outType + L" / " + outSub;
+        WriteConvertLog(hwnd, inLine.c_str());
+        WriteConvertLog(hwnd, outLine.c_str());
+        SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 15, 0);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"处理中：正在启动后端命令行工具...");
+        const bool ok = RunConvertBackend(hwnd);
+        SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, ok ? 100 : 0, 0);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), ok ? L"完成：转换成功。" : L"失败：后端返回错误。");
+        return 0;
+      }
+      break;
+    case WM_CLOSE:
+      DestroyWindow(hwnd);
+      return 0;
+    case WM_DESTROY:
+      g_hwndConvertDlg = nullptr;
+      if (s_bg) {
+        DeleteObject(s_bg);
+        s_bg = nullptr;
+      }
+      if (s_edit_bg) {
+        DeleteObject(s_edit_bg);
+        s_edit_bg = nullptr;
+      }
+      return 0;
+    default:
+      break;
+  }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 HMENU BuildMenu() {
   HMENU bar = CreateMenu();
   HMENU file = CreateMenu();
+  AppendMenuW(file, MF_STRING, ID_FILE_NEW_GIS, L"新建(&N)");
+  AppendMenuW(file, MF_STRING, ID_FILE_OPEN_GIS, L"打开(&O)...");
+  AppendMenuW(file, MF_STRING, ID_FILE_SAVE_GIS, L"保存(&S)");
+  AppendMenuW(file, MF_STRING, ID_FILE_SAVE_AS_GIS, L"另存(&A)...");
+  AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(file, MF_STRING, ID_FILE_SCREENSHOT, L"保存地图截图(&S)...");
   AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(file, MF_STRING, ID_FILE_EXIT, L"退出(&X)");
@@ -977,6 +1781,10 @@ HMENU BuildMenu() {
   AppendMenuW(layer, MF_STRING | (GIS_DESKTOP_HAVE_GDAL ? MF_ENABLED : MF_GRAYED), ID_LAYER_ADD,
               L"添加数据图层(&A)...");
   AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(layer), L"图层(&Y)");
+
+  HMENU tools = CreateMenu();
+  AppendMenuW(tools, MF_STRING, ID_TOOL_DATA_CONVERT, L"数据转换(&C)...");
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(tools), L"工具(&T)");
 
   HMENU lang = CreateMenu();
   AppendMenuW(lang, MF_STRING | MF_CHECKED, ID_LANG_ZH, L"中文(&Z)");
@@ -1174,6 +1982,22 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         PostQuitMessage(0);
         return 0;
       }
+      if (id == ID_FILE_NEW_GIS) {
+        GisNew(hwnd);
+        return 0;
+      }
+      if (id == ID_FILE_OPEN_GIS) {
+        GisOpen(hwnd);
+        return 0;
+      }
+      if (id == ID_FILE_SAVE_GIS) {
+        GisSave(hwnd);
+        return 0;
+      }
+      if (id == ID_FILE_SAVE_AS_GIS) {
+        GisSaveAs(hwnd);
+        return 0;
+      }
       if (id == ID_FILE_SCREENSHOT) {
         MapEngine::Instance().PromptSaveMapScreenshot(hwnd, g_hwndMap);
         return 0;
@@ -1252,6 +2076,10 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 #endif
         return 0;
       }
+      if (id == ID_TOOL_DATA_CONVERT) {
+        ShowDataConvertWindow(hwnd);
+        return 0;
+      }
       if (id == ID_HELP_DATA_DRIVERS) {
         ShowDataDriversHelp(hwnd);
         return 0;
@@ -1262,7 +2090,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       }
       if (id == ID_LANG_ZH || id == ID_LANG_EN) {
         HMENU bar = GetMenu(hwnd);
-        HMENU lang = GetSubMenu(bar, 4);
+        HMENU lang = GetSubMenu(bar, 5);
         CheckMenuRadioItem(lang, ID_LANG_ZH, ID_LANG_EN, id, MF_BYCOMMAND);
         AppLogLine(id == ID_LANG_ZH ? L"[语言] 已选择：中文（界面字符串后续资源包化）"
                                     : L"[语言] Selected: English (UI pending resource bundle)");
@@ -1270,7 +2098,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       }
       if (id == ID_THEME_SYSTEM || id == ID_THEME_LIGHT || id == ID_THEME_DARK) {
         HMENU bar = GetMenu(hwnd);
-        HMENU th = GetSubMenu(bar, 5);
+        HMENU th = GetSubMenu(bar, 6);
         CheckMenuRadioItem(th, ID_THEME_SYSTEM, ID_THEME_DARK, id, MF_BYCOMMAND);
         AppLogLine(L"[主题] 切换请求已记录（完整暗色/浅色后续对接）。");
         return 0;
@@ -1401,6 +2229,12 @@ bool RegisterClasses(HINSTANCE inst) {
   }
   wc.lpfnWndProc = LogWndProc;
   wc.lpszClassName = kLogClass;
+  wc.style = 0;
+  if (!RegisterClassW(&wc)) {
+    return false;
+  }
+  wc.lpfnWndProc = ConvertWndProc;
+  wc.lpszClassName = kConvertClass;
   wc.style = 0;
   if (!RegisterClassW(&wc)) {
     return false;

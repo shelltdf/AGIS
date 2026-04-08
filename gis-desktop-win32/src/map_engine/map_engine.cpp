@@ -624,8 +624,11 @@ void DrawGeometry(const OGRGeometry* geom, const ViewExtent& view, int cw, int c
 
 class VectorMapLayer final : public MapLayer {
  public:
-  VectorMapLayer(GDALDataset* ds, std::wstring name, MapLayerDriverKind driverKind)
-      : MapLayer(std::make_unique<GdalVectorMapLayerDriver>(driverKind)), ds_(ds), name_(std::move(name)) {}
+  VectorMapLayer(GDALDataset* ds, std::wstring name, std::wstring sourcePath, MapLayerDriverKind driverKind)
+      : MapLayer(std::make_unique<GdalVectorMapLayerDriver>(driverKind)),
+        ds_(ds),
+        name_(std::move(name)),
+        sourcePath_(std::move(sourcePath)) {}
   ~VectorMapLayer() override { GDALClose(ds_); }
 
   std::wstring DisplayName() const override { return name_; }
@@ -693,11 +696,12 @@ class VectorMapLayer final : public MapLayer {
   }
 
   GDALDataset* gdalDatasetForDriver() const override { return ds_; }
-  std::wstring sourcePathForDriver() const override { return name_; }
+  std::wstring sourcePathForDriver() const override { return sourcePath_; }
 
  private:
   GDALDataset* ds_;
   std::wstring name_;
+  std::wstring sourcePath_;
 };
 
 std::unique_ptr<MapLayer> CreateLayerFromDataset(GDALDataset* ds, const std::wstring& baseName,
@@ -709,7 +713,7 @@ std::unique_ptr<MapLayer> CreateLayerFromDataset(GDALDataset* ds, const std::wst
     return std::make_unique<RasterMapLayer>(ds, baseName, sourcePath, driverKind);
   }
   if (lc > 0) {
-    return std::make_unique<VectorMapLayer>(ds, baseName, driverKind);
+    return std::make_unique<VectorMapLayer>(ds, baseName, sourcePath, driverKind);
   }
   GDALClose(ds);
   err = L"文件中未找到栅格或矢量图层。";
