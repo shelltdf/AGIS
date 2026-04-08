@@ -28,11 +28,33 @@ option(AGIS_BUNDLE_GDAL
 
 option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static" OFF)
 option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
+# 模型预览与其它 bgfx 路径依赖 bx/bimg；关闭 unsupported（勿传 -DAGIS_USE_BGFX=OFF）。
+option(AGIS_USE_BGFX "强制：须为 ON。模型预览使用 bgfx/bx/bimg，关闭不受支持。" ON)
+if(NOT AGIS_USE_BGFX)
+  message(FATAL_ERROR
+    "AGIS_USE_BGFX 必须为 ON（默认已开启）。本工程不支持禁用 bgfx（勿使用 -DAGIS_USE_BGFX=OFF）。"
+    "若 CMakeCache.txt 中曾为 OFF，请删缓存重配或显式传入 -DAGIS_USE_BGFX=ON。")
+endif()
 
 # ui_engine 位于仓库根目录，与 gis-desktop-win32 并列（`AGIS/ui_engine/`）
 set(AGIS_UI_ENGINE_DIR "${CMAKE_SOURCE_DIR}/../ui_engine")
 if(NOT EXISTS "${AGIS_UI_ENGINE_DIR}/src/app.cpp")
-  message(FATAL_ERROR "ui_engine sources not found at ${AGIS_UI_ENGINE_DIR}/src (expected sibling of gis-desktop-win32).")
+  message(
+    FATAL_ERROR "ui_engine sources not found at ${AGIS_UI_ENGINE_DIR}/src (expected sibling of gis-desktop-win32).")
+endif()
+
+set(AGIS_BGFX_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/bgfx-master")
+set(AGIS_BX_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/bx-master")
+set(AGIS_BIMG_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/bimg-master")
+
+if(NOT EXISTS "${AGIS_BGFX_DIR}/src/amalgamated.cpp")
+  message(FATAL_ERROR "bgfx source is missing (required): ${AGIS_BGFX_DIR}/src/amalgamated.cpp")
+endif()
+if(NOT EXISTS "${AGIS_BX_DIR}/include/bx/bx.h")
+  message(FATAL_ERROR "bx headers are missing (required): ${AGIS_BX_DIR}/include/bx/bx.h")
+endif()
+if(NOT EXISTS "${AGIS_BIMG_DIR}/src/image.cpp")
+  message(FATAL_ERROR "bimg source is missing (required): ${AGIS_BIMG_DIR}/src/image.cpp")
 endif()
 
 # 从源码安装后的 GDAL 前缀（与捆绑源码二选一）
@@ -178,6 +200,56 @@ else()
   message(STATUS "AGIS: agis_ui_engine = STATIC")
 endif()
 
+file(GLOB _agis_bimg_astc CONFIGURE_DEPENDS
+  ${AGIS_BIMG_DIR}/3rdparty/astc-encoder/source/*.cpp)
+add_library(agis_bgfx_vendor STATIC
+  ${AGIS_BX_DIR}/src/amalgamated.cpp
+  ${AGIS_BIMG_DIR}/src/image.cpp
+  ${AGIS_BIMG_DIR}/src/image_decode.cpp
+  ${AGIS_BIMG_DIR}/src/image_encode.cpp
+  ${AGIS_BIMG_DIR}/src/image_cubemap_filter.cpp
+  ${AGIS_BIMG_DIR}/src/image_gnf.cpp
+  ${_agis_bimg_astc}
+  ${AGIS_BGFX_DIR}/src/amalgamated.cpp
+)
+target_include_directories(agis_bgfx_vendor PUBLIC
+  ${AGIS_BX_DIR}/include
+  $<$<AND:$<PLATFORM_ID:Windows>,$<CXX_COMPILER_ID:MSVC>>:${AGIS_BX_DIR}/include/compat/msvc>
+  ${AGIS_BIMG_DIR}/include
+  ${AGIS_BGFX_DIR}/include
+  ${AGIS_BGFX_DIR}/3rdparty
+  ${AGIS_BGFX_DIR}/3rdparty/khronos
+  ${AGIS_BIMG_DIR}/3rdparty
+  ${AGIS_BIMG_DIR}/3rdparty/astc-encoder/include
+  ${AGIS_BIMG_DIR}/3rdparty/iqa/include
+  ${AGIS_BIMG_DIR}/3rdparty/tinyexr/deps
+  ${AGIS_BX_DIR}/3rdparty
+)
+target_compile_definitions(agis_bgfx_vendor PRIVATE
+  BX_CONFIG_DEBUG=0
+)
+target_compile_features(agis_bgfx_vendor PRIVATE cxx_std_20)
+if(WIN32)
+  target_link_libraries(agis_bgfx_vendor PUBLIC
+    user32
+    gdi32
+    shell32
+    advapi32
+    ws2_32
+    psapi
+    winmm
+    imm32
+    ole32
+    version
+    dxgi
+    d3d11
+    d3dcompiler
+  )
+endif()
+if(MSVC)
+  target_compile_options(agis_bgfx_vendor PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+endif()
+
 add_executable(agis_desktop WIN32
   src/app/main.cpp
   src/app/help_data_drivers.cpp
@@ -214,6 +286,16 @@ target_link_libraries(agis_desktop PRIVATE
   opengl32
 )
 
+target_compile_definitions(agis_desktop PRIVATE AGIS_USE_BGFX=1 BX_CONFIG_DEBUG=0)
+target_link_libraries(agis_desktop PRIVATE agis_bgfx_vendor)
+target_sources(agis_desktop PRIVATE src/app/model_preview_bgfx.cpp)
+target_include_directories(agis_desktop PRIVATE
+  ${AGIS_BGFX_DIR}/examples/17-drawstress
+  ${AGIS_BGFX_DIR}/examples/common/debugdraw
+)
+# bx/bgfx 头文件要求 C++20（与 agis_bgfx_vendor 一致）
+target_compile_features(agis_desktop PRIVATE cxx_std_20)
+
 if(AGIS_USE_GDAL AND GDAL_FOUND)
   target_link_libraries(agis_desktop PRIVATE GDAL::GDAL)
   if(TARGET PROJ::proj)
@@ -244,6 +326,8 @@ endif()
 if(MSVC)
   target_sources(agis_desktop PRIVATE app.manifest)
   target_compile_options(agis_desktop PRIVATE /utf-8)
+  # bx/bgfx 头文件要求（与 agis_bgfx_vendor 一致）
+  target_compile_options(agis_desktop PRIVATE /Zc:__cplusplus /Zc:preprocessor)
 endif()
 
 # 独立演示：链接 agis_ui_engine（GDI+ / 平台实现已在库内）。
@@ -296,11 +380,17 @@ if(MSVC)
   target_compile_options(ui_engine_demo PRIVATE /utf-8)
 endif()
 
-# 6 个数据转换后端命令行工具（3 类型互转 => 6 过程）
+# 7 个数据转换后端命令行工具（3 类型互转 6 过程 + 模型↔模型 1 过程）
 add_library(agis_convert_backend_common STATIC
   src/tools/convert_backend_common.cpp
 )
 target_include_directories(agis_convert_backend_common PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_convert_backend_common PRIVATE GDAL::GDAL)
+  target_compile_definitions(agis_convert_backend_common PRIVATE GIS_DESKTOP_HAVE_GDAL=1)
+else()
+  target_compile_definitions(agis_convert_backend_common PRIVATE GIS_DESKTOP_HAVE_GDAL=0)
+endif()
 if(MSVC)
   target_compile_options(agis_convert_backend_common PRIVATE /utf-8)
 endif()
@@ -309,6 +399,7 @@ set(_agis_convert_tools
   agis_convert_gis_to_model
   agis_convert_gis_to_tile
   agis_convert_model_to_gis
+  agis_convert_model_to_model
   agis_convert_model_to_tile
   agis_convert_tile_to_gis
   agis_convert_tile_to_model

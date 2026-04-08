@@ -4,11 +4,13 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#if !AGIS_USE_BGFX
 #include <GL/gl.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
 #include <DirectXMath.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -18,9 +20,14 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <cwctype>
 
 #include "app/help_data_drivers.h"
+#include "app/model_preview_types.h"
 #include "app/resource.h"
+#if AGIS_USE_BGFX
+#include "app/model_preview_bgfx.h"
+#endif
 #include "app/ui_font.h"
 #include "core/app_log.h"
 #include "map_engine/map_engine.h"
@@ -28,13 +35,22 @@
 #include "ui_engine/gdiplus_ui.h"
 
 #pragma comment(lib, "comctl32.lib")
+#if !AGIS_USE_BGFX
 #pragma comment(lib, "opengl32.lib")
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#endif
 
 #ifndef GIS_DESKTOP_HAVE_GDAL
 #define GIS_DESKTOP_HAVE_GDAL 0
+#endif
+
+#if GIS_DESKTOP_HAVE_GDAL
+#include <cpl_conv.h>
+#include <gdal.h>
+#include <gdal_priv.h>
+#include <ogr_api.h>
 #endif
 
 static HFONT g_appUiFont = nullptr;
@@ -1369,8 +1385,24 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PREVIEW), m + colW - 66, m + 76, 66, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_INFO), m, m + 106, colW, topH - 110, TRUE);
 
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_SETTING), m * 2 + colW, m + 20, colW, topH - 84, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD), m * 2 + colW, topH - 58, colW, 24, TRUE);
+  const int midColX = m * 2 + colW;
+  const int midStackBottom = 324;
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_SETTING), midColX, m + 20, colW, topH - m - 20 - midStackBottom, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_ELEV_HORIZ_LBL), midColX, topH - 258, 168, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_ELEV_HORIZ_RATIO), midColX + 172, topH - 260, (std::max)(72, colW - 178), 24,
+             TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_TARGET_CRS_LBL), midColX, topH - 228, colW, 16, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_TARGET_CRS), midColX, topH - 210, colW, 22, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_UNIT_LBL), midColX, topH - 180, 120, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_UNIT), midColX + 124, topH - 182, (std::max)(100, colW - 128), 120, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MESH_SPACING_LBL), midColX, topH - 152, 168, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MESH_SPACING), midColX + 172, topH - 154, (std::max)(72, colW - 178), 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RASTER_MAX_LBL), midColX, topH - 124, 168, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RASTER_MAX), midColX + 172, topH - 126, (std::max)(72, colW - 178), 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FMT_LBL), midColX, topH - 96, 168, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FORMAT), midColX + 172, topH - 98, (std::max)(72, colW - 178), 120, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD), midColX, topH - 68, colW, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_VECTOR_MODE), midColX, topH - 40, colW, 24, TRUE);
 
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), m * 3 + colW * 2, m + 20, colW - 28, 220, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE_HELP), m * 3 + colW * 2 + colW - 24, m + 20, 24, 24, TRUE);
@@ -1411,6 +1443,7 @@ void FillConvertSubtypeCombo(HWND combo, int majorType) {
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TIN（三角网）"));
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"DEM（高程栅格）"));
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3DMesh（网格模型）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"点云（LAS；LAZ 输出为同路径 LAS + 提示）"));
       break;
     default:
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ（金字塔瓦片）"));
@@ -1432,7 +1465,8 @@ const wchar_t* ConvertTypeTooltipByMajor(int major) {
       return L"模型数据：面向三维/地形表达。\n"
              L"- TIN：不规则三角网，地形边界表达精细。\n"
              L"- DEM：规则高程栅格，适合分析与重采样。\n"
-             L"- 3DMesh：三维网格，适合渲染与发布。";
+             L"- 3DMesh：三维网格，适合渲染与发布。\n"
+             L"- 点云：LAS（颜色 PDRF 2）；可与 3DMesh 互转。";
     default:
       return L"瓦片数据：面向快速显示与分发。\n"
              L"- XYZ：常用 Web 瓦片行列规则。\n"
@@ -1472,10 +1506,16 @@ const wchar_t* ConvertSubtypeTooltipByMajorSubtype(int major, int sub) {
         return L"DEM（高程栅格）\n"
                L"常见格式：GeoTIFF/ASCII Grid\n"
                L"细节：规则网格，适合坡度/流域等分析。";
-      default:
+      case 2:
         return L"3DMesh（网格模型）\n"
-               L"常见格式：.obj/.fbx/.gltf（实现可扩展）\n"
-               L"细节：偏渲染表达，关注 LOD、贴图与压缩。";
+               L"常见格式：Wavefront OBJ 3.0 多边形子集等\n"
+               L"细节：可与点云互转；贴图参与 LAS 着色。";
+      case 3:
+        return L"点云（LAS）\n"
+               L"文件格式：.las（PDRF 2 带 RGB）；选 .laz 时输出 .las 并提示需 LASzip 压缩。\n"
+               L"细节：可由带 UV 与 map_Kd 的 OBJ+MTL 按贴图像素采样生成。";
+      default:
+        return L"（未知模型子类型）";
     }
   }
   switch (sub) {
@@ -1527,6 +1567,8 @@ void AttachConvertTooltip(HWND dlg, HWND tip, int ctrlId) {
   SendMessageW(tip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
 }
 
+static std::wstring BuildConvertSideInfoExtras(HWND hwnd, bool inputSide, int majorType);
+
 void ShowConvertHelpDialog(HWND hwnd, bool inputSide, bool typeHelp) {
   const int major = static_cast<int>(SendMessageW(GetDlgItem(hwnd, inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE),
                                                   CB_GETCURSEL, 0, 0));
@@ -1567,7 +1609,9 @@ void SyncConvertInfoByType(HWND hwnd, bool inputSide) {
     preset = inputSide ? L"输入源：\r\n级别范围：0-14\r\n切片规则：XYZ/TMS\r\n并发读取：4"
                        : L"输出目录：\r\n切片方案：XYZ\r\n压缩：PNG/JPEG\r\n并发写入：4";
   }
-  SetWindowTextW(hInfo, preset);
+  std::wstring combined = preset;
+  combined += BuildConvertSideInfoExtras(hwnd, inputSide, t);
+  SetWindowTextW(hInfo, combined.c_str());
 }
 
 std::wstring GetComboSelectedText(HWND combo) {
@@ -1589,6 +1633,324 @@ std::wstring GetModelCoordArg(HWND hwnd) {
     return L"cecf";
   }
   return L"projected";
+}
+
+std::wstring GetVectorModeArg(HWND hwnd) {
+  const std::wstring raw = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_VECTOR_MODE));
+  if (raw.find(L"贴图") != std::wstring::npos || raw.find(L"texture") != std::wstring::npos) {
+    return L"bake_texture";
+  }
+  return L"geometry";
+}
+
+double GetElevHorizRatioArg(HWND hwnd) {
+  wchar_t buf[64]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_ELEV_HORIZ_RATIO), buf, 64);
+  const double v = _wtof(buf);
+  if (!std::isfinite(v) || v <= 0.0) {
+    return 1.0;
+  }
+  return v;
+}
+
+std::wstring GetTargetCrsArg(HWND hwnd) {
+  wchar_t buf[1024]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_TARGET_CRS), buf, 1024);
+  std::wstring s = buf;
+  while (!s.empty() && (s.back() == L' ' || s.back() == L'\t' || s.back() == L'\r' || s.back() == L'\n')) {
+    s.pop_back();
+  }
+  size_t i = 0;
+  while (i < s.size() && (s[i] == L' ' || s[i] == L'\t')) {
+    ++i;
+  }
+  if (i > 0) {
+    s.erase(0, i);
+  }
+  return s;
+}
+
+std::wstring GetOutputUnitArg(HWND hwnd) {
+  const HWND u = GetDlgItem(hwnd, IDC_CONV_OUTPUT_UNIT);
+  const int sel = static_cast<int>(SendMessageW(u, CB_GETCURSEL, 0, 0));
+  if (sel == 1) {
+    return L"km";
+  }
+  if (sel == 2) {
+    return L"1000km";
+  }
+  return L"m";
+}
+
+#if GIS_DESKTOP_HAVE_GDAL
+static std::string NarrowUtf8FromWide(const std::wstring& w) {
+  if (w.empty()) return {};
+  const int n =
+      WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+  if (n <= 0) return {};
+  std::string s(static_cast<size_t>(n), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
+  return s;
+}
+
+static std::wstring WidePrefixFromUtf8(const char* u8, size_t maxLen) {
+  if (!u8 || !u8[0]) return L"";
+  const int wn = MultiByteToWideChar(CP_UTF8, 0, u8, -1, nullptr, 0);
+  if (wn <= 0) return L"";
+  std::wstring ws(static_cast<size_t>(wn - 1), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, u8, -1, ws.data(), wn);
+  if (ws.size() > maxLen) {
+    return ws.substr(0, maxLen) + L"…";
+  }
+  return ws;
+}
+#endif
+
+static void AppendAgisGisSummaryForConvert(std::wstring* s, const std::wstring& path) {
+  std::wifstream ifs(path);
+  if (!ifs) {
+    *s += L"\r\n\r\n【.gis】无法读取文件。";
+    return;
+  }
+  std::wstringstream wss;
+  wss << ifs.rdbuf();
+  const std::wstring xml = wss.str();
+  if (xml.find(L"<agis-gis") == std::wstring::npos) {
+    *s += L"\r\n\r\n【.gis】根节点不是 <agis-gis>。";
+    return;
+  }
+  int projIdx = ParseIntAttr(xml, L"projection", 0);
+  if (projIdx < 0 || projIdx >= static_cast<int>(MapDisplayProjection::kCount)) {
+    projIdx = 0;
+  }
+  const auto mp = static_cast<MapDisplayProjection>(projIdx);
+  const bool grid = ParseBoolAttr(xml, L"showGrid", true);
+  const double mnX = ParseDoubleAttr(xml, L"viewMinX", 0);
+  const double mnY = ParseDoubleAttr(xml, L"viewMinY", 0);
+  const double mxX = ParseDoubleAttr(xml, L"viewMaxX", 0);
+  const double mxY = ParseDoubleAttr(xml, L"viewMaxY", 0);
+
+  int layerCount = 0;
+  size_t scan = 0;
+  while ((scan = xml.find(L"<layer ", scan)) != std::wstring::npos) {
+    ++layerCount;
+    scan += 7;
+  }
+
+  *s += L"\r\n\r\n【.gis 文档摘要】\r\n";
+  *s += L"显示投影（2D 视图）：";
+  *s += MapProj_MenuLabel(mp);
+  *s += L"\r\n经纬网：";
+  *s += grid ? L"显示" : L"隐藏";
+  wchar_t vb[384]{};
+  swprintf_s(vb, L"\r\n视口范围：[%.8g , %.8g] — [%.8g , %.8g]", mnX, mnY, mxX, mxY);
+  *s += vb;
+  *s += L"\r\n图层数量：";
+  *s += std::to_wstring(layerCount);
+
+  scan = 0;
+  int listed = 0;
+  while ((scan = xml.find(L"<layer ", scan)) != std::wstring::npos && listed < 10) {
+    const size_t end = xml.find(L"/>", scan);
+    if (end == std::wstring::npos) break;
+    const std::wstring line = xml.substr(scan, end - scan + 2);
+    scan = end + 2;
+    ++listed;
+    std::wstring name = GetXmlAttr(line, L"name");
+    std::wstring driver = GetXmlAttr(line, L"driver");
+    std::wstring src = GetXmlAttr(line, L"source");
+    if (src.size() > 56) {
+      src = src.substr(0, 53) + L"...";
+    }
+    *s += L"\r\n  · ";
+    *s += name.empty() ? L"（未命名）" : name;
+    *s += L"  |  ";
+    *s += driver.empty() ? L"?" : driver;
+    *s += L"\r\n    ";
+    *s += src.empty() ? L"（无 source）" : src;
+  }
+  if (layerCount > listed) {
+    *s += L"\r\n  … 另有 ";
+    *s += std::to_wstring(layerCount - listed);
+    *s += L" 个图层";
+  }
+}
+
+#if GIS_DESKTOP_HAVE_GDAL
+static void AppendGdalSummaryForConvert(std::wstring* s, const std::wstring& path) {
+  static bool registered = false;
+  if (!registered) {
+    GDALAllRegister();
+    registered = true;
+  }
+  const std::string u8 = NarrowUtf8FromWide(path);
+  if (u8.empty()) {
+    return;
+  }
+  GDALDatasetH ds = GDALOpenEx(u8.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER | GDAL_OF_VECTOR, nullptr, nullptr, nullptr);
+  if (!ds) {
+    *s += L"\r\n\r\n【GDAL】无法打开该路径（格式、驱动或权限）。";
+    return;
+  }
+  *s += L"\r\n\r\n【GDAL 数据源摘要】\r\n";
+  const int rx = GDALGetRasterXSize(ds);
+  const int ry = GDALGetRasterYSize(ds);
+  if (rx > 0 && ry > 0) {
+    *s += L"栅格尺寸：";
+    *s += std::to_wstring(rx);
+    *s += L" × ";
+    *s += std::to_wstring(ry);
+    const int bands = GDALGetRasterCount(ds);
+    if (bands > 0) {
+      *s += L"  波段数：";
+      *s += std::to_wstring(bands);
+    }
+    *s += L"\r\n";
+  }
+  const char* wkt = GDALGetProjectionRef(ds);
+  if (wkt && wkt[0]) {
+    *s += L"数据集投影(WKT 前缀)：";
+    *s += WidePrefixFromUtf8(wkt, 220);
+    *s += L"\r\n";
+  } else {
+    *s += L"数据集投影：未设置或未知\r\n";
+  }
+  const int nVec = GDALDatasetGetLayerCount(ds);
+  if (nVec > 0) {
+    *s += L"矢量图层数：";
+    *s += std::to_wstring(nVec);
+    *s += L"\r\n";
+    for (int li = 0; li < nVec && li < 8; ++li) {
+      OGRLayerH lyr = GDALDatasetGetLayer(ds, li);
+      if (!lyr) continue;
+      *s += L"  · ";
+      const char* nm = OGR_L_GetName(lyr);
+      *s += nm ? WidePrefixFromUtf8(nm, 120) : L"（未命名）";
+      *s += L"\r\n";
+    }
+    if (nVec > 8) {
+      *s += L"  … 另有 ";
+      *s += std::to_wstring(nVec - 8);
+      *s += L" 个矢量图层\r\n";
+    }
+  }
+  GDALClose(ds);
+}
+#endif
+
+static std::wstring BuildConvertSideInfoExtras(HWND hwnd, bool inputSide, int majorType) {
+  (void)majorType;
+  std::wstring x;
+  const int pathCtl = inputSide ? IDC_CONV_INPUT_PATH : IDC_CONV_OUTPUT_PATH;
+  wchar_t pathBuf[4096]{};
+  GetWindowTextW(GetDlgItem(hwnd, pathCtl), pathBuf, 4096);
+  std::wstring path = pathBuf;
+  while (!path.empty() && (path.back() == L' ' || path.back() == L'\t' || path.back() == L'\r' || path.back() == L'\n')) {
+    path.pop_back();
+  }
+
+  if (inputSide) {
+    x += L"\r\n────────\r\n【当前输入路径】\r\n";
+    x += path.empty() ? L"（未选择文件或数据源）" : path;
+    if (path.empty()) {
+      return x;
+    }
+    std::wstring ext = std::filesystem::path(path).extension().wstring();
+    for (auto& ch : ext) ch = static_cast<wchar_t>(std::towlower(ch));
+    if (ext == L".gis") {
+      AppendAgisGisSummaryForConvert(&x, path);
+    } else {
+#if GIS_DESKTOP_HAVE_GDAL
+      AppendGdalSummaryForConvert(&x, path);
+#else
+      x += L"\r\n\r\n（未启用 GDAL：无法自动读取单层文件的 CRS/尺寸；扩展名：";
+      x += ext.empty() ? L"无" : ext;
+      x += L"）\r\n";
+#endif
+    }
+    return x;
+  }
+
+  x += L"\r\n────────\r\n【输出路径】\r\n";
+  x += path.empty() ? L"（未指定）" : path;
+  x += L"\r\n\r\n【中间区转换参数】\r\n目标 CRS（空表示自动）：";
+  {
+    const std::wstring crs = GetTargetCrsArg(hwnd);
+    x += crs.empty() ? L"（空）" : crs;
+  }
+  x += L"\r\n模型顶点坐标语义：";
+  x += GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD));
+  x += L"\r\n矢量参与转换策略：";
+  x += GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_VECTOR_MODE));
+  x += L"\r\n输出模型单位：";
+  x += GetOutputUnitArg(hwnd);
+  wchar_t ms[64]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MESH_SPACING), ms, 64);
+  x += L"\r\nMesh 间距（模型单位）：";
+  x += ms;
+  wchar_t eh[64]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_ELEV_HORIZ_RATIO), eh, 64);
+  x += L"\r\n高程/水平比例：";
+  x += eh;
+  x += L"\r\n模型贴图格式（点云→模型等）：";
+  x += GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FORMAT));
+  wchar_t rzb[32]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_RASTER_MAX), rzb, 32);
+  x += L"\r\n栅格读入最大边(px)（GIS→模型贴图源）：";
+  x += (rzb[0] ? rzb : L"4096");
+  return x;
+}
+
+int GetMeshSpacingArg(HWND hwnd) {
+  wchar_t buf[32]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MESH_SPACING), buf, 32);
+  const long v = wcstol(buf, nullptr, 10);
+  if (v < 1) {
+    return 1;
+  }
+  if (v > 1000000) {
+    return 1000000;
+  }
+  return static_cast<int>(v);
+}
+
+std::wstring GetTextureFormatArg(HWND hwnd) {
+  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FORMAT));
+  if (t.find(L"TIFF") != std::wstring::npos || t.find(L"tiff") != std::wstring::npos ||
+      t.find(L"Tif") != std::wstring::npos) {
+    return L"tif";
+  }
+  if (t.find(L"TGA") != std::wstring::npos || t.find(L"tga") != std::wstring::npos) {
+    return L"tga";
+  }
+  if (t.find(L"BMP") != std::wstring::npos || t.find(L"bmp") != std::wstring::npos) {
+    return L"bmp";
+  }
+  return L"png";
+}
+
+void FillConvertTextureFormatCombo(HWND combo) {
+  if (!combo) {
+    return;
+  }
+  SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"PNG（默认）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TIFF / GeoTIFF"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TGA"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"BMP"));
+  SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+int GetRasterReadMaxDimArg(HWND hwnd) {
+  wchar_t buf[32]{};
+  if (HWND e = GetDlgItem(hwnd, IDC_CONV_RASTER_MAX)) {
+    GetWindowTextW(e, buf, 32);
+  }
+  const long v = wcstol(buf, nullptr, 10);
+  if (v < 64 || v > 16384) {
+    return 4096;
+  }
+  return static_cast<int>(v);
 }
 
 std::wstring PromptOpenInputPath(HWND owner) {
@@ -1631,6 +1993,7 @@ std::wstring PromptSelectOutputFolder(HWND owner) {
 }
 
 const wchar_t* ConvertToolExeName(int inMajor, int outMajor) {
+  if (inMajor == 1 && outMajor == 1) return L"agis_convert_model_to_model.exe";
   if (inMajor == 0 && outMajor == 1) return L"agis_convert_gis_to_model.exe";
   if (inMajor == 0 && outMajor == 2) return L"agis_convert_gis_to_tile.exe";
   if (inMajor == 1 && outMajor == 0) return L"agis_convert_model_to_gis.exe";
@@ -1674,14 +2037,37 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
   const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
   const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
   const std::wstring coord = GetModelCoordArg(hwnd);
+  const std::wstring vectorMode = GetVectorModeArg(hwnd);
+  const double elevRatio = GetElevHorizRatioArg(hwnd);
+  wchar_t ratioStr[64]{};
+  swprintf_s(ratioStr, L"%.12g", elevRatio);
+  const std::wstring outUnit = GetOutputUnitArg(hwnd);
+  const std::wstring tcr = GetTargetCrsArg(hwnd);
+  const int meshSp = GetMeshSpacingArg(hwnd);
+  wchar_t meshStr[32]{};
+  swprintf_s(meshStr, L"%d", meshSp);
+  const std::wstring texFmt = GetTextureFormatArg(hwnd);
+  const int rmax = GetRasterReadMaxDimArg(hwnd);
+  wchar_t rmaxStr[32]{};
+  swprintf_s(rmaxStr, L"%d", rmax);
+  std::wstring tail = L"\r\n"
+                      L"  --coord-system " + QuoteArg(coord) + L"\r\n"
+                      L"  --vector-mode " + QuoteArg(vectorMode) + L"\r\n"
+                      L"  --elev-horiz-ratio " + QuoteArg(ratioStr) + L"\r\n"
+                      L"  --output-unit " + QuoteArg(outUnit) + L"\r\n"
+                      L"  --mesh-spacing " + QuoteArg(meshStr) + L"\r\n"
+                      L"  --texture-format " + QuoteArg(texFmt) + L"\r\n"
+                      L"  --raster-max-dim " + QuoteArg(rmaxStr);
+  if (!tcr.empty()) {
+    tail += L"\r\n  --target-crs " + QuoteArg(tcr);
+  }
   return L"命令行:\r\n" + QuoteArg(exePath) + L"\r\n"
          L"  --input " + QuoteArg(inPath) + L"\r\n"
          L"  --output " + QuoteArg(outPath) + L"\r\n"
          L"  --input-type " + QuoteArg(inType) + L"\r\n"
          L"  --input-subtype " + QuoteArg(inSub) + L"\r\n"
          L"  --output-type " + QuoteArg(outType) + L"\r\n"
-         L"  --output-subtype " + QuoteArg(outSub) + L"\r\n"
-         L"  --coord-system " + QuoteArg(coord);
+         L"  --output-subtype " + QuoteArg(outSub) + tail;
 }
 
 void UpdateConvertCmdlinePreview(HWND hwnd) {
@@ -1698,33 +2084,9 @@ struct ObjPreviewStats {
   uint64_t fileBytes = 0;
 };
 
-struct PreviewVec3 {
-  float x = 0.0f;
-  float y = 0.0f;
-  float z = 0.0f;
-};
-
-struct ObjPreviewModel {
-  struct MaterialInfo {
-    std::wstring name;
-    float kdR = 0.30f;
-    float kdG = 0.62f;
-    float kdB = 0.92f;
-    std::wstring mapKdPath;
-  };
-  std::vector<PreviewVec3> vertices;
-  std::vector<std::array<int, 3>> faces;
-  std::vector<int> faceMaterial;  // 与 faces 同步，记录材质索引
-  std::vector<MaterialInfo> materials;
-  PreviewVec3 center{};
-  float extent = 1.0f;
-  float kdR = 0.30f;
-  float kdG = 0.62f;
-  float kdB = 0.92f;
-  std::wstring primaryMapKdPath;
-};
-
+#if !AGIS_USE_BGFX
 enum class PreviewRenderBackend { kOpenGL, kDx11 };
+#endif
 
 struct ModelPreviewState {
   ObjPreviewModel model;
@@ -1735,6 +2097,10 @@ struct ModelPreviewState {
   bool dragging = false;
   POINT lastPt{};
   bool solid = true;
+#if AGIS_USE_BGFX
+  AgisBgfxRendererKind bgfxRenderer = AgisBgfxRendererKind::kD3D11;
+  AgisBgfxPreviewContext* bgfxCtx = nullptr;
+#else
   PreviewRenderBackend backend = PreviewRenderBackend::kOpenGL;
   HDC glHdc = nullptr;
   HGLRC glRc = nullptr;
@@ -1753,11 +2119,13 @@ struct ModelPreviewState {
   ID3D11Texture2D* d3dDsTex = nullptr;
   ID3D11DepthStencilView* d3dDsv = nullptr;
   UINT d3dVbCap = 0;
+#endif
   DWORD lastFpsTick = 0;
   int frameCounter = 0;
   float fps = 0.0f;
 };
 
+#if !AGIS_USE_BGFX
 template <typename T>
 void SafeRelease(T*& p) {
   if (p) {
@@ -1947,6 +2315,8 @@ float4 main(float4 pos:SV_POSITION, float4 col:COLOR) : SV_Target { return col; 
   return SUCCEEDED(hr);
 }
 
+#endif  // !AGIS_USE_BGFX
+
 std::wstring TrimLeft(const std::wstring& s) {
   size_t i = 0;
   while (i < s.size() && iswspace(s[i])) ++i;
@@ -2042,15 +2412,54 @@ ObjPreviewStats ScanObjStats(const std::wstring& path) {
   return s;
 }
 
+static void SplitObjFaceToken(const std::wstring& tok, std::wstring* vOut, std::wstring* vtOut, std::wstring* vnOut) {
+  *vOut = *vtOut = *vnOut = L"";
+  const size_t p1 = tok.find(L'/');
+  if (p1 == std::wstring::npos) {
+    *vOut = tok;
+    return;
+  }
+  *vOut = tok.substr(0, p1);
+  const size_t p2 = tok.find(L'/', p1 + 1);
+  if (p2 == std::wstring::npos) {
+    *vtOut = tok.substr(p1 + 1);
+    return;
+  }
+  *vtOut = tok.substr(p1 + 1, p2 - p1 - 1);
+  *vnOut = tok.substr(p2 + 1);
+}
+
+/// OBJ 1-based 索引；负索引相对当前列表末尾；返回 0-based，非法为 -1。
+static int ResolveObjIndex(const std::wstring& s, int count) {
+  if (s.empty()) {
+    return -1;
+  }
+  int i = _wtoi(s.c_str());
+  if (i == 0) {
+    return -1;
+  }
+  if (i < 0) {
+    i = count + i + 1;
+  }
+  if (i <= 0 || i > count) {
+    return -1;
+  }
+  return i - 1;
+}
+
 bool ParseObjModel(const std::wstring& path, ObjPreviewModel* out) {
   if (!out) {
     return false;
   }
   out->vertices.clear();
+  out->texcoords.clear();
   out->faces.clear();
+  out->faceTexcoord.clear();
   out->faceMaterial.clear();
   out->materials.clear();
+  out->hasVertexTexcoords = false;
   out->center = {};
+  out->extentHoriz = 1.0f;
   out->extent = 1.0f;
   out->kdR = 0.30f;
   out->kdG = 0.62f;
@@ -2078,6 +2487,11 @@ bool ParseObjModel(const std::wstring& path, ObjPreviewModel* out) {
       vmax.x = (std::max)(vmax.x, v.x);
       vmax.y = (std::max)(vmax.y, v.y);
       vmax.z = (std::max)(vmax.z, v.z);
+    } else if (line.rfind(L"vt ", 0) == 0) {
+      std::wistringstream ss(line.substr(3));
+      PreviewVec2 t{};
+      ss >> t.u >> t.v;
+      out->texcoords.push_back(t);
     } else if (line.rfind(L"mtllib ", 0) == 0) {
       std::filesystem::path mtl = objPath.parent_path() / line.substr(7);
       ParseMtlKdColor(mtl, &out->kdR, &out->kdG, &out->kdB);
@@ -2099,25 +2513,36 @@ bool ParseObjModel(const std::wstring& path, ObjPreviewModel* out) {
       }
     } else if (line.rfind(L"f ", 0) == 0) {
       std::wistringstream ss(line.substr(2));
-      std::vector<int> idx;
       std::wstring tok;
+      struct Corner {
+        int vi;
+        int ti;
+      };
+      std::vector<Corner> poly;
       while (ss >> tok) {
-        const size_t slash = tok.find(L'/');
-        const std::wstring n = slash == std::wstring::npos ? tok : tok.substr(0, slash);
-        if (n.empty()) {
+        std::wstring vs, vts, vns;
+        SplitObjFaceToken(tok, &vs, &vts, &vns);
+        (void)vns;
+        if (vs.empty()) {
           continue;
         }
-        int vi = _wtoi(n.c_str());
+        const int vi = ResolveObjIndex(vs, static_cast<int>(out->vertices.size()));
         if (vi < 0) {
-          vi = static_cast<int>(out->vertices.size()) + vi + 1;
+          continue;
         }
-        if (vi > 0) {
-          idx.push_back(vi - 1);
+        int ti = -1;
+        if (!vts.empty()) {
+          ti = ResolveObjIndex(vts, static_cast<int>(out->texcoords.size()));
+          if (ti >= 0) {
+            out->hasVertexTexcoords = true;
+          }
         }
+        poly.push_back({vi, ti});
       }
-      if (idx.size() >= 3) {
-        for (size_t i = 1; i + 1 < idx.size(); ++i) {
-          out->faces.push_back({idx[0], idx[i], idx[i + 1]});
+      if (poly.size() >= 3) {
+        for (size_t i = 1; i + 1 < poly.size(); ++i) {
+          out->faces.push_back({poly[0].vi, poly[i].vi, poly[i + 1].vi});
+          out->faceTexcoord.push_back({poly[0].ti, poly[i].ti, poly[i + 1].ti});
           out->faceMaterial.push_back(curMtlIndex);
         }
       }
@@ -2128,11 +2553,13 @@ bool ParseObjModel(const std::wstring& path, ObjPreviewModel* out) {
     const float ex = (std::max)(1e-6f, vmax.x - vmin.x);
     const float ey = (std::max)(1e-6f, vmax.y - vmin.y);
     const float ez = (std::max)(1e-6f, vmax.z - vmin.z);
-    out->extent = (std::max)(ex, (std::max)(ey, ez));
+    out->extentHoriz = (std::max)((std::max)(ex, ey), 1e-6f);
+    out->extent = (std::max)(out->extentHoriz, ez);
   }
   return !out->vertices.empty() && !out->faces.empty();
 }
 
+#if !AGIS_USE_BGFX
 POINT ProjectPoint(const PreviewVec3& v, float rotX, float rotY, float zoom, const RECT& rc) {
   const float cx = std::cos(rotX), sx = std::sin(rotX);
   const float cy = std::cos(rotY), sy = std::sin(rotY);
@@ -2236,10 +2663,11 @@ void DrawModelPreviewOpenGL(HWND hwnd, const RECT& rc, const ModelPreviewState& 
   glScaled(st.zoom * normScale, st.zoom * normScale, st.zoom * normScale);
   glTranslated(-st.model.center.x, -st.model.center.y, -st.model.center.z);
 
+  const size_t faceStride = ModelPreviewFaceStride(st.model.faces.size());
   if (st.solid) {
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glBegin(GL_TRIANGLES);
-    for (size_t fi = 0; fi < st.model.faces.size(); ++fi) {
+    for (size_t fi = 0; fi < st.model.faces.size(); fi += faceStride) {
       const auto& f = st.model.faces[fi];
       if (f[0] < 0 || f[1] < 0 || f[2] < 0 || f[0] >= static_cast<int>(st.model.vertices.size()) ||
           f[1] >= static_cast<int>(st.model.vertices.size()) || f[2] >= static_cast<int>(st.model.vertices.size())) {
@@ -2268,7 +2696,8 @@ void DrawModelPreviewOpenGL(HWND hwnd, const RECT& rc, const ModelPreviewState& 
   glColor3f((std::min)(1.0f, st.model.kdR + 0.20f), (std::min)(1.0f, st.model.kdG + 0.20f),
             (std::min)(1.0f, st.model.kdB + 0.20f));
   glBegin(GL_TRIANGLES);
-  for (const auto& f : st.model.faces) {
+  for (size_t fi = 0; fi < st.model.faces.size(); fi += faceStride) {
+    const auto& f = st.model.faces[fi];
     if (f[0] < 0 || f[1] < 0 || f[2] < 0 || f[0] >= static_cast<int>(st.model.vertices.size()) ||
         f[1] >= static_cast<int>(st.model.vertices.size()) || f[2] >= static_cast<int>(st.model.vertices.size())) {
       continue;
@@ -2337,7 +2766,8 @@ void DrawModelPreviewDx11(HWND hwnd, const RECT& rc, ModelPreviewState* st) {
     o.z = -x1 * sy + z1 * cy;
     return o;
   };
-  for (size_t fidx = 0; fidx < st->model.faces.size(); ++fidx) {
+  const size_t faceStride = ModelPreviewFaceStride(st->model.faces.size());
+  for (size_t fidx = 0; fidx < st->model.faces.size(); fidx += faceStride) {
     const auto& f = st->model.faces[fidx];
     if (f[0] < 0 || f[1] < 0 || f[2] < 0 || f[0] >= static_cast<int>(st->model.vertices.size()) ||
         f[1] >= static_cast<int>(st->model.vertices.size()) || f[2] >= static_cast<int>(st->model.vertices.size())) {
@@ -2460,13 +2890,16 @@ void DrawModelPreviewDx11(HWND hwnd, const RECT& rc, ModelPreviewState* st) {
   st->d3dSwap->Present(1, 0);
 }
 
+#endif  // !AGIS_USE_BGFX
+
 RECT GetPreviewViewportRect(HWND hwnd) {
   RECT rc{};
   GetClientRect(hwnd, &rc);
   const int clientRight = static_cast<int>(rc.right);
   const int clientBottom = static_cast<int>(rc.bottom);
   const int margin = 12;
-  const int viewTop = 42;
+  // 工具栏约两行，以下为 3D 视口顶边
+  const int viewTop = 52;
   const int runtimeH = 20;
   const int infoH = (std::clamp<int>)((clientBottom - viewTop) / 3, 120, 240);
   const int runtimeTop = (std::max)(viewTop + 80, clientBottom - margin - runtimeH);
@@ -2507,8 +2940,8 @@ void FitPreviewCamera(ModelPreviewState* st) {
   if (!st) return;
   st->rotX = 0.5f;
   st->rotY = -0.8f;
-  const float ex = (std::max)(0.001f, st->model.extent);
-  st->zoom = std::clamp(1.35f / ex, 0.01f, 6.0f);
+  // bgfx 路径按包围盒 max 边长等比归一化；此处只调视角缩放，不要再除 extent。
+  st->zoom = 1.15f;
 }
 
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2520,7 +2953,6 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
   constexpr int kPreviewResetBtnId = 6;
   constexpr int kPreviewFitBtnId = 7;
   constexpr int kPreviewTexBtnId = 8;
-  constexpr UINT_PTR kPreviewTimerId = 101;
   switch (msg) {
     case WM_CREATE: {
       auto* st = new ModelPreviewState();
@@ -2533,8 +2965,13 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       HWND mode = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 88, 10, 180, 140,
                                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewModeComboId)),
                                 GetModuleHandleW(nullptr), nullptr);
+#if AGIS_USE_BGFX
+      SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bgfx - Direct3D 11"));
+      SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bgfx - OpenGL"));
+#else
       SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"内置渲染 - OpenGL"));
       SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"内置渲染 - DirectX11"));
+#endif
       SendMessageW(mode, CB_SETCURSEL, 0, 0);
       CreateWindowW(L"BUTTON", L"实体填充", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 280, 10, 88, 20, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewSolidCheckId)), GetModuleHandleW(nullptr), nullptr);
@@ -2545,9 +2982,13 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewFitBtnId)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"BUTTON", L"预览贴图", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 280, 34, 88, 20, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewTexBtnId)), GetModuleHandleW(nullptr), nullptr);
+#if AGIS_USE_BGFX
+      CreateWindowW(L"STATIC", L"当前渲染器: Direct3D 11（bgfx）", WS_CHILD | WS_VISIBLE, 280, 12, 170, 20, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewModeTextId)), GetModuleHandleW(nullptr), nullptr);
+#else
       CreateWindowW(L"STATIC", L"当前渲染器: OpenGL（内置）", WS_CHILD | WS_VISIBLE, 280, 12, 170, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewModeTextId)), GetModuleHandleW(nullptr),
-                    nullptr);
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewModeTextId)), GetModuleHandleW(nullptr), nullptr);
+#endif
       HWND info = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
                                                WS_VSCROLL | ES_READONLY,
                                 12, 270, 436, 220, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewInfoEditId)),
@@ -2562,7 +3003,12 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       if (HWND rt = GetDlgItem(hwnd, kPreviewRuntimeTextId)) {
         SendMessageW(rt, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
       }
-      SetTimer(hwnd, kPreviewTimerId, 16, nullptr);
+#if AGIS_USE_BGFX
+      if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model)) {
+        MessageBoxW(hwnd, L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ 含顶点与面）。", L"模型预览",
+                    MB_OK | MB_ICONWARNING);
+      }
+#endif
       return 0;
     }
     case WM_COMMAND:
@@ -2570,6 +3016,17 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         HWND mode = GetDlgItem(hwnd, kPreviewModeComboId);
         const int sel = static_cast<int>(SendMessageW(mode, CB_GETCURSEL, 0, 0));
         if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+#if AGIS_USE_BGFX
+          const AgisBgfxRendererKind kind = (sel == 1) ? AgisBgfxRendererKind::kOpenGL : AgisBgfxRendererKind::kD3D11;
+          st->bgfxRenderer = kind;
+          if (st->bgfxCtx) {
+            agis_bgfx_preview_shutdown(hwnd, st->bgfxCtx);
+            st->bgfxCtx = nullptr;
+          }
+          if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, kind, st->model)) {
+            MessageBoxW(hwnd, L"切换渲染器后初始化失败。", L"模型预览", MB_OK | MB_ICONWARNING);
+          }
+#else
           st->backend = (sel == 1) ? PreviewRenderBackend::kDx11 : PreviewRenderBackend::kOpenGL;
           if (st->backend == PreviewRenderBackend::kOpenGL) {
             ReleasePreviewDx(st);
@@ -2578,9 +3035,15 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             ReleasePreviewGl(hwnd, st);
             InitPreviewDx(hwnd, st);
           }
+#endif
         }
+#if AGIS_USE_BGFX
+        SetWindowTextW(GetDlgItem(hwnd, kPreviewModeTextId),
+                       sel == 1 ? L"当前渲染器: OpenGL（bgfx）" : L"当前渲染器: Direct3D 11（bgfx）");
+#else
         SetWindowTextW(GetDlgItem(hwnd, kPreviewModeTextId),
                        sel == 1 ? L"当前渲染器: DirectX11（内置）" : L"当前渲染器: OpenGL（内置）");
+#endif
         RECT vrc = GetPreviewViewportRect(hwnd);
         InvalidateRect(hwnd, &vrc, FALSE);
         return 0;
@@ -2658,21 +3121,18 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
         const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         st->zoom *= (delta > 0) ? 1.1f : 0.9f;
-        st->zoom = std::clamp(st->zoom, 0.2f, 5.0f);
+        st->zoom = std::clamp(st->zoom, 0.05f, 12.0f);
         RECT vrc = GetPreviewViewportRect(hwnd);
         InvalidateRect(hwnd, &vrc, FALSE);
       }
       return 0;
     case WM_ERASEBKGND:
+#if AGIS_USE_BGFX
+      // bgfx 在子矩形视口清屏；抑制父窗口对该区默认擦除可减少闪烁。
+#else
       // 预览视口由 OpenGL / DX11 自行清屏与交换，不做默认底色擦除可减少闪烁。
+#endif
       return 1;
-    case WM_TIMER:
-      if (wParam == kPreviewTimerId) {
-        RECT vrc = GetPreviewViewportRect(hwnd);
-        InvalidateRect(hwnd, &vrc, FALSE);
-        return 0;
-      }
-      break;
     case WM_SIZE: {
       RECT rc{};
       GetClientRect(hwnd, &rc);
@@ -2680,7 +3140,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       const int clientBottom = static_cast<int>(rc.bottom);
       const int margin = 12;
       const int runtimeH = 20;
-      const int infoH = (std::clamp<int>)((clientBottom - 42) / 3, 120, 240);
+      const int infoH = (std::clamp<int>)((clientBottom - 74) / 3, 120, 240);
       const int runtimeTop = (std::max)(140, clientBottom - margin - runtimeH);
       const int infoTop = (std::max)(120, runtimeTop - 8 - infoH);
       const int infoW = (std::max)(120, clientRight - margin * 2);
@@ -2699,12 +3159,16 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       HDC hdc = BeginPaint(hwnd, &ps);
       RECT vrc = GetPreviewViewportRect(hwnd);
       if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+#if AGIS_USE_BGFX
+        agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid);
+#else
         if (st->backend == PreviewRenderBackend::kOpenGL) {
           InitPreviewGl(hwnd, st);
           DrawModelPreviewOpenGL(hwnd, vrc, *st);
         } else {
           DrawModelPreviewDx11(hwnd, vrc, st);
         }
+#endif
         st->frameCounter += 1;
         const DWORD now = GetTickCount();
         const DWORD dt = now - st->lastFpsTick;
@@ -2729,10 +3193,16 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       DestroyWindow(hwnd);
       return 0;
     case WM_DESTROY:
-      KillTimer(hwnd, kPreviewTimerId);
       if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+#if AGIS_USE_BGFX
+        if (st->bgfxCtx) {
+          agis_bgfx_preview_shutdown(hwnd, st->bgfxCtx);
+          st->bgfxCtx = nullptr;
+        }
+#else
         ReleasePreviewGl(hwnd, st);
         ReleasePreviewDx(st);
+#endif
         delete st;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
       }
@@ -2753,9 +3223,30 @@ void OpenModelPreviewWindow(HWND owner, const std::wstring& path) {
 bool RunConvertBackend(HWND hwnd) {
   const int inMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE), CB_GETCURSEL, 0, 0));
   const int outMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
-  if (inMajor < 0 || outMajor < 0 || inMajor == outMajor) {
-    MessageBoxW(hwnd, L"请选择不同的输入类型与输出类型。", L"数据转换", MB_OK | MB_ICONWARNING);
+  if (inMajor < 0 || outMajor < 0) {
+    MessageBoxW(hwnd, L"请先选择输入与输出类型。", L"数据转换", MB_OK | MB_ICONWARNING);
     return false;
+  }
+  if (inMajor == outMajor) {
+    if (inMajor != 1) {
+      MessageBoxW(hwnd, L"同类型转换当前仅支持「模型数据」下 3DMesh 与点云子类型互转。", L"数据转换",
+                  MB_OK | MB_ICONWARNING);
+      return false;
+    }
+    const std::wstring inSu = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
+    const std::wstring outSu = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
+    const auto isPc = [](const std::wstring& s) {
+      return s.find(L"点云") != std::wstring::npos || s.find(L"LAS") != std::wstring::npos ||
+             s.find(L"LAZ") != std::wstring::npos || s.find(L"laz") != std::wstring::npos;
+    };
+    const auto isM3 = [](const std::wstring& s) {
+      return s.find(L"3DMesh") != std::wstring::npos || s.find(L"网格") != std::wstring::npos;
+    };
+    if (!((isM3(inSu) && isPc(outSu)) || (isPc(inSu) && isM3(outSu)))) {
+      MessageBoxW(hwnd, L"请选择：一侧为「3DMesh（网格模型）」、另一侧为「点云（LAS…）」。", L"数据转换",
+                  MB_OK | MB_ICONWARNING);
+      return false;
+    }
   }
   wchar_t inPath[1024]{};
   wchar_t outPath[1024]{};
@@ -2782,10 +3273,29 @@ bool RunConvertBackend(HWND hwnd) {
   const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
   const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
   const std::wstring coord = GetModelCoordArg(hwnd);
+  const std::wstring vectorMode = GetVectorModeArg(hwnd);
+  const double elevRatio = GetElevHorizRatioArg(hwnd);
+  wchar_t ratioStr[64]{};
+  swprintf_s(ratioStr, L"%.12g", elevRatio);
+  const std::wstring outUnit = GetOutputUnitArg(hwnd);
+  const std::wstring tcr = GetTargetCrsArg(hwnd);
+  const int meshSp = GetMeshSpacingArg(hwnd);
+  wchar_t meshStr[32]{};
+  swprintf_s(meshStr, L"%d", meshSp);
+  const std::wstring texFmt = GetTextureFormatArg(hwnd);
+  const int rmax = GetRasterReadMaxDimArg(hwnd);
+  wchar_t rmaxStr[32]{};
+  swprintf_s(rmaxStr, L"%d", rmax);
   std::wstring cmd = QuoteArg(exePath) + L" --input " + QuoteArg(inPath) + L" --output " + QuoteArg(outPath) +
                      L" --input-type " + QuoteArg(inType) + L" --input-subtype " + QuoteArg(inSub) +
                      L" --output-type " + QuoteArg(outType) + L" --output-subtype " + QuoteArg(outSub) +
-                     L" --coord-system " + QuoteArg(coord);
+                     L" --coord-system " + QuoteArg(coord) + L" --vector-mode " + QuoteArg(vectorMode) +
+                     L" --elev-horiz-ratio " + QuoteArg(ratioStr) + L" --output-unit " + QuoteArg(outUnit) +
+                     L" --mesh-spacing " + QuoteArg(meshStr) + L" --texture-format " + QuoteArg(texFmt) +
+                     L" --raster-max-dim " + QuoteArg(rmaxStr);
+  if (!tcr.empty()) {
+    cmd += L" --target-crs " + QuoteArg(tcr);
+  }
   UpdateConvertCmdlinePreview(hwnd);
   WriteConvertLog(hwnd, (std::wstring(L"[命令] ") + cmd).c_str());
   std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
@@ -2912,15 +3422,64 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT",
                     L"统一坐标系=WebMercator\r\n重采样=双线性\r\n精度=中\r\n（不同类型可扩展子类型参数）",
-                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 280, 30, 240, 230,
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 280, 30, 240, 200,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_SETTING)), GetModuleHandleW(nullptr),
                     nullptr);
-      HWND coord = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 236, 240,
+      CreateWindowW(L"STATIC", L"高程/水平比(1=1:1)：", WS_CHILD | WS_VISIBLE, 280, 238, 200, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_ELEV_HORIZ_LBL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 420, 236, 98, 22, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_ELEV_HORIZ_RATIO)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"STATIC", L"目标投影（空=自动）：", WS_CHILD | WS_VISIBLE, 280, 264, 240, 16, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TARGET_CRS_LBL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 280, 282, 240, 22, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TARGET_CRS)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"STATIC", L"模型单位：", WS_CHILD | WS_VISIBLE, 280, 310, 72, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_UNIT_LBL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      HWND outUnitCombo =
+          CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 352, 308, 168, 120,
+                        hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_UNIT)),
+                        GetModuleHandleW(nullptr), nullptr);
+      SendMessageW(outUnitCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"米（m）"));
+      SendMessageW(outUnitCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"千米（km）"));
+      SendMessageW(outUnitCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"千千米（1000 km）"));
+      SendMessageW(outUnitCombo, CB_SETCURSEL, 0, 0);
+      CreateWindowW(L"STATIC", L"Mesh间距(模型单位)：", WS_CHILD | WS_VISIBLE, 280, 338, 200, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MESH_SPACING_LBL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER, 420, 336, 98, 22,
+                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MESH_SPACING)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"STATIC", L"栅格读入最大边(px)：", WS_CHILD | WS_VISIBLE, 280, 364, 168, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RASTER_MAX_LBL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"EDIT", L"4096", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER, 420, 362, 98, 22,
+                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RASTER_MAX)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"STATIC", L"模型贴图格式：", WS_CHILD | WS_VISIBLE, 280, 392, 168, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TEXTURE_FMT_LBL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      HWND texFmtCombo =
+          CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 420, 390, 98, 120, hwnd,
+                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TEXTURE_FORMAT)),
+                        GetModuleHandleW(nullptr), nullptr);
+      FillConvertTextureFormatCombo(texFmtCombo);
+      HWND coord = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 420, 240,
                                  120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MODEL_COORD)),
                                  GetModuleHandleW(nullptr), nullptr);
       SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"projected（投影直角: x经度 y纬度 z高度）"));
       SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"cecf（地心地固 xyz）"));
       SendMessageW(coord, CB_SETCURSEL, 0, 0);
+      HWND vmode = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 448, 240,
+                                 120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_VECTOR_MODE)),
+                                 GetModuleHandleW(nullptr), nullptr);
+      SendMessageW(vmode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"geometry（矢量转几何对象）"));
+      SendMessageW(vmode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bake_texture（矢量融合到贴图）"));
+      SendMessageW(vmode, CB_SETCURSEL, 0, 0);
 
       CreateWindowW(L"STATIC", L"输出类型与信息", WS_CHILD | WS_VISIBLE, 550, 8, 120, 16, hwnd, nullptr,
                     GetModuleHandleW(nullptr), nullptr);
@@ -2973,9 +3532,14 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       SyncConvertInfoByType(hwnd, false);
       for (int cid : {IDC_CONV_INPUT_TYPE, IDC_CONV_INPUT_TYPE_HELP, IDC_CONV_INPUT_SUBTYPE, IDC_CONV_INPUT_SUBTYPE_HELP,
                       IDC_CONV_INPUT_PATH, IDC_CONV_INPUT_BROWSE, IDC_CONV_INPUT_PREVIEW, IDC_CONV_INPUT_INFO, IDC_CONV_SETTING,
-                      IDC_CONV_OUTPUT_TYPE, IDC_CONV_OUTPUT_TYPE_HELP, IDC_CONV_OUTPUT_SUBTYPE,
+                      IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO, IDC_CONV_TARGET_CRS_LBL, IDC_CONV_TARGET_CRS,
+                      IDC_CONV_OUTPUT_UNIT_LBL, IDC_CONV_OUTPUT_UNIT, IDC_CONV_MESH_SPACING_LBL, IDC_CONV_MESH_SPACING,
+                      IDC_CONV_RASTER_MAX_LBL, IDC_CONV_RASTER_MAX, IDC_CONV_TEXTURE_FMT_LBL, IDC_CONV_TEXTURE_FORMAT,
+                      IDC_CONV_OUTPUT_TYPE, IDC_CONV_OUTPUT_TYPE_HELP,
+                      IDC_CONV_OUTPUT_SUBTYPE,
                       IDC_CONV_OUTPUT_SUBTYPE_HELP, IDC_CONV_OUTPUT_PATH, IDC_CONV_OUTPUT_BROWSE, IDC_CONV_OUTPUT_PREVIEW,
-                      IDC_CONV_OUTPUT_INFO, IDC_CONV_MODEL_COORD, IDC_CONV_CMDLINE, IDC_CONV_COPY_CMD, IDC_CONV_PROGRESS,
+                      IDC_CONV_OUTPUT_INFO, IDC_CONV_MODEL_COORD, IDC_CONV_VECTOR_MODE, IDC_CONV_CMDLINE, IDC_CONV_COPY_CMD,
+                      IDC_CONV_PROGRESS,
                       IDC_CONV_RUN, IDC_CONV_MSG, IDC_CONV_LOG}) {
         if (HWND c = GetDlgItem(hwnd, cid)) {
           SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
@@ -3055,10 +3619,36 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_MODEL_COORD) {
+        SyncConvertInfoByType(hwnd, false);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
-      if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_CONV_INPUT_PATH || LOWORD(wParam) == IDC_CONV_OUTPUT_PATH)) {
+      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_VECTOR_MODE) {
+        SyncConvertInfoByType(hwnd, false);
+        UpdateConvertCmdlinePreview(hwnd);
+        return 0;
+      }
+      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_TEXTURE_FORMAT) {
+        UpdateConvertCmdlinePreview(hwnd);
+        SyncConvertInfoByType(hwnd, false);
+        break;
+      }
+      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_OUTPUT_UNIT) {
+        SyncConvertInfoByType(hwnd, false);
+        UpdateConvertCmdlinePreview(hwnd);
+        return 0;
+      }
+      if (HIWORD(wParam) == EN_CHANGE &&
+          (LOWORD(wParam) == IDC_CONV_INPUT_PATH || LOWORD(wParam) == IDC_CONV_OUTPUT_PATH ||
+           LOWORD(wParam) == IDC_CONV_ELEV_HORIZ_RATIO || LOWORD(wParam) == IDC_CONV_TARGET_CRS ||
+           LOWORD(wParam) == IDC_CONV_MESH_SPACING || LOWORD(wParam) == IDC_CONV_RASTER_MAX)) {
+        if (LOWORD(wParam) == IDC_CONV_INPUT_PATH) {
+          SyncConvertInfoByType(hwnd, true);
+        } else if (LOWORD(wParam) == IDC_CONV_OUTPUT_PATH) {
+          SyncConvertInfoByType(hwnd, false);
+        } else {
+          SyncConvertInfoByType(hwnd, false);
+        }
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
@@ -3067,6 +3657,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (!p.empty()) {
           SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), p.c_str());
           WriteConvertLog(hwnd, (std::wstring(L"[路径] 输入：") + p).c_str());
+          SyncConvertInfoByType(hwnd, true);
           UpdateConvertCmdlinePreview(hwnd);
         }
         return 0;
@@ -3086,6 +3677,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (!p.empty()) {
           SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), p.c_str());
           WriteConvertLog(hwnd, (std::wstring(L"[路径] 输出：") + p).c_str());
+          SyncConvertInfoByType(hwnd, false);
           UpdateConvertCmdlinePreview(hwnd);
         }
         return 0;

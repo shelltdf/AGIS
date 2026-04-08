@@ -82,6 +82,8 @@ python publish.py
   - OpenGL 预览后端；
   - DirectX11 预览后端；
   - 预览窗口消息处理与 UI 交互逻辑。
+- **性能**：不对空闲视口做固定帧率刷新；当面片数极大时对绘制列表按步长抽稀（上限约 12 万面），减轻立即模式 GL 压力。
+- **适配**：`FitPreviewCamera` 使用的 `zoom` 与渲染中的 `1/extent` 归一化一致，避免重复按包围盒缩放。
 - 若后续做结构化重构，建议拆分为：
   - `src/app/model_preview.h/.cpp`（窗口与渲染）
   - `src/app/model_preview_parser.h/.cpp`（OBJ/MTL 解析）
