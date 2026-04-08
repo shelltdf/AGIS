@@ -13,6 +13,14 @@
 | 抽象 GUI（App / Widget / 平台接口） | `ui_engine/include/ui_engine/` 下 `app.h`、`widget*.h` 等；`ui_engine/src/` 下对应 `.cpp`；**`widgets_mainframe.*`**（AGIS 主框架 Widget）、`gis-desktop-win32/src/app/ui_private.h`（主程序强绑定 Widget）、`widgets_all.h`（聚合）（类图见 [uml-class-ui.md](uml-class-ui.md)） |
 | 日志缓冲 | `gis-desktop-win32/src/core/app_log.cpp` |
 | 日志窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `LogWndProc` |
+| 数据转换窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `ConvertWndProc` |
+| 转换后端调度 | `gis-desktop-win32/src/app/main.cpp` → `RunConvertBackend`、`BuildConvertCommandLine` |
+| 模型预览窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `ModelPreviewWndProc` |
+| 模型预览 OpenGL 渲染 | `gis-desktop-win32/src/app/main.cpp` → `InitPreviewGl`、`DrawModelPreviewOpenGL` |
+| 模型预览 DX11 渲染 | `gis-desktop-win32/src/app/main.cpp` → `InitPreviewDx`、`DrawModelPreviewDx11` |
+| OBJ/MTL 解析 | `gis-desktop-win32/src/app/main.cpp` → `ParseObjModel`、`ParseMtlMaterials` |
+| 转换后端公共库 | `gis-desktop-win32/src/tools/convert_backend_common.cpp/.h` |
+| 六个转换命令行工具入口 | `gis-desktop-win32/src/tools/agis_convert_*.cpp` |
 | 菜单资源 ID | `gis-desktop-win32/src/app/resource.h` 与代码中 `#define` 一致 |
 | CMake 目标 | `gis-desktop-win32/CMakeLists.txt` → `add_executable(agis_desktop ...)` |
 

@@ -8,5 +8,5 @@ int wmain(int argc, wchar_t** argv) {
     std::wcerr << L"usage: agis_convert_gis_to_model --input <path> --output <path>\n";
     return 1;
   }
-  return RunMockConvert(L"GIS -> MODEL", args);
+  return RunConversion(ConvertMode::kGisToModel, L"GIS -> MODEL", args);
 }

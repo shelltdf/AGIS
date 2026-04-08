@@ -11,6 +11,15 @@ struct ConvertArgs {
   std::wstring output_subtype;
 };
 
+enum class ConvertMode {
+  kGisToModel,
+  kGisToTile,
+  kModelToGis,
+  kModelToTile,
+  kTileToGis,
+  kTileToModel,
+};
+
 bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out);
 void PrintConvertBanner(const wchar_t* title, const ConvertArgs& args);
-int RunMockConvert(const wchar_t* title, const ConvertArgs& args);
+int RunConversion(ConvertMode mode, const wchar_t* title, const ConvertArgs& args);

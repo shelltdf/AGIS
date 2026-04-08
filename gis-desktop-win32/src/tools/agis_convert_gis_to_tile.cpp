@@ -8,5 +8,5 @@ int wmain(int argc, wchar_t** argv) {
     std::wcerr << L"usage: agis_convert_gis_to_tile --input <path> --output <dir>\n";
     return 1;
   }
-  return RunMockConvert(L"GIS -> TILE", args);
+  return RunConversion(ConvertMode::kGisToTile, L"GIS -> TILE", args);
 }

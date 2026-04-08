@@ -8,5 +8,5 @@ int wmain(int argc, wchar_t** argv) {
     std::wcerr << L"usage: agis_convert_model_to_tile --input <path> --output <dir>\n";
     return 1;
   }
-  return RunMockConvert(L"MODEL -> TILE", args);
+  return RunConversion(ConvertMode::kModelToTile, L"MODEL -> TILE", args);
 }

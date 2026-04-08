@@ -64,3 +64,25 @@ python publish.py
 ## 6. 文档同步
 
 - 修改行为或界面时，同步更新 `ai-software-engineering/02-physical/gis-desktop-win32/spec.md` 与用户手册相关章节。
+
+## 7. 数据转换后端维护
+
+- 转换公共逻辑：`gis-desktop-win32/src/tools/convert_backend_common.cpp/.h`。  
+- 六个后端入口：`gis-desktop-win32/src/tools/agis_convert_*.cpp`，分别对应 6 条互转路径。  
+- 主程序调度：`gis-desktop-win32/src/app/main.cpp` 中根据输入/输出大类映射到具体 EXE，并构建命令行参数。  
+- `CMakeLists.txt` 中：
+  - `agis_convert_backend_common` 为静态库；
+  - 6 个后端可执行通过 `add_executable` 构建；
+  - `agis_desktop` 依赖这些后端，且在构建后复制到主程序输出目录。
+
+## 8. 模型预览维护
+
+- 当前实现位于 `gis-desktop-win32/src/app/main.cpp`，包含：
+  - OBJ/MTL 解析（`ParseObjModel` / `ParseMtlMaterials`）；
+  - OpenGL 预览后端；
+  - DirectX11 预览后端；
+  - 预览窗口消息处理与 UI 交互逻辑。
+- 若后续做结构化重构，建议拆分为：
+  - `src/app/model_preview.h/.cpp`（窗口与渲染）
+  - `src/app/model_preview_parser.h/.cpp`（OBJ/MTL 解析）
+  并在 `CMakeLists.txt` 给 `agis_desktop` 追加源文件。
