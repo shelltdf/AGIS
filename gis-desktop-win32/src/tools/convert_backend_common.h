@@ -9,6 +9,7 @@ struct ConvertArgs {
   std::wstring input_subtype;
   std::wstring output_type;
   std::wstring output_subtype;
+  std::wstring coord_system;
 };
 
 enum class ConvertMode {

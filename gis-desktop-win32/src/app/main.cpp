@@ -8,6 +8,7 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
+#include <DirectXMath.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -1368,7 +1369,8 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PREVIEW), m + colW - 66, m + 76, 66, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_INFO), m, m + 106, colW, topH - 110, TRUE);
 
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_SETTING), m * 2 + colW, m + 20, colW, topH - 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_SETTING), m * 2 + colW, m + 20, colW, topH - 84, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD), m * 2 + colW, topH - 58, colW, 24, TRUE);
 
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), m * 3 + colW * 2, m + 20, colW - 28, 220, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE_HELP), m * 3 + colW * 2 + colW - 24, m + 20, 24, 24, TRUE);
@@ -1380,11 +1382,12 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_INFO), m * 3 + colW * 2, m + 106, colW, topH - 110, TRUE);
 
   const int y1 = m + topH + 8;
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2, 56, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m, y1 + 60, w - m * 2 - 90, 22, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 + 59, 100, 26, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG), m, y1 + 88, w - m * 2, 40, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_LOG), m, y1 + 132, w - m * 2, h - (y1 + 132) - m, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2 - 110, 92, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_CMD), w - m - 100, y1, 100, 26, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 + 32, 100, 26, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m, y1 + 96, w - m * 2, 22, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG), m, y1 + 122, w - m * 2, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_LOG), m, y1 + 150, w - m * 2, h - (y1 + 150) - m, TRUE);
 }
 
 void FillConvertTypeCombo(HWND combo) {
@@ -1580,6 +1583,14 @@ std::wstring GetComboSelectedText(HWND combo) {
   return buf;
 }
 
+std::wstring GetModelCoordArg(HWND hwnd) {
+  const std::wstring raw = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD));
+  if (raw.find(L"cecf") != std::wstring::npos || raw.find(L"CECF") != std::wstring::npos) {
+    return L"cecf";
+  }
+  return L"projected";
+}
+
 std::wstring PromptOpenInputPath(HWND owner) {
   wchar_t path[MAX_PATH]{};
   OPENFILENAMEW ofn{};
@@ -1662,13 +1673,15 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
   const std::wstring inSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
   const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
   const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
+  const std::wstring coord = GetModelCoordArg(hwnd);
   return L"命令行:\r\n" + QuoteArg(exePath) + L"\r\n"
          L"  --input " + QuoteArg(inPath) + L"\r\n"
          L"  --output " + QuoteArg(outPath) + L"\r\n"
          L"  --input-type " + QuoteArg(inType) + L"\r\n"
          L"  --input-subtype " + QuoteArg(inSub) + L"\r\n"
          L"  --output-type " + QuoteArg(outType) + L"\r\n"
-         L"  --output-subtype " + QuoteArg(outSub);
+         L"  --output-subtype " + QuoteArg(outSub) + L"\r\n"
+         L"  --coord-system " + QuoteArg(coord);
 }
 
 void UpdateConvertCmdlinePreview(HWND hwnd) {
@@ -1733,6 +1746,7 @@ struct ModelPreviewState {
   ID3D11PixelShader* d3dPs = nullptr;
   ID3D11InputLayout* d3dLayout = nullptr;
   ID3D11Buffer* d3dVb = nullptr;
+  ID3D11Buffer* d3dCbMvp = nullptr;
   ID3D11RasterizerState* d3dRsSolid = nullptr;
   ID3D11RasterizerState* d3dRsWire = nullptr;
   ID3D11DepthStencilState* d3dDsState = nullptr;
@@ -1820,6 +1834,7 @@ void ReleasePreviewDx(ModelPreviewState* st) {
   SafeRelease(st->d3dRsWire);
   SafeRelease(st->d3dRsSolid);
   SafeRelease(st->d3dVb);
+  SafeRelease(st->d3dCbMvp);
   st->d3dVbCap = 0;
   SafeRelease(st->d3dLayout);
   SafeRelease(st->d3dVs);
@@ -1878,9 +1893,15 @@ bool InitPreviewDx(HWND hwnd, ModelPreviewState* st) {
   rsWire.CullMode = D3D11_CULL_NONE;
   if (FAILED(st->d3dDev->CreateRasterizerState(&rsWire, &st->d3dRsWire))) return false;
   static const char* kVs = R"(
-struct VS_IN { float2 pos : POSITION; float4 col : COLOR; };
+cbuffer CbMvp : register(b0) { float4x4 mvp; };
+struct VS_IN { float3 pos : POSITION; float4 col : COLOR; };
 struct VS_OUT { float4 pos : SV_POSITION; float4 col : COLOR; };
-VS_OUT main(VS_IN i){ VS_OUT o; o.pos=float4(i.pos,0,1); o.col=i.col; return o; })";
+VS_OUT main(VS_IN i){
+  VS_OUT o;
+  o.pos = mul(float4(i.pos, 1.0f), mvp);
+  o.col = i.col;
+  return o;
+})";
   static const char* kPs = R"(
 float4 main(float4 pos:SV_POSITION, float4 col:COLOR) : SV_Target { return col; })";
   ID3DBlob* vsBlob = nullptr;
@@ -1898,8 +1919,8 @@ float4 main(float4 pos:SV_POSITION, float4 col:COLOR) : SV_Target { return col; 
     return false;
   }
   D3D11_INPUT_ELEMENT_DESC ied[] = {
-      {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-      {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
   };
   hr = st->d3dDev->CreateInputLayout(ied, 2, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &st->d3dLayout);
   if (FAILED(hr)) {
@@ -1916,6 +1937,13 @@ float4 main(float4 pos:SV_POSITION, float4 col:COLOR) : SV_Target { return col; 
   hr = st->d3dDev->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &st->d3dPs);
   SafeRelease(vsBlob);
   SafeRelease(psBlob);
+  if (FAILED(hr)) return false;
+  D3D11_BUFFER_DESC cbd{};
+  cbd.ByteWidth = sizeof(float) * 16;
+  cbd.Usage = D3D11_USAGE_DYNAMIC;
+  cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+  cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+  hr = st->d3dDev->CreateBuffer(&cbd, nullptr, &st->d3dCbMvp);
   return SUCCEEDED(hr);
 }
 
@@ -2204,7 +2232,8 @@ void DrawModelPreviewOpenGL(HWND hwnd, const RECT& rc, const ModelPreviewState& 
   glTranslated(0.0, 0.0, -3.5);
   glRotated(st.rotX * 57.29578, 1.0, 0.0, 0.0);
   glRotated(st.rotY * 57.29578, 0.0, 1.0, 0.0);
-  glScaled(st.zoom, st.zoom, st.zoom);
+  const float normScale = 1.0f / (std::max)(0.001f, st.model.extent);
+  glScaled(st.zoom * normScale, st.zoom * normScale, st.zoom * normScale);
   glTranslated(-st.model.center.x, -st.model.center.y, -st.model.center.z);
 
   if (st.solid) {
@@ -2257,7 +2286,7 @@ void DrawModelPreviewOpenGL(HWND hwnd, const RECT& rc, const ModelPreviewState& 
 }
 
 struct DxLineVertex {
-  float x, y;
+  float x, y, z;
   float r, g, b, a;
 };
 
@@ -2288,21 +2317,16 @@ void DrawModelPreviewDx11(HWND hwnd, const RECT& rc, ModelPreviewState* st) {
       if (st->d3dDsTex) st->d3dDev->CreateDepthStencilView(st->d3dDsTex, nullptr, &st->d3dDsv);
     }
   }
+  using namespace DirectX;
   std::vector<DxLineVertex> triVerts;
   std::vector<DxLineVertex> lineVerts;
   if (st->solid) {
     triVerts.reserve(st->model.faces.size() * 3);
   }
   lineVerts.reserve(st->model.faces.size() * 6);
-  const float rw = static_cast<float>((std::max)(1L, rc.right - rc.left));
-  const float rh = static_cast<float>((std::max)(1L, rc.bottom - rc.top));
+  const float normScale = 1.0f / (std::max)(0.001f, st->model.extent);
   const float cx = std::cos(st->rotX), sx = std::sin(st->rotX);
   const float cy = std::cos(st->rotY), sy = std::sin(st->rotY);
-  auto toNdc = [&](POINT p) {
-    float x = ((p.x - rc.left) / rw) * 2.0f - 1.0f;
-    float y = 1.0f - ((p.y - rc.top) / rh) * 2.0f;
-    return std::pair<float, float>(x, y);
-  };
   auto rotate = [&](const PreviewVec3& v) {
     PreviewVec3 o{};
     float x1 = v.x;
@@ -2319,24 +2343,20 @@ void DrawModelPreviewDx11(HWND hwnd, const RECT& rc, ModelPreviewState* st) {
         f[1] >= static_cast<int>(st->model.vertices.size()) || f[2] >= static_cast<int>(st->model.vertices.size())) {
       continue;
     }
-    POINT p0 = ProjectPoint({st->model.vertices[f[0]].x - st->model.center.x, st->model.vertices[f[0]].y - st->model.center.y,
-                             st->model.vertices[f[0]].z - st->model.center.z},
-                            st->rotX, st->rotY, st->zoom, rc);
-    POINT p1 = ProjectPoint({st->model.vertices[f[1]].x - st->model.center.x, st->model.vertices[f[1]].y - st->model.center.y,
-                             st->model.vertices[f[1]].z - st->model.center.z},
-                            st->rotX, st->rotY, st->zoom, rc);
-    POINT p2 = ProjectPoint({st->model.vertices[f[2]].x - st->model.center.x, st->model.vertices[f[2]].y - st->model.center.y,
-                             st->model.vertices[f[2]].z - st->model.center.z},
-                            st->rotX, st->rotY, st->zoom, rc);
-    auto n0 = toNdc(p0), n1 = toNdc(p1), n2 = toNdc(p2);
+    PreviewVec3 va = st->model.vertices[f[0]];
+    PreviewVec3 vb = st->model.vertices[f[1]];
+    PreviewVec3 vc = st->model.vertices[f[2]];
+    va.x = (va.x - st->model.center.x) * normScale;
+    va.y = (va.y - st->model.center.y) * normScale;
+    va.z = (va.z - st->model.center.z) * normScale;
+    vb.x = (vb.x - st->model.center.x) * normScale;
+    vb.y = (vb.y - st->model.center.y) * normScale;
+    vb.z = (vb.z - st->model.center.z) * normScale;
+    vc.x = (vc.x - st->model.center.x) * normScale;
+    vc.y = (vc.y - st->model.center.y) * normScale;
+    vc.z = (vc.z - st->model.center.z) * normScale;
     const float lr = 0.45f, lg = 0.82f, lb = 1.0f, la = 1.0f;
     if (st->solid) {
-      PreviewVec3 va = st->model.vertices[f[0]];
-      PreviewVec3 vb = st->model.vertices[f[1]];
-      PreviewVec3 vc = st->model.vertices[f[2]];
-      va.x -= st->model.center.x; va.y -= st->model.center.y; va.z -= st->model.center.z;
-      vb.x -= st->model.center.x; vb.y -= st->model.center.y; vb.z -= st->model.center.z;
-      vc.x -= st->model.center.x; vc.y -= st->model.center.y; vc.z -= st->model.center.z;
       const PreviewVec3 a3 = rotate(va);
       const PreviewVec3 b3 = rotate(vb);
       const PreviewVec3 c3 = rotate(vc);
@@ -2361,16 +2381,16 @@ void DrawModelPreviewDx11(HWND hwnd, const RECT& rc, ModelPreviewState* st) {
         }
       }
       const float fr = mr * shade, fg = mg * shade, fb = mb * shade, fa = 1.0f;
-      triVerts.push_back({n0.first, n0.second, fr, fg, fb, fa});
-      triVerts.push_back({n1.first, n1.second, fr, fg, fb, fa});
-      triVerts.push_back({n2.first, n2.second, fr, fg, fb, fa});
+      triVerts.push_back({va.x, va.y, va.z, fr, fg, fb, fa});
+      triVerts.push_back({vb.x, vb.y, vb.z, fr, fg, fb, fa});
+      triVerts.push_back({vc.x, vc.y, vc.z, fr, fg, fb, fa});
     }
-    lineVerts.push_back({n0.first, n0.second, lr, lg, lb, la});
-    lineVerts.push_back({n1.first, n1.second, lr, lg, lb, la});
-    lineVerts.push_back({n1.first, n1.second, lr, lg, lb, la});
-    lineVerts.push_back({n2.first, n2.second, lr, lg, lb, la});
-    lineVerts.push_back({n2.first, n2.second, lr, lg, lb, la});
-    lineVerts.push_back({n0.first, n0.second, lr, lg, lb, la});
+    lineVerts.push_back({va.x, va.y, va.z, lr, lg, lb, la});
+    lineVerts.push_back({vb.x, vb.y, vb.z, lr, lg, lb, la});
+    lineVerts.push_back({vb.x, vb.y, vb.z, lr, lg, lb, la});
+    lineVerts.push_back({vc.x, vc.y, vc.z, lr, lg, lb, la});
+    lineVerts.push_back({vc.x, vc.y, vc.z, lr, lg, lb, la});
+    lineVerts.push_back({va.x, va.y, va.z, lr, lg, lb, la});
   }
   std::vector<DxLineVertex> allVerts;
   allVerts.reserve(triVerts.size() + lineVerts.size());
@@ -2407,12 +2427,27 @@ void DrawModelPreviewDx11(HWND hwnd, const RECT& rc, ModelPreviewState* st) {
   st->d3dCtx->RSSetViewports(1, &vp);
   st->d3dCtx->ClearRenderTargetView(st->d3dRtv, clear);
   if (st->d3dDsv) st->d3dCtx->ClearDepthStencilView(st->d3dDsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+  const float aspect = (h > 0) ? (static_cast<float>(w) / static_cast<float>(h)) : 1.0f;
+  XMMATRIX world = XMMatrixRotationX(st->rotX) * XMMatrixRotationY(st->rotY) * XMMatrixScaling(st->zoom, st->zoom, st->zoom);
+  XMMATRIX view = XMMatrixTranslation(0.0f, 0.0f, 0.0f);
+  XMMATRIX proj = XMMatrixPerspectiveFovLH(0.75f, aspect, 0.1f, 40.0f);
+  XMMATRIX mvp = XMMatrixTranspose(world * view * proj);
+  if (st->d3dCbMvp) {
+    D3D11_MAPPED_SUBRESOURCE msCb{};
+    if (SUCCEEDED(st->d3dCtx->Map(st->d3dCbMvp, 0, D3D11_MAP_WRITE_DISCARD, 0, &msCb))) {
+      memcpy(msCb.pData, &mvp, sizeof(mvp));
+      st->d3dCtx->Unmap(st->d3dCbMvp, 0);
+    }
+  }
   if (st->d3dVb && !allVerts.empty()) {
     UINT stride = sizeof(DxLineVertex), off = 0;
     st->d3dCtx->IASetInputLayout(st->d3dLayout);
     st->d3dCtx->IASetVertexBuffers(0, 1, &st->d3dVb, &stride, &off);
     st->d3dCtx->VSSetShader(st->d3dVs, nullptr, 0);
     st->d3dCtx->PSSetShader(st->d3dPs, nullptr, 0);
+    if (st->d3dCbMvp) {
+      st->d3dCtx->VSSetConstantBuffers(0, 1, &st->d3dCbMvp);
+    }
     if (triCount > 0) {
       if (st->d3dRsSolid) st->d3dCtx->RSSetState(st->d3dRsSolid);
       st->d3dCtx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -2473,7 +2508,7 @@ void FitPreviewCamera(ModelPreviewState* st) {
   st->rotX = 0.5f;
   st->rotY = -0.8f;
   const float ex = (std::max)(0.001f, st->model.extent);
-  st->zoom = std::clamp(1.35f / ex, 0.2f, 5.0f);
+  st->zoom = std::clamp(1.35f / ex, 0.01f, 6.0f);
 }
 
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2746,9 +2781,11 @@ bool RunConvertBackend(HWND hwnd) {
   const std::wstring inSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
   const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
   const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
+  const std::wstring coord = GetModelCoordArg(hwnd);
   std::wstring cmd = QuoteArg(exePath) + L" --input " + QuoteArg(inPath) + L" --output " + QuoteArg(outPath) +
                      L" --input-type " + QuoteArg(inType) + L" --input-subtype " + QuoteArg(inSub) +
-                     L" --output-type " + QuoteArg(outType) + L" --output-subtype " + QuoteArg(outSub);
+                     L" --output-type " + QuoteArg(outType) + L" --output-subtype " + QuoteArg(outSub) +
+                     L" --coord-system " + QuoteArg(coord);
   UpdateConvertCmdlinePreview(hwnd);
   WriteConvertLog(hwnd, (std::wstring(L"[命令] ") + cmd).c_str());
   std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
@@ -2878,6 +2915,12 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 280, 30, 240, 230,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_SETTING)), GetModuleHandleW(nullptr),
                     nullptr);
+      HWND coord = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 236, 240,
+                                 120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MODEL_COORD)),
+                                 GetModuleHandleW(nullptr), nullptr);
+      SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"projected（投影直角: x经度 y纬度 z高度）"));
+      SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"cecf（地心地固 xyz）"));
+      SendMessageW(coord, CB_SETCURSEL, 0, 0);
 
       CreateWindowW(L"STATIC", L"输出类型与信息", WS_CHILD | WS_VISIBLE, 550, 8, 120, 16, hwnd, nullptr,
                     GetModuleHandleW(nullptr), nullptr);
@@ -2912,9 +2955,11 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     nullptr);
       CreateWindowW(L"BUTTON", L"执行转换", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 278, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RUN)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"BUTTON", L"复制命令行", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 248, 100, 26, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_CMD)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT", L"命令行:\r\n(未执行)", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
                                               WS_VSCROLL | ES_READONLY,
-                    10, 280, 860, 56, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_CMDLINE)),
+                    10, 280, 760, 92, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_CMDLINE)),
                     GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"STATIC", L"准备就绪。", WS_CHILD | WS_VISIBLE, 10, 308, 860, 20, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MSG)), GetModuleHandleW(nullptr), nullptr);
@@ -2930,7 +2975,8 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                       IDC_CONV_INPUT_PATH, IDC_CONV_INPUT_BROWSE, IDC_CONV_INPUT_PREVIEW, IDC_CONV_INPUT_INFO, IDC_CONV_SETTING,
                       IDC_CONV_OUTPUT_TYPE, IDC_CONV_OUTPUT_TYPE_HELP, IDC_CONV_OUTPUT_SUBTYPE,
                       IDC_CONV_OUTPUT_SUBTYPE_HELP, IDC_CONV_OUTPUT_PATH, IDC_CONV_OUTPUT_BROWSE, IDC_CONV_OUTPUT_PREVIEW,
-                      IDC_CONV_OUTPUT_INFO, IDC_CONV_CMDLINE, IDC_CONV_PROGRESS, IDC_CONV_RUN, IDC_CONV_MSG, IDC_CONV_LOG}) {
+                      IDC_CONV_OUTPUT_INFO, IDC_CONV_MODEL_COORD, IDC_CONV_CMDLINE, IDC_CONV_COPY_CMD, IDC_CONV_PROGRESS,
+                      IDC_CONV_RUN, IDC_CONV_MSG, IDC_CONV_LOG}) {
         if (HWND c = GetDlgItem(hwnd, cid)) {
           SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
         }
@@ -3008,6 +3054,10 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
+      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_MODEL_COORD) {
+        UpdateConvertCmdlinePreview(hwnd);
+        return 0;
+      }
       if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_CONV_INPUT_PATH || LOWORD(wParam) == IDC_CONV_OUTPUT_PATH)) {
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
@@ -3058,6 +3108,27 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       }
       if (LOWORD(wParam) == IDC_CONV_OUTPUT_SUBTYPE_HELP) {
         ShowConvertHelpDialog(hwnd, false, false);
+        return 0;
+      }
+      if (LOWORD(wParam) == IDC_CONV_COPY_CMD) {
+        std::wstring cmd = BuildConvertCommandLine(hwnd);
+        if (OpenClipboard(hwnd)) {
+          EmptyClipboard();
+          const size_t bytes = (cmd.size() + 1) * sizeof(wchar_t);
+          HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+          if (h) {
+            void* p = GlobalLock(h);
+            if (p) {
+              memcpy(p, cmd.c_str(), bytes);
+              GlobalUnlock(h);
+              SetClipboardData(CF_UNICODETEXT, h);
+              h = nullptr;
+              WriteConvertLog(hwnd, L"[命令] 已复制到剪贴板。");
+            }
+          }
+          if (h) GlobalFree(h);
+          CloseClipboard();
+        }
         return 0;
       }
       if (LOWORD(wParam) == IDC_CONV_RUN) {
