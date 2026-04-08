@@ -9,6 +9,10 @@
 AGIS_UI_API void UiGdiplusInit();
 AGIS_UI_API void UiGdiplusShutdown();
 
+/** 与主程序主题菜单联动：为 Dock 顶区 / 属性装饰使用暗色配色。 */
+AGIS_UI_API void UiSetPanelThemeDark(bool dark);
+AGIS_UI_API bool UiGetPanelThemeDark();
+
 /** 左侧「图层」Dock 顶区渐变、标题与副标题（GDI+）。 */
 AGIS_UI_API void UiPaintLayerPanel(HDC hdc, const RECT& rc);
 

@@ -11,8 +11,17 @@
 namespace {
 
 ULONG_PTR g_gdiplusToken = 0;
+bool g_panelThemeDark = false;
 
 }  // namespace
+
+void UiSetPanelThemeDark(bool dark) {
+  g_panelThemeDark = dark;
+}
+
+bool UiGetPanelThemeDark() {
+  return g_panelThemeDark;
+}
 
 void UiGdiplusInit() {
   if (g_gdiplusToken != 0) {
@@ -41,21 +50,28 @@ void UiPaintLayerPanel(HDC hdc, const RECT& rc) {
   const float x0 = static_cast<float>(rc.left);
   const float y0 = static_cast<float>(rc.top);
   Gdiplus::RectF bounds(x0, y0, static_cast<Gdiplus::REAL>(w), static_cast<Gdiplus::REAL>(h));
-  Gdiplus::LinearGradientBrush brush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
-                                      Gdiplus::Color(255, 250, 252, 255), Gdiplus::Color(255, 232, 240, 252));
-  g.FillRectangle(&brush, bounds);
+  if (g_panelThemeDark) {
+    Gdiplus::LinearGradientBrush brush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
+                                       Gdiplus::Color(255, 52, 56, 64), Gdiplus::Color(255, 36, 39, 46));
+    g.FillRectangle(&brush, bounds);
+  } else {
+    Gdiplus::LinearGradientBrush brush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
+                                       Gdiplus::Color(255, 250, 252, 255), Gdiplus::Color(255, 232, 240, 252));
+    g.FillRectangle(&brush, bounds);
+  }
 
-  Gdiplus::SolidBrush hairline(Gdiplus::Color(200, 180, 195, 220));
+  Gdiplus::SolidBrush hairline(g_panelThemeDark ? Gdiplus::Color(200, 88, 96, 110) : Gdiplus::Color(200, 180, 195, 220));
   Gdiplus::Pen edge(&hairline, 1.0f);
   g.DrawRectangle(&edge, bounds.X, bounds.Y, bounds.Width - 1.0f, bounds.Height - 1.0f);
 
   Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
   Gdiplus::Font titleFont(&fam, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
   Gdiplus::Font subFont(&fam, 11.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-  Gdiplus::SolidBrush titleBrush(Gdiplus::Color(255, 30, 55, 95));
-  Gdiplus::SolidBrush subBrush(Gdiplus::Color(220, 90, 105, 130));
-  Gdiplus::SolidBrush chipBg(Gdiplus::Color(180, 230, 240, 255));
-  Gdiplus::SolidBrush chipFg(Gdiplus::Color(255, 55, 95, 140));
+  Gdiplus::SolidBrush titleBrush(
+      g_panelThemeDark ? Gdiplus::Color(255, 230, 234, 242) : Gdiplus::Color(255, 30, 55, 95));
+  Gdiplus::SolidBrush subBrush(g_panelThemeDark ? Gdiplus::Color(220, 168, 176, 190) : Gdiplus::Color(220, 90, 105, 130));
+  Gdiplus::SolidBrush chipBg(g_panelThemeDark ? Gdiplus::Color(180, 64, 72, 88) : Gdiplus::Color(180, 230, 240, 255));
+  Gdiplus::SolidBrush chipFg(g_panelThemeDark ? Gdiplus::Color(255, 130, 210, 255) : Gdiplus::Color(255, 55, 95, 140));
   Gdiplus::StringFormat fmt{};
   fmt.SetAlignment(Gdiplus::StringAlignmentNear);
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
@@ -101,11 +117,17 @@ void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, co
   const float x0 = static_cast<float>(rc.left);
   const float y0 = static_cast<float>(rc.top);
   Gdiplus::RectF bounds(x0, y0, static_cast<Gdiplus::REAL>(w), static_cast<Gdiplus::REAL>(h));
-  Gdiplus::LinearGradientBrush bgBrush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
-                                       Gdiplus::Color(255, 248, 251, 255), Gdiplus::Color(255, 236, 252, 255));
-  g.FillRectangle(&bgBrush, bounds);
+  if (g_panelThemeDark) {
+    Gdiplus::LinearGradientBrush bgBrush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
+                                         Gdiplus::Color(255, 50, 54, 62), Gdiplus::Color(255, 38, 41, 49));
+    g.FillRectangle(&bgBrush, bounds);
+  } else {
+    Gdiplus::LinearGradientBrush bgBrush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
+                                         Gdiplus::Color(255, 248, 251, 255), Gdiplus::Color(255, 236, 252, 255));
+    g.FillRectangle(&bgBrush, bounds);
+  }
 
-  Gdiplus::SolidBrush edgeCol(Gdiplus::Color(200, 190, 205, 225));
+  Gdiplus::SolidBrush edgeCol(g_panelThemeDark ? Gdiplus::Color(200, 90, 98, 112) : Gdiplus::Color(200, 190, 205, 225));
   Gdiplus::Pen edge(&edgeCol, 1.0f);
   g.DrawRectangle(&edge, bounds.X, bounds.Y, bounds.Width - 1.0f, bounds.Height - 1.0f);
 
@@ -113,9 +135,10 @@ void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, co
   Gdiplus::Font titleFont(&fam, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
   Gdiplus::Font subFont(&fam, 11.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
   Gdiplus::Font bodyFont(&fam, 12.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-  Gdiplus::SolidBrush titleBr(Gdiplus::Color(255, 35, 60, 100));
-  Gdiplus::SolidBrush subBr(Gdiplus::Color(210, 95, 110, 135));
-  Gdiplus::SolidBrush bodyBr(Gdiplus::Color(255, 45, 55, 75));
+  Gdiplus::SolidBrush titleBr(
+      g_panelThemeDark ? Gdiplus::Color(255, 228, 232, 240) : Gdiplus::Color(255, 35, 60, 100));
+  Gdiplus::SolidBrush subBr(g_panelThemeDark ? Gdiplus::Color(210, 165, 172, 188) : Gdiplus::Color(210, 95, 110, 135));
+  Gdiplus::SolidBrush bodyBr(g_panelThemeDark ? Gdiplus::Color(255, 210, 214, 222) : Gdiplus::Color(255, 45, 55, 75));
   Gdiplus::StringFormat fmt{};
   fmt.SetAlignment(Gdiplus::StringAlignmentNear);
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
@@ -141,8 +164,9 @@ void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, co
     chip.AddLine(chipX, chipY + chipH - rr, chipX, chipY + rr);
     chip.AddArc(chipX, chipY, 2.0f * rr, 2.0f * rr, 180, 90);
     chip.CloseFigure();
-    Gdiplus::SolidBrush chipBg(Gdiplus::Color(200, 255, 245, 250));
-    Gdiplus::SolidBrush chipFg(Gdiplus::Color(255, 0, 120, 110));
+    Gdiplus::SolidBrush chipBg(g_panelThemeDark ? Gdiplus::Color(200, 70, 78, 92) : Gdiplus::Color(200, 255, 245, 250));
+    Gdiplus::SolidBrush chipFg(
+        g_panelThemeDark ? Gdiplus::Color(255, 120, 220, 255) : Gdiplus::Color(255, 0, 120, 110));
     g.FillPath(&chipBg, &chip);
     Gdiplus::StringFormat cfmt{};
     cfmt.SetAlignment(Gdiplus::StringAlignmentCenter);
@@ -165,14 +189,15 @@ void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, co
     card.AddLine(cardX, cardY + cardH - cr, cardX, cardY + cr);
     card.AddArc(cardX, cardY, 2.0f * cr, 2.0f * cr, 180, 90);
     card.CloseFigure();
-    Gdiplus::SolidBrush cardFill(Gdiplus::Color(245, 255, 255, 255));
-    Gdiplus::SolidBrush cardSh(Gdiplus::Color(80, 200, 210, 230));
+    Gdiplus::SolidBrush cardFill(
+        g_panelThemeDark ? Gdiplus::Color(245, 48, 52, 60) : Gdiplus::Color(245, 255, 255, 255));
+    Gdiplus::SolidBrush cardSh(g_panelThemeDark ? Gdiplus::Color(100, 100, 140, 175) : Gdiplus::Color(80, 200, 210, 230));
     Gdiplus::Pen cardPen(&cardSh, 1.0f);
     g.FillPath(&cardFill, &card);
     g.DrawPath(&cardPen, &card);
 
     Gdiplus::Font nameFont(&fam, 12.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush nameBr(Gdiplus::Color(255, 25, 50, 85));
+    Gdiplus::SolidBrush nameBr(g_panelThemeDark ? Gdiplus::Color(255, 225, 230, 240) : Gdiplus::Color(255, 25, 50, 85));
     const wchar_t* nm = nameLine && nameLine[0] ? nameLine : L"—";
     g.DrawString(nm, -1, &nameFont, Gdiplus::RectF(cardX + 14.0f, cardY + 12.0f, cardW - 28.0f, 24.0f), &fmt,
                  &nameBr);
@@ -237,8 +262,10 @@ void DrawPropsCardHeader(Gdiplus::Graphics& g, const RECT& cardRc, const wchar_t
   Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
   Gdiplus::Font titleF(&fam, 12.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
   Gdiplus::Font subF(&fam, 9.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-  Gdiplus::SolidBrush titleBr(Gdiplus::Color(255, 32, 52, 92));
-  Gdiplus::SolidBrush subBr(Gdiplus::Color(230, 105, 115, 135));
+  Gdiplus::SolidBrush titleBr(
+      g_panelThemeDark ? Gdiplus::Color(255, 220, 225, 235) : Gdiplus::Color(255, 32, 52, 92));
+  Gdiplus::SolidBrush subBr(
+      g_panelThemeDark ? Gdiplus::Color(230, 165, 172, 188) : Gdiplus::Color(230, 105, 115, 135));
   Gdiplus::StringFormat fmt{};
   fmt.SetAlignment(Gdiplus::StringAlignmentNear);
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
@@ -265,19 +292,26 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard,
   const float x0 = static_cast<float>(rc.left);
   const float y0 = static_cast<float>(rc.top);
   Gdiplus::RectF bounds(x0, y0, static_cast<Gdiplus::REAL>(w), static_cast<Gdiplus::REAL>(h));
-  Gdiplus::LinearGradientBrush bgBrush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
-                                       Gdiplus::Color(255, 248, 251, 255), Gdiplus::Color(255, 236, 252, 255));
-  g.FillRectangle(&bgBrush, bounds);
+  if (g_panelThemeDark) {
+    Gdiplus::LinearGradientBrush bgBrush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
+                                         Gdiplus::Color(255, 50, 54, 62), Gdiplus::Color(255, 38, 41, 49));
+    g.FillRectangle(&bgBrush, bounds);
+  } else {
+    Gdiplus::LinearGradientBrush bgBrush(Gdiplus::PointF(x0, y0), Gdiplus::PointF(x0, y0 + static_cast<float>(h)),
+                                         Gdiplus::Color(255, 248, 251, 255), Gdiplus::Color(255, 236, 252, 255));
+    g.FillRectangle(&bgBrush, bounds);
+  }
 
-  Gdiplus::SolidBrush edgeCol(Gdiplus::Color(200, 190, 205, 225));
+  Gdiplus::SolidBrush edgeCol(g_panelThemeDark ? Gdiplus::Color(200, 88, 96, 110) : Gdiplus::Color(200, 190, 205, 225));
   Gdiplus::Pen edge(&edgeCol, 1.0f);
   g.DrawRectangle(&edge, bounds.X, bounds.Y, bounds.Width - 1.0f, bounds.Height - 1.0f);
 
   Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
   Gdiplus::Font titleFont(&fam, 13.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
   Gdiplus::Font subFont(&fam, 11.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-  Gdiplus::SolidBrush titleBr(Gdiplus::Color(255, 35, 60, 100));
-  Gdiplus::SolidBrush subBr(Gdiplus::Color(210, 95, 110, 135));
+  Gdiplus::SolidBrush titleBr(
+      g_panelThemeDark ? Gdiplus::Color(255, 228, 232, 240) : Gdiplus::Color(255, 35, 60, 100));
+  Gdiplus::SolidBrush subBr(g_panelThemeDark ? Gdiplus::Color(210, 165, 172, 188) : Gdiplus::Color(210, 95, 110, 135));
   Gdiplus::StringFormat fmt{};
   fmt.SetAlignment(Gdiplus::StringAlignmentNear);
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
@@ -305,8 +339,9 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard,
     chip.AddLine(chipX, chipY + chipH - rr, chipX, chipY + rr);
     chip.AddArc(chipX, chipY, 2.0f * rr, 2.0f * rr, 180, 90);
     chip.CloseFigure();
-    Gdiplus::SolidBrush chipBg(Gdiplus::Color(200, 255, 245, 250));
-    Gdiplus::SolidBrush chipFg(Gdiplus::Color(255, 0, 120, 110));
+    Gdiplus::SolidBrush chipBg(g_panelThemeDark ? Gdiplus::Color(200, 70, 78, 92) : Gdiplus::Color(200, 255, 245, 250));
+    Gdiplus::SolidBrush chipFg(
+        g_panelThemeDark ? Gdiplus::Color(255, 120, 220, 255) : Gdiplus::Color(255, 0, 120, 110));
     g.FillPath(&chipBg, &chip);
     Gdiplus::StringFormat cfmt{};
     cfmt.SetAlignment(Gdiplus::StringAlignmentCenter);
@@ -317,12 +352,21 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard,
   const bool dual = driverCard && sourceCard && driverCard->right > driverCard->left + 8 &&
                     sourceCard->right > sourceCard->left + 8;
   if (dual) {
-    PaintPropsSectionCard(g, *driverCard, Gdiplus::Color(255, 252, 254, 255), Gdiplus::Color(100, 175, 205, 235));
-    DrawPropsCardHeader(g, *driverCard, L"驱动属性", L"驱动类型、金字塔与数据集访问",
-                        Gdiplus::Color(255, 0, 130, 175));
-    PaintPropsSectionCard(g, *sourceCard, Gdiplus::Color(255, 254, 255, 252), Gdiplus::Color(100, 195, 210, 220));
-    DrawPropsCardHeader(g, *sourceCard, L"数据源属性", L"路径、连接串与 GDAL 元数据",
-                        Gdiplus::Color(255, 0, 150, 130));
+    if (g_panelThemeDark) {
+      PaintPropsSectionCard(g, *driverCard, Gdiplus::Color(255, 44, 48, 56), Gdiplus::Color(110, 100, 150, 190));
+      DrawPropsCardHeader(g, *driverCard, L"驱动属性", L"驱动类型、金字塔与数据集访问",
+                          Gdiplus::Color(255, 80, 200, 255));
+      PaintPropsSectionCard(g, *sourceCard, Gdiplus::Color(255, 46, 50, 58), Gdiplus::Color(110, 110, 160, 185));
+      DrawPropsCardHeader(g, *sourceCard, L"数据源属性", L"路径、连接串与 GDAL 元数据",
+                          Gdiplus::Color(255, 100, 220, 200));
+    } else {
+      PaintPropsSectionCard(g, *driverCard, Gdiplus::Color(255, 252, 254, 255), Gdiplus::Color(100, 175, 205, 235));
+      DrawPropsCardHeader(g, *driverCard, L"驱动属性", L"驱动类型、金字塔与数据集访问",
+                          Gdiplus::Color(255, 0, 130, 175));
+      PaintPropsSectionCard(g, *sourceCard, Gdiplus::Color(255, 254, 255, 252), Gdiplus::Color(100, 195, 210, 220));
+      DrawPropsCardHeader(g, *sourceCard, L"数据源属性", L"路径、连接串与 GDAL 元数据",
+                          Gdiplus::Color(255, 0, 150, 130));
+    }
   } else {
     const float cardX = x0 + 12.0f;
     const float cardY = y0 + 54.0f;
@@ -334,7 +378,11 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard,
       fallback.top = static_cast<LONG>(cardY);
       fallback.right = static_cast<LONG>(cardX + cardW);
       fallback.bottom = static_cast<LONG>(cardY + cardH);
-      PaintPropsSectionCard(g, fallback, Gdiplus::Color(245, 255, 255, 255), Gdiplus::Color(80, 200, 210, 230));
+      if (g_panelThemeDark) {
+        PaintPropsSectionCard(g, fallback, Gdiplus::Color(245, 46, 50, 58), Gdiplus::Color(90, 105, 155, 185));
+      } else {
+        PaintPropsSectionCard(g, fallback, Gdiplus::Color(245, 255, 255, 255), Gdiplus::Color(80, 200, 210, 230));
+      }
     }
   }
 }

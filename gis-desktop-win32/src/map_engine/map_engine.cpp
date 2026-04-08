@@ -975,25 +975,36 @@ void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
 
   const bool sel = (dis->itemState & ODS_SELECTED) != 0;
   const bool focus = (dis->itemState & ODS_FOCUS) != 0;
+  const bool dark = UiGetPanelThemeDark();
   Gdiplus::Color bg(255, 252, 252, 255);
-  if (sel) {
-    bg = Gdiplus::Color(255, 210, 230, 255);
-  } else if (item % 2 == 1) {
-    bg = Gdiplus::Color(255, 245, 248, 252);
+  if (dark) {
+    if (sel) {
+      bg = Gdiplus::Color(255, 56, 78, 118);
+    } else if (item % 2 == 1) {
+      bg = Gdiplus::Color(255, 40, 44, 52);
+    } else {
+      bg = Gdiplus::Color(255, 34, 38, 46);
+    }
+  } else {
+    if (sel) {
+      bg = Gdiplus::Color(255, 210, 230, 255);
+    } else if (item % 2 == 1) {
+      bg = Gdiplus::Color(255, 245, 248, 252);
+    }
   }
   Gdiplus::SolidBrush bgBr(bg);
   g.FillRectangle(&bgBr, static_cast<Gdiplus::REAL>(rc.left), static_cast<Gdiplus::REAL>(rc.top),
                   static_cast<Gdiplus::REAL>(w), static_cast<Gdiplus::REAL>(h));
 
-  Gdiplus::Pen sep(Gdiplus::Color(200, 210, 220, 230), 1.0f);
+  Gdiplus::Pen sep(dark ? Gdiplus::Color(160, 70, 78, 92) : Gdiplus::Color(200, 210, 220, 230), 1.0f);
   g.DrawLine(&sep, static_cast<Gdiplus::REAL>(rc.left), static_cast<Gdiplus::REAL>(rc.bottom - 1),
              static_cast<Gdiplus::REAL>(rc.right), static_cast<Gdiplus::REAL>(rc.bottom - 1));
 
   Gdiplus::FontFamily fam(L"Microsoft YaHei UI");
   Gdiplus::Font titleF(&fam, 12.5f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
   Gdiplus::Font metaF(&fam, 10.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-  Gdiplus::SolidBrush fg(Gdiplus::Color(255, 28, 45, 72));
-  Gdiplus::SolidBrush metaFg(Gdiplus::Color(255, 75, 90, 110));
+  Gdiplus::SolidBrush fg(dark ? Gdiplus::Color(255, 230, 232, 238) : Gdiplus::Color(255, 28, 45, 72));
+  Gdiplus::SolidBrush metaFg(dark ? Gdiplus::Color(255, 165, 172, 185) : Gdiplus::Color(255, 75, 90, 110));
   Gdiplus::StringFormat fmt{};
   fmt.SetAlignment(Gdiplus::StringAlignmentNear);
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
@@ -1001,7 +1012,7 @@ void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
 
   const int n = static_cast<int>(doc_.layers.size());
   if (n == 0 && item == 0) {
-    Gdiplus::SolidBrush hint(Gdiplus::Color(255, 130, 135, 150));
+    Gdiplus::SolidBrush hint(dark ? Gdiplus::Color(255, 155, 160, 175) : Gdiplus::Color(255, 130, 135, 150));
     g.DrawString(L"（无图层，使用「图层」菜单添加）", -1, &metaF,
                  Gdiplus::RectF(static_cast<Gdiplus::REAL>(rc.left + 10), static_cast<Gdiplus::REAL>(rc.top + 8),
                                 static_cast<Gdiplus::REAL>(w - 20), static_cast<Gdiplus::REAL>(h - 16)),
@@ -1014,7 +1025,8 @@ void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
   }
   const auto& layer = doc_.layers[static_cast<size_t>(item)];
   const bool vis = layer->IsLayerVisible();
-  Gdiplus::SolidBrush eyeBr(vis ? Gdiplus::Color(255, 0, 140, 90) : Gdiplus::Color(255, 180, 185, 195));
+  Gdiplus::SolidBrush eyeBr(vis ? (dark ? Gdiplus::Color(255, 80, 255, 190) : Gdiplus::Color(255, 0, 140, 90))
+                                : Gdiplus::Color(255, dark ? 120 : 180, dark ? 125 : 185, dark ? 140 : 195));
   Gdiplus::Font eyeF(&fam, 16.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
   const float eyeX = static_cast<float>(rc.left + 8);
   const float eyeY = static_cast<float>(rc.top + 6);

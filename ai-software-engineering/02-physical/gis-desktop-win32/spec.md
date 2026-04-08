@@ -6,6 +6,7 @@
 - **生成器**：CMake 3.20+。  
 - **平台**：Windows x64；`WIN32` 已定义；链接 `comctl32`（Common Controls v6）。  
 - **子系统**：`WINDOWS`（非控制台）。
+- **主程序源码（实现目录 `gis-desktop-win32/src/app/`，相对仓库根）**：`main.cpp`（`wWinMain`、`MainProc`、`BuildMenu`、`RegisterClasses`）；`main_globals.*`（顶层 `HWND` 与窗口类名字符串）；`main_chrome.cpp`（分割布局、工具栏、滚轮转发、视图/窗口菜单同步）；`main_panels.cpp`（图层面板、属性 Dock、日志窗）；`main_gis_xml.*`（`.gis` 片段解析辅助）；`main_gis_document.cpp`（读写 `.gis`、`GisNew`/`Open`/`Save`）；`main_convert.cpp`（数据转换 UI 与后端拉起）；`main_model_preview.cpp`（OBJ 预览与 bgfx）；`ui_font.cpp`（应用 UI 字体、日志等宽字体初始化/释放）；`ui_theme.cpp`（主题偏好、DWM/uxtheme、主客户区画刷及与侧栏主题同步）。
 
 ## 2. 可执行行为（首版）
 
@@ -18,7 +19,7 @@
 
 - **类名**：`AGISMainFrame`（或实现中固定字符串，与 `mapping.md` 一致）。  
 - **标题**：`AGIS`；脏文档时标题加 ` ·` 后缀（实现工程后启用）。  
-- **菜单**：至少包含 **文件**（退出）、**视图**（2D/3D、日志）、**图层**（添加数据图层…）、**语言**（中文/英文占位）、**主题**（跟随系统/浅色/深色占位）、**帮助**（关于）。  
+- **菜单**：至少包含 **文件**（退出）、**视图**（2D/3D、日志）、**图层**（添加数据图层…）、**语言**（中文/英文占位）、**主题**（跟随系统/浅色/深色，见 §2.4）、**帮助**（关于）。  
 - **工具栏**：可选 Rebar + Toolbar；首版可为占位或单条工具栏。  
 - **布局**：  
   - 左侧 **图层面板** 子窗口：类名 `AGISLayerPane`，初始宽度约 240px，可水平拖拽调整（`WM_LBUTTONDOWN` 在分割条上拖动或 `MoveWindow` 调整）。列表框列出已加载图层显示名。  
@@ -37,10 +38,10 @@
 - **矢量**：无栅格且 `GetLayerCount()>0` 时遍历 OGR 要素，点/线/面映射到屏幕坐标系（与视域一致）。  
 - **构建选项**：`AGIS_USE_GDAL=OFF` 时不链接 GDAL，添加图层返回提示信息，地图区显示无 GDAL 说明文本。
 
-### 2.4 语言与主题（首版）
+### 2.4 语言与主题
 
 - **语言**：菜单触发 `MessageBox` 或状态栏提示「语言切换待实现」；预留资源加载点。  
-- **主题**：调用 `ShouldAppsUseDarkMode` 不可用则占位；可写注册表或 `SetWindowTheme` 为后续项。
+- **主题**（实现：`ui_theme.h` / `ui_theme.cpp`）：菜单 **跟随系统 / 浅色 / 深色**；`HKCU\Software\AGIS\GIS-Desktop` 下 `ThemeMenu`（DWORD 0–2）持久化；`AppsUseLightTheme`（个性化）判定系统偏暗应用。`AgisApplyTheme`：**DWM** `DWMWA_USE_IMMERSIVE_DARK_MODE`（主窗、日志、转换、数据驱动说明窗）；**uxtheme** `SetWindowTheme`（工具栏、状态栏、左右缘条 `DarkMode_Explorer` / `Explorer`）；**GDI+ 侧栏** `UiSetPanelThemeDark`；主客户区 `WM_ERASEBKGND` 使用随主题重建的画刷；**跟随系统** 时响应 `WM_SETTINGCHANGE`（`lParam == L"ImmersiveColorSet"`）重应用。属性 Dock、日志窗、转换窗、帮助窗对子控件使用 **`WM_CTLCOLOR*`** 与浅色/深色配色一致。
 
 ### 2.5 关于对话框
 

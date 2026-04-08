@@ -1,5 +1,8 @@
 #include "app/help_data_drivers.h"
 
+#include "app/ui_font.h"
+#include "app/ui_theme.h"
+#include "main_globals.h"
 #include "map_engine/map_utf8.h"
 
 #include <algorithm>
@@ -21,6 +24,13 @@ namespace {
 constexpr int kIdHelpEdit = 70001;
 constexpr int kIdHelpOk = 70002;
 const wchar_t kHelpDlgClass[] = L"AGISHelpDataDriversDlg";
+
+static HBRUSH g_helpDlgBgLight = nullptr;
+static HBRUSH g_helpDlgBgDark = nullptr;
+static HBRUSH g_helpEditBgLight = nullptr;
+static HBRUSH g_helpEditBgDark = nullptr;
+static HBRUSH g_helpBtnBgLight = nullptr;
+static HBRUSH g_helpBtnBgDark = nullptr;
 
 std::wstring BuildDataDriversHelpText() {
   std::wstring s;
@@ -148,14 +158,81 @@ LRESULT CALLBACK HelpDataDriversDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
       if (hEdit) {
         SendMessageW(hEdit, EM_SETLIMITTEXT, 0, 0);
       }
-      HFONT fnt = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+      HFONT fnt = UiGetAppFont();
       if (HWND ok = GetDlgItem(hwnd, kIdHelpOk)) {
         SendMessageW(ok, WM_SETFONT, reinterpret_cast<WPARAM>(fnt), TRUE);
       }
       if (hEdit) {
         SendMessageW(hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(fnt), TRUE);
       }
+      AgisApplyDwmDark(hwnd, AgisEffectiveUiDark());
       return 0;
+    }
+    case WM_CTLCOLORDLG: {
+      if (AgisEffectiveUiDark()) {
+        if (!g_helpDlgBgDark) {
+          g_helpDlgBgDark = CreateSolidBrush(RGB(40, 42, 48));
+        }
+        return reinterpret_cast<INT_PTR>(g_helpDlgBgDark);
+      }
+      if (!g_helpDlgBgLight) {
+        g_helpDlgBgLight = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+      }
+      return reinterpret_cast<INT_PTR>(g_helpDlgBgLight);
+    }
+    case WM_CTLCOLORSTATIC: {
+      HDC hdc = reinterpret_cast<HDC>(wp);
+      SetBkMode(hdc, OPAQUE);
+      if (AgisEffectiveUiDark()) {
+        if (!g_helpDlgBgDark) {
+          g_helpDlgBgDark = CreateSolidBrush(RGB(40, 42, 48));
+        }
+        SetBkColor(hdc, RGB(40, 42, 48));
+        SetTextColor(hdc, RGB(220, 222, 228));
+        return reinterpret_cast<INT_PTR>(g_helpDlgBgDark);
+      }
+      if (!g_helpDlgBgLight) {
+        g_helpDlgBgLight = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+      }
+      SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+      SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+      return reinterpret_cast<INT_PTR>(g_helpDlgBgLight);
+    }
+    case WM_CTLCOLOREDIT: {
+      HDC hdc = reinterpret_cast<HDC>(wp);
+      SetBkMode(hdc, OPAQUE);
+      if (AgisEffectiveUiDark()) {
+        if (!g_helpEditBgDark) {
+          g_helpEditBgDark = CreateSolidBrush(RGB(52, 54, 60));
+        }
+        SetBkColor(hdc, RGB(52, 54, 60));
+        SetTextColor(hdc, RGB(230, 230, 235));
+        return reinterpret_cast<INT_PTR>(g_helpEditBgDark);
+      }
+      if (!g_helpEditBgLight) {
+        g_helpEditBgLight = CreateSolidBrush(RGB(255, 255, 255));
+      }
+      SetBkColor(hdc, RGB(255, 255, 255));
+      SetTextColor(hdc, RGB(28, 36, 52));
+      return reinterpret_cast<INT_PTR>(g_helpEditBgLight);
+    }
+    case WM_CTLCOLORBTN: {
+      HDC hdc = reinterpret_cast<HDC>(wp);
+      SetBkMode(hdc, OPAQUE);
+      if (AgisEffectiveUiDark()) {
+        if (!g_helpBtnBgDark) {
+          g_helpBtnBgDark = CreateSolidBrush(RGB(56, 58, 64));
+        }
+        SetBkColor(hdc, RGB(56, 58, 64));
+        SetTextColor(hdc, RGB(230, 230, 235));
+        return reinterpret_cast<INT_PTR>(g_helpBtnBgDark);
+      }
+      if (!g_helpBtnBgLight) {
+        g_helpBtnBgLight = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+      }
+      SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
+      SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
+      return reinterpret_cast<INT_PTR>(g_helpBtnBgLight);
     }
     case WM_SIZE: {
       const int w = LOWORD(lp);
@@ -184,6 +261,9 @@ LRESULT CALLBACK HelpDataDriversDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
       DestroyWindow(hwnd);
       return 0;
     case WM_DESTROY:
+      if (g_hwndHelpDataDriversDlg == hwnd) {
+        g_hwndHelpDataDriversDlg = nullptr;
+      }
       if (auto* body = reinterpret_cast<std::wstring*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
         delete body;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -242,6 +322,7 @@ void ShowDataDriversHelp(HWND owner) {
     delete body;
     return;
   }
+  g_hwndHelpDataDriversDlg = dlg;
 
   if (owner) {
     EnableWindow(owner, FALSE);

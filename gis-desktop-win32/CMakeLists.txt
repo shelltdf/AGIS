@@ -252,6 +252,15 @@ endif()
 
 add_executable(agis_desktop WIN32
   src/app/main.cpp
+  src/app/main_globals.cpp
+  src/app/main_gis_xml.cpp
+  src/app/main_gis_document.cpp
+  src/app/main_chrome.cpp
+  src/app/main_panels.cpp
+  src/app/main_convert.cpp
+  src/app/main_model_preview.cpp
+  src/app/ui_font.cpp
+  src/app/ui_theme.cpp
   src/app/help_data_drivers.cpp
   src/map_engine/map_layer.cpp
   src/map_engine/map_layer_driver.cpp
