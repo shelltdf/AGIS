@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -60,7 +61,7 @@ bool IsKnownFlag(const wchar_t* s) {
       L"--input-subtype",  L"--output-type",    L"--output-subtype",
       L"--coord-system",   L"--vector-mode",    L"--elev-horiz-ratio",
       L"--target-crs",     L"--output-unit",    L"--mesh-spacing",
-      L"--texture-format", L"--raster-max-dim",
+      L"--texture-format", L"--raster-max-dim", L"--obj-fp-type",
   };
   for (const wchar_t* f : kFlags) {
     if (_wcsicmp(s, f) == 0) {
@@ -182,10 +183,24 @@ bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out) {
       out->raster_read_max_dim = static_cast<int>(v);
     }
   }
+  out->obj_fp_type = ArgValue(argc, argv, L"--obj-fp-type");
+  if (out->obj_fp_type.empty()) {
+    out->obj_fp_type = L"double";
+  } else {
+    for (auto& c : out->obj_fp_type) {
+      if (c >= L'A' && c <= L'Z') {
+        c = static_cast<wchar_t>(c - L'A' + L'a');
+      }
+    }
+    if (out->obj_fp_type != L"float" && out->obj_fp_type != L"double") {
+      std::wcerr << L"[ERROR] invalid --obj-fp-type, expected float|double.\n";
+      return false;
+    }
+  }
   const std::wstring fields[] = {
       out->input_type,      out->input_subtype, out->output_type, out->output_subtype,
       out->coord_system,    out->vector_mode,   out->target_crs,  out->output_unit,
-      out->texture_format,
+      out->texture_format,  out->obj_fp_type,
   };
   for (const auto& f : fields) {
     if (!ValidateAsciiField(f) || HasCjkChars(f)) {
@@ -210,6 +225,7 @@ void PrintConvertBanner(const wchar_t* title, const ConvertArgs& args) {
   std::wcout << L"  mesh spacing (model units): " << args.mesh_spacing << L"\n";
   std::wcout << L"  texture format: " << args.texture_format << L"\n";
   std::wcout << L"  raster max read dim: " << args.raster_read_max_dim << L"\n";
+  std::wcout << L"  obj fp type: " << args.obj_fp_type << L"\n";
 }
 
 namespace {
@@ -1078,6 +1094,19 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     TryReadRaster(inPath.wstring(), &raster, args.raster_read_max_dim);
   }
   targetSr = CreateTargetSpatialRef(args, raster, sources);
+  if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0 && args.target_crs.empty()) {
+    // CECF 需要经纬度语义；未显式指定时默认锁定 WGS84，避免 auto 选到投影 CRS 后生成“扇面”。
+    OGRSpatialReferenceH wgs84 = OSRNewSpatialReference(nullptr);
+    if (wgs84 && OSRImportFromEPSG(wgs84, 4326) == OGRERR_NONE) {
+      if (targetSr) {
+        OSRDestroySpatialReference(targetSr);
+      }
+      targetSr = wgs84;
+      std::wcout << L"[CECF] target CRS defaulted to EPSG:4326 (WGS84).\n";
+    } else if (wgs84) {
+      OSRDestroySpatialReference(wgs84);
+    }
+  }
   if (targetSr) {
     targetIsGeographic = OSRIsGeographic(targetSr) != 0;
     CollectVectorEnvelopesInCrs(sources, targetSr, &vEnvsTarget);
@@ -1134,6 +1163,10 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
 #endif
   const int rw = raster.ok ? raster.w : 25;
   const int rh = raster.ok ? raster.h : 25;
+  const int srcW = (raster.ok && raster.srcW > 0) ? raster.srcW : rw;
+  const int srcH = (raster.ok && raster.srcH > 0) ? raster.srcH : rh;
+  const double readToSrcX = (rw > 0) ? static_cast<double>(srcW) / static_cast<double>(rw) : 1.0;
+  const double readToSrcY = (rh > 0) ? static_cast<double>(srcH) / static_cast<double>(rh) : 1.0;
   int mw = rw;
   int mh = rh;
   if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0) {
@@ -1305,6 +1338,9 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   const int h = mh;
   const int gridW = w - 1;
   const int gridH = h - 1;
+  const bool isCecf = (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0);
+  std::vector<std::array<double, 3>> gridVerts;
+  gridVerts.reserve(static_cast<size_t>(w) * h);
   double elevRatio = args.elev_horiz_ratio;
   if (!(elevRatio > 0.0) || !std::isfinite(elevRatio)) {
     elevRatio = 1.0;
@@ -1355,6 +1391,12 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   }
   double xyDispSx = 1.0;
   double xyDispSy = 1.0;
+  bool cecfHasLonLatBBox = false;
+  double cecfLonMin = -180.0;
+  double cecfLonMax = 180.0;
+  double cecfLatMin = -90.0;
+  double cecfLatMax = 90.0;
+  bool cecfIsGlobalLike = false;
 #if GIS_DESKTOP_HAVE_GDAL
   if (!raster.ok && !vEnvsTarget.empty()) {
     double sx = 0.0;
@@ -1367,14 +1409,54 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     tcx = sx / dn;
     tcy = sy / dn;
   }
+  if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0 && !raster.ok && !vEnvsTarget.empty()) {
+    double minxT = 1e300, maxxT = -1e300, minyT = 1e300, maxyT = -1e300;
+    for (const auto& e : vEnvsTarget) {
+      minxT = (std::min)(minxT, e.minx);
+      maxxT = (std::max)(maxxT, e.maxx);
+      minyT = (std::min)(minyT, e.miny);
+      maxyT = (std::max)(maxyT, e.maxy);
+    }
+    if (minxT <= maxxT && minyT <= maxyT) {
+      if (targetIsGeographic) {
+        cecfLonMin = minxT;
+        cecfLonMax = maxxT;
+        cecfLatMin = minyT;
+        cecfLatMax = maxyT;
+        cecfHasLonLatBBox = true;
+      } else if (cecfFromTargetToGeo) {
+        double lonMin = 1e300, lonMax = -1e300, latMin = 1e300, latMax = -1e300;
+        for (double xx : {minxT, maxxT}) {
+          for (double yy : {minyT, maxyT}) {
+            double lx = xx, ly = yy, lz = 0.0;
+            if (!OCTTransform(cecfFromTargetToGeo, 1, &lx, &ly, &lz)) continue;
+            lonMin = (std::min)(lonMin, lx);
+            lonMax = (std::max)(lonMax, lx);
+            latMin = (std::min)(latMin, ly);
+            latMax = (std::max)(latMax, ly);
+          }
+        }
+        if (lonMin <= lonMax && latMin <= latMax) {
+          cecfLonMin = lonMin;
+          cecfLonMax = lonMax;
+          cecfLatMin = latMin;
+          cecfLatMax = latMax;
+          cecfHasLonLatBBox = true;
+          cecfIsGlobalLike = ((cecfLonMax - cecfLonMin) >= 340.0);
+        }
+      }
+    }
+  }
   double rasterPlaneSpanX = 0.0;
   double rasterPlaneSpanY = 0.0;
   if (raster.ok && _wcsicmp(args.coord_system.c_str(), L"cecf") != 0) {
     double bx0 = 1e100, bx1 = -1e100, by0 = 1e100, by1 = -1e100;
     for (int ix : {0, rw - 1}) {
       for (int iy : {0, rh - 1}) {
-        const double px = raster.gt[0] + ix * raster.gt[1] + iy * raster.gt[2];
-        const double py = raster.gt[3] + ix * raster.gt[4] + iy * raster.gt[5];
+        const double sx = static_cast<double>(ix) * readToSrcX;
+        const double sy = static_cast<double>(iy) * readToSrcY;
+        const double px = raster.gt[0] + sx * raster.gt[1] + sy * raster.gt[2];
+        const double py = raster.gt[3] + sx * raster.gt[4] + sy * raster.gt[5];
         double xo = px;
         double yo = py;
         if (rasterToTarget) {
@@ -1434,11 +1516,15 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     }
   }
 #endif
+  const bool useFloatObj = (_wcsicmp(args.obj_fp_type.c_str(), L"float") == 0);
   std::wstringstream ss;
+  ss.setf(std::ios::fixed, std::ios::floatfield);
+  ss << std::setprecision(useFloatObj ? 7 : 15);
   ss << kObjFileFormatBanner30 << L"# AGIS model output\n"
      << L"# from GIS input: " << args.input << L"\n"
      << L"# subtype: " << args.input_subtype << L" -> " << args.output_subtype << L"\n"
-     << L"# raster_source: " << (raster.ok ? raster.sourcePath : L"<none>") << L"\n";
+     << L"# raster_source: " << (raster.ok ? raster.sourcePath : L"<none>") << L"\n"
+     << L"# obj_fp_type: " << (useFloatObj ? L"float" : L"double") << L"\n";
   if (doc.ok) {
     ss << L"# gis_document_viewport (2D map <display> from .gis — last saved map view, NOT raster footprint): ["
        << minx << L"," << miny << L"] - [" << maxx << L"," << maxy << L"]\n";
@@ -1448,10 +1534,10 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     double rbMaxX = -1e300;
     double rbMinY = 1e300;
     double rbMaxY = -1e300;
-    for (int ix : {0, rw - 1}) {
-      for (int iy : {0, rh - 1}) {
-        const double px = raster.gt[0] + ix * raster.gt[1] + iy * raster.gt[2];
-        const double py = raster.gt[3] + ix * raster.gt[4] + iy * raster.gt[5];
+    for (int ix : {0, srcW - 1}) {
+      for (int iy : {0, srcH - 1}) {
+        const double px = raster.gt[0] + static_cast<double>(ix) * raster.gt[1] + static_cast<double>(iy) * raster.gt[2];
+        const double py = raster.gt[3] + static_cast<double>(ix) * raster.gt[4] + static_cast<double>(iy) * raster.gt[5];
         rbMinX = (std::min)(rbMinX, px);
         rbMaxX = (std::max)(rbMaxX, px);
         rbMinY = (std::min)(rbMinY, py);
@@ -1467,10 +1553,10 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
 #if GIS_DESKTOP_HAVE_GDAL
       if (cecfFromRasterToGeo) {
         double lonMin = 1e300, lonMax = -1e300, latMin = 1e300, latMax = -1e300;
-        for (int ix : {0, rw - 1}) {
-          for (int iy : {0, rh - 1}) {
-            double px = raster.gt[0] + ix * raster.gt[1] + iy * raster.gt[2];
-            double py = raster.gt[3] + ix * raster.gt[4] + iy * raster.gt[5];
+        for (int ix : {0, srcW - 1}) {
+          for (int iy : {0, srcH - 1}) {
+            double px = raster.gt[0] + static_cast<double>(ix) * raster.gt[1] + static_cast<double>(iy) * raster.gt[2];
+            double py = raster.gt[3] + static_cast<double>(ix) * raster.gt[4] + static_cast<double>(iy) * raster.gt[5];
             double pz = 0.0;
             if (!OCTTransform(cecfFromRasterToGeo, 1, &px, &py, &pz)) {
               continue;
@@ -1509,6 +1595,26 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
            << L"]\n";
         ss << L"# cecf_wgs84_span: lon=" << lonSpan << L", lat=" << latSpan << L", coverage=" << coverage << L"\n";
       }
+    }
+  }
+  if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0 && !raster.ok) {
+    if (cecfHasLonLatBBox) {
+      const double lonSpan = cecfLonMax - cecfLonMin;
+      const double latSpan = cecfLatMax - cecfLatMin;
+      const bool nearGlobalLon = lonSpan >= 340.0;
+      const bool nearGlobalLat = latSpan >= 150.0;
+      const wchar_t* coverage = (nearGlobalLon && nearGlobalLat) ? L"GLOBAL_LIKE" : L"REGIONAL_LIKE";
+      cecfIsGlobalLike = nearGlobalLon;
+      std::wcout << L"[CECF-DEBUG] source CRS bbox: <raster missing; from vector envelopes>\n";
+      std::wcout << L"[CECF-DEBUG] WGS84 bbox: [" << cecfLonMin << L"," << cecfLatMin << L"] - [" << cecfLonMax << L","
+                 << cecfLatMax << L"], span(lon,lat)=(" << lonSpan << L"," << latSpan << L"), coverage=" << coverage << L"\n";
+      ss << L"# cecf_wgs84_bbox: [" << cecfLonMin << L"," << cecfLatMin << L"] - [" << cecfLonMax << L"," << cecfLatMax
+         << L"]\n";
+      ss << L"# cecf_wgs84_span: lon=" << lonSpan << L", lat=" << latSpan << L", coverage=" << coverage << L"\n";
+    } else {
+      std::wcout << L"[CECF-DEBUG] source CRS bbox: <raster missing>\n";
+      std::wcout << L"[CECF-DEBUG] WGS84 bbox: <unavailable>\n";
+      ss << L"# cecf_wgs84_bbox: <unavailable>\n";
     }
   }
   ss << L"# layers: " << doc.layerCount << L"\n"
@@ -1575,7 +1681,15 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
         const double yEcef = R * std::cos(lat) * std::sin(lon) * unitS;
         const double zEcef = R * std::sin(lat) * unitS;
         ss << L"v " << xEcef << L" " << yEcef << L" " << zEcef << L"\n";
-        ss << L"vt " << fx << L" " << (1.0f - fy) << L"\n";
+        gridVerts.push_back({xEcef, yEcef, zEcef});
+        const bool pole = (isCecf && (y == 0 || y == h - 1));
+        const float tu = pole ? 0.5f : fx;
+        float tvOut = 1.0f - fy;
+        if (pole) {
+          const float epsV = 0.5f / static_cast<float>((std::max)(2, h));
+          tvOut = (y == 0) ? (1.0f - epsV) : epsV;
+        }
+        ss << L"vt " << tu << L" " << tvOut << L"\n";
         continue;
       }
 #endif
@@ -1593,6 +1707,7 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
         const double xo = xm * unitS * xyDispSx;
         const double yo = ym * unitS * xyDispSy;
         ss << L"v " << xo << L" " << yo << L" " << zo << L"\n";
+        gridVerts.push_back({xo, yo, zo});
 #if GIS_DESKTOP_HAVE_GDAL
         if (targetToRasterUv) {
           double ox = txv;
@@ -1621,11 +1736,23 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
       double py = miny + spanY * static_cast<double>(fy);
       double pz = 0.0;
       if (raster.ok) {
-        const double col = static_cast<double>(fx) * static_cast<double>((std::max)(1, rw - 1));
-        const double row = static_cast<double>(fy) * static_cast<double>((std::max)(1, rh - 1));
-        px = raster.gt[0] + col * raster.gt[1] + row * raster.gt[2];
-        py = raster.gt[3] + col * raster.gt[4] + row * raster.gt[5];
-        pz = SampleBilinearF(raster.elev, rw, rh, col, row);
+        const double colRead = static_cast<double>(fx) * static_cast<double>((std::max)(1, rw - 1));
+        const double rowRead = static_cast<double>(fy) * static_cast<double>((std::max)(1, rh - 1));
+        const double colGeo = static_cast<double>(fx) * static_cast<double>((std::max)(1, srcW - 1));
+        const double rowGeo = static_cast<double>(fy) * static_cast<double>((std::max)(1, srcH - 1));
+        px = raster.gt[0] + colGeo * raster.gt[1] + rowGeo * raster.gt[2];
+        py = raster.gt[3] + colGeo * raster.gt[4] + rowGeo * raster.gt[5];
+        pz = SampleBilinearF(raster.elev, rw, rh, colRead, rowRead);
+      } else if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0 && cecfHasLonLatBBox) {
+        const double fxC = cecfIsGlobalLike ? ((static_cast<double>(x) + 0.5) / static_cast<double>((std::max)(1, w)))
+                                            : static_cast<double>(fx);
+        const double fyC = (static_cast<double>(y) + 0.5) / static_cast<double>((std::max)(1, h));
+        const double lonSpan = cecfLonMax - cecfLonMin;
+        px = cecfLonMin + lonSpan * fxC;
+        py = cecfLatMin + (cecfLatMax - cecfLatMin) * fyC;
+      } else if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0 && !cecfHasLonLatBBox) {
+        std::wcerr << L"[ERROR] CECF requires valid geographic extent; cannot derive lon/lat bbox from input.\n";
+        return 7;
       }
       if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0) {
         double lonDeg = px;
@@ -1644,6 +1771,7 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
         const double yEcef = R * std::cos(lat) * std::sin(lon) * unitS;
         const double zEcef = R * std::sin(lat) * unitS;
         ss << L"v " << xEcef << L" " << yEcef << L" " << zEcef << L"\n";
+        gridVerts.push_back({xEcef, yEcef, zEcef});
       } else {
         double xo = px;
         double yo = py;
@@ -1690,24 +1818,119 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
         xo *= xyDispSx;
         yo *= xyDispSy;
         ss << L"v " << xo << L" " << yo << L" " << zo << L"\n";
+        gridVerts.push_back({xo, yo, zo});
       }
-      ss << L"vt " << fx << L" " << (1.0f - fy) << L"\n";
+      const bool pole = (isCecf && (y == 0 || y == h - 1));
+      const float tu = pole ? 0.5f : fx;
+      float tvOut = 1.0f - fy;
+      if (pole) {
+        const float epsV = 0.5f / static_cast<float>((std::max)(2, h));
+        tvOut = (y == 0) ? (1.0f - epsV) : epsV;
+      }
+      ss << L"vt " << tu << L" " << tvOut << L"\n";
     }
   }
   ss << L"vn 0 0 1\n";
   ss << L"usemtl defaultMat\n";
   auto vid = [w](int x, int y) { return y * w + x + 1; };
-  for (int y = 0; y < gridH; ++y) {
+  auto emitTriIfValid = [&](int a, int b, int c) {
+    const auto& A = gridVerts[static_cast<size_t>(a - 1)];
+    const auto& B = gridVerts[static_cast<size_t>(b - 1)];
+    const auto& C = gridVerts[static_cast<size_t>(c - 1)];
+    const double abx = B[0] - A[0], aby = B[1] - A[1], abz = B[2] - A[2];
+    const double acx = C[0] - A[0], acy = C[1] - A[1], acz = C[2] - A[2];
+    const double cx = aby * acz - abz * acy;
+    const double cy = abz * acx - abx * acz;
+    const double cz = abx * acy - aby * acx;
+    const double area2 = cx * cx + cy * cy + cz * cz;
+    const double e1 = abx * abx + aby * aby + abz * abz;
+    const double e2 = acx * acx + acy * acy + acz * acz;
+    const double maxE = (std::max)(e1, e2);
+    if (maxE <= 1e-30 || area2 <= maxE * 1e-12) {
+      return;
+    }
+    int ib = b;
+    int ic = c;
+    if (isCecf) {
+      // CECF 球面：按“从地心指向外侧”为正，统一三角绕序，避免法线里外翻转。
+      const double mx = (A[0] + B[0] + C[0]) / 3.0;
+      const double my = (A[1] + B[1] + C[1]) / 3.0;
+      const double mz = (A[2] + B[2] + C[2]) / 3.0;
+      const double outward = cx * mx + cy * my + cz * mz;
+      if (outward < 0.0) {
+        ib = c;
+        ic = b;
+      }
+    } else {
+      // projected/其它平面模型：统一 +Z 朝上，避免法线整体反向导致明暗颠倒。
+      if (cz < 0.0) {
+        ib = c;
+        ic = b;
+      }
+    }
+    ss << L"f " << a << L"/" << a << L"/1 " << ib << L"/" << ib << L"/1 " << ic << L"/" << ic << L"/1\n";
+  };
+  int northPoleIdx = 0;
+  int southPoleIdx = 0;
+  if (isCecf && h >= 4 && w >= 3) {
+    // 极帽单顶点重建：追加北极/南极单顶点，后续用扇形连接次极圈，规避极区退化与叠片。
+    std::array<double, 3> north{0.0, 0.0, 0.0};
+    std::array<double, 3> south{0.0, 0.0, 0.0};
+    for (int x = 0; x < w; ++x) {
+      const auto& vn = gridVerts[static_cast<size_t>(vid(x, 0) - 1)];
+      const auto& vs = gridVerts[static_cast<size_t>(vid(x, h - 1) - 1)];
+      north[0] += vn[0];
+      north[1] += vn[1];
+      north[2] += vn[2];
+      south[0] += vs[0];
+      south[1] += vs[1];
+      south[2] += vs[2];
+    }
+    const double invW = 1.0 / static_cast<double>(w);
+    north[0] *= invW;
+    north[1] *= invW;
+    north[2] *= invW;
+    south[0] *= invW;
+    south[1] *= invW;
+    south[2] *= invW;
+
+    northPoleIdx = static_cast<int>(gridVerts.size()) + 1;
+    ss << L"v " << north[0] << L" " << north[1] << L" " << north[2] << L"\n";
+    ss << L"vt 0.5 " << (1.0f - 0.5f / static_cast<float>((std::max)(2, h))) << L"\n";
+    gridVerts.push_back(north);
+
+    southPoleIdx = static_cast<int>(gridVerts.size()) + 1;
+    ss << L"v " << south[0] << L" " << south[1] << L" " << south[2] << L"\n";
+    ss << L"vt 0.5 " << (0.5f / static_cast<float>((std::max)(2, h))) << L"\n";
+    gridVerts.push_back(south);
+
+    for (int y = 1; y < gridH - 1; ++y) {
+      for (int x = 0; x < gridW; ++x) {
+        const int v00 = vid(x, y);
+        const int v10 = vid(x + 1, y);
+        const int v01 = vid(x, y + 1);
+        const int v11 = vid(x + 1, y + 1);
+        emitTriIfValid(v00, v10, v11);
+        emitTriIfValid(v00, v11, v01);
+      }
+    }
     for (int x = 0; x < gridW; ++x) {
-      const int v00 = vid(x, y);
-      const int v10 = vid(x + 1, y);
-      const int v01 = vid(x, y + 1);
-      const int v11 = vid(x + 1, y + 1);
-      ss << L"f " << v00 << L"/" << v00 << L"/1 " << v10 << L"/" << v10 << L"/1 " << v11 << L"/" << v11 << L"/1\n";
-      ss << L"f " << v00 << L"/" << v00 << L"/1 " << v11 << L"/" << v11 << L"/1 " << v01 << L"/" << v01 << L"/1\n";
+      emitTriIfValid(northPoleIdx, vid(x + 1, 1), vid(x, 1));
+      emitTriIfValid(southPoleIdx, vid(x, h - 2), vid(x + 1, h - 2));
+    }
+  } else {
+    for (int y = 0; y < gridH; ++y) {
+      for (int x = 0; x < gridW; ++x) {
+        const int v00 = vid(x, y);
+        const int v10 = vid(x + 1, y);
+        const int v01 = vid(x, y + 1);
+        const int v11 = vid(x + 1, y + 1);
+        emitTriIfValid(v00, v10, v11);
+        emitTriIfValid(v00, v11, v01);
+      }
     }
   }
-  int baseVertex = w * h + 1;
+  int baseVertex = static_cast<int>(gridVerts.size()) + 1;
   if (_wcsicmp(args.vector_mode.c_str(), L"geometry") == 0) {
     for (const auto& ev : vEnvsTarget) {
       const double z = 10.0 * elevRatio * unitS;
@@ -2413,6 +2636,7 @@ static std::wstring NormalizeTextureFmtExt(const std::wstring& fmt) {
 }
 
 static int ConvertLasToMeshObjJob(const ConvertArgs& args) {
+  const bool useFloatObj = (_wcsicmp(args.obj_fp_type.c_str(), L"float") == 0);
   std::vector<LasPointFlt> pts;
   if (ReadLasPoints(args.input, &pts) != 0) {
     std::wcerr << L"[ERROR] 读取 LAS 失败。\n";
@@ -2501,6 +2725,8 @@ static int ConvertLasToMeshObjJob(const ConvertArgs& args) {
   const std::wstring mtlName = outObj.stem().wstring() + L".mtl";
   std::wstring objText = std::wstring(kObjFileFormatBanner30);
   objText += L"# AGIS: point cloud -> mesh (grid)\n";
+  objText += L"# obj_fp_type: ";
+  objText += useFloatObj ? L"float\n" : L"double\n";
   objText += L"mtllib " + mtlName + L"\n";
   objText += L"usemtl pcMat\n";
   objText += L"o pointcloud_mesh\n";
@@ -2511,7 +2737,7 @@ static int ConvertLasToMeshObjJob(const ConvertArgs& args) {
       const double y = miny + (j + 0.5) * dy;
       const double z = sz[idx];
       wchar_t buf[160]{};
-      swprintf_s(buf, L"v %.12g %.12g %.12g\n", x, y, z);
+      swprintf_s(buf, useFloatObj ? L"v %.7g %.7g %.7g\n" : L"v %.15g %.15g %.15g\n", x, y, z);
       objText += buf;
     }
   }
@@ -2520,7 +2746,7 @@ static int ConvertLasToMeshObjJob(const ConvertArgs& args) {
       const double u = nx > 1 ? static_cast<double>(i) / static_cast<double>(nx - 1) : 0.5;
       const double v = ny > 1 ? static_cast<double>(j) / static_cast<double>(ny - 1) : 0.5;
       wchar_t buf[96]{};
-      swprintf_s(buf, L"vt %.12g %.12g\n", u, v);
+      swprintf_s(buf, useFloatObj ? L"vt %.7g %.7g\n" : L"vt %.15g %.15g\n", u, v);
       objText += buf;
     }
   }

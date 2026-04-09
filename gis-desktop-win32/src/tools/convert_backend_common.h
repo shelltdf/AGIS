@@ -26,6 +26,8 @@ struct ConvertArgs {
    * 默认 4096；CLI `--raster-max-dim`（范围 64–16384）。
    */
   int raster_read_max_dim = 4096;
+  /** OBJ 数值输出精度类型：`double`（默认）| `float`。 */
+  std::wstring obj_fp_type = L"double";
 };
 
 bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out);

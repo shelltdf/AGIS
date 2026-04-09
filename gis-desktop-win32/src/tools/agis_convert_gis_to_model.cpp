@@ -36,7 +36,8 @@ void PrintHelp() {
                << L"  --output-unit <m|km|1000km>\n"
                << L"  --mesh-spacing <1..1000000>\n"
                << L"  --texture-format <png|tif|tga|bmp>\n"
-               << L"  --raster-max-dim <64..16384>\n\n"
+               << L"  --raster-max-dim <64..16384>\n"
+               << L"  --obj-fp-type <double|float>\n\n"
                << L"示例:\n"
                << L"  agis_convert_gis_to_model --input demo.gis --output demo.obj --output-subtype obj\n";
   } else {
@@ -58,7 +59,8 @@ void PrintHelp() {
                << L"  --output-unit <m|km|1000km>\n"
                << L"  --mesh-spacing <1..1000000>\n"
                << L"  --texture-format <png|tif|tga|bmp>\n"
-               << L"  --raster-max-dim <64..16384>\n\n"
+               << L"  --raster-max-dim <64..16384>\n"
+               << L"  --obj-fp-type <double|float>\n\n"
                << L"Example:\n"
                << L"  agis_convert_gis_to_model --input demo.gis --output demo.obj --output-subtype obj\n";
   }

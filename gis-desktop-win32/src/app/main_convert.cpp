@@ -115,32 +115,40 @@ void PollConvertPipeToLog(HWND hwnd) {
       break;
     }
     drained += readBytes;
-    int wn = MultiByteToWideChar(CP_UTF8, 0, chunk.data(), static_cast<int>(readBytes), nullptr, 0);
-    if (wn <= 0) {
-      wn = MultiByteToWideChar(CP_ACP, 0, chunk.data(), static_cast<int>(readBytes), nullptr, 0);
-      if (wn <= 0) continue;
-      std::wstring ws(static_cast<size_t>(wn), L'\0');
-      MultiByteToWideChar(CP_ACP, 0, chunk.data(), static_cast<int>(readBytes), ws.data(), wn);
-      if (!ws.empty()) {
-        WriteConvertLog(hwnd, ws.c_str());
-        int pct = 0;
-        std::wstring msg;
-        if (TryParseBackendProgress(ws, &pct, &msg)) {
-          SetConvertProgress(hwnd, pct, msg.empty() ? L"处理中：后端上报进度" : msg);
-        }
-      }
-      continue;
-    }
-    std::wstring ws(static_cast<size_t>(wn), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, chunk.data(), static_cast<int>(readBytes), ws.data(), wn);
-    if (!ws.empty()) {
+    auto postDecoded = [&](std::wstring ws) {
+      ws.erase(std::remove(ws.begin(), ws.end(), L'\0'), ws.end());
+      if (ws.empty()) return;
       WriteConvertLog(hwnd, ws.c_str());
       int pct = 0;
       std::wstring msg;
       if (TryParseBackendProgress(ws, &pct, &msg)) {
         SetConvertProgress(hwnd, pct, msg.empty() ? L"处理中：后端上报进度" : msg);
       }
+    };
+    size_t zeroCount = 0;
+    for (DWORD i = 0; i < readBytes; ++i) {
+      if (chunk[i] == '\0') ++zeroCount;
     }
+    if (readBytes >= 2 && (zeroCount * 3 >= readBytes)) {
+      const size_t wc = static_cast<size_t>(readBytes / 2);
+      std::wstring ws;
+      ws.resize(wc);
+      std::memcpy(ws.data(), chunk.data(), wc * sizeof(wchar_t));
+      postDecoded(std::move(ws));
+      continue;
+    }
+    int wn = MultiByteToWideChar(CP_UTF8, 0, chunk.data(), static_cast<int>(readBytes), nullptr, 0);
+    if (wn <= 0) {
+      wn = MultiByteToWideChar(CP_ACP, 0, chunk.data(), static_cast<int>(readBytes), nullptr, 0);
+      if (wn <= 0) continue;
+      std::wstring ws(static_cast<size_t>(wn), L'\0');
+      MultiByteToWideChar(CP_ACP, 0, chunk.data(), static_cast<int>(readBytes), ws.data(), wn);
+      postDecoded(std::move(ws));
+      continue;
+    }
+    std::wstring ws(static_cast<size_t>(wn), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, chunk.data(), static_cast<int>(readBytes), ws.data(), wn);
+    postDecoded(std::move(ws));
   }
 }
 void LayoutConvertWindow(HWND hwnd) {
@@ -183,8 +191,10 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_RASTER_MAX), midColX + 172, topH - 126, (std::max)(72, colW - 178), 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FMT_LBL), midColX, topH - 96, 168, 18, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FORMAT), midColX + 172, topH - 98, (std::max)(72, colW - 178), 120, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD), midColX, topH - 68, colW, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_VECTOR_MODE), midColX, topH - 40, colW, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OBJ_FP_TYPE_LBL), midColX, topH - 68, 168, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OBJ_FP_TYPE), midColX + 172, topH - 70, (std::max)(72, colW - 178), 120, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD), midColX, topH - 40, colW, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_VECTOR_MODE), midColX, topH - 12, colW, 24, TRUE);
 
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), m * 3 + colW * 2, m + 20, colW - 28, 220, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE_HELP), m * 3 + colW * 2 + colW - 24, m + 20, 24, 24, TRUE);
@@ -519,6 +529,7 @@ std::wstring GetOutputUnitArg(HWND hwnd) {
 int GetMeshSpacingArg(HWND hwnd);
 std::wstring GetTextureFormatArg(HWND hwnd);
 int GetRasterReadMaxDimArg(HWND hwnd);
+std::wstring GetObjFpTypeArg(HWND hwnd);
 
 void RefreshConvertSettingPanels(HWND hwnd) {
   const std::wstring inType = GetConvertMajorTypeArg(hwnd, true);
@@ -746,6 +757,8 @@ static std::wstring BuildConvertSideInfoExtras(HWND hwnd, bool inputSide, int ma
   x += eh;
   x += L"\r\n模型贴图格式（点云→模型等）：";
   x += GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FORMAT));
+  x += L"\r\nOBJ 数值精度：";
+  x += GetObjFpTypeArg(hwnd);
   wchar_t rzb[32]{};
   GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_RASTER_MAX), rzb, 32);
   x += L"\r\n栅格读入最大边(px)（GIS→模型贴图源）：";
@@ -779,6 +792,14 @@ std::wstring GetTextureFormatArg(HWND hwnd) {
     return L"bmp";
   }
   return L"png";
+}
+
+std::wstring GetObjFpTypeArg(HWND hwnd) {
+  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OBJ_FP_TYPE));
+  if (t.find(L"float") != std::wstring::npos || t.find(L"Float") != std::wstring::npos) {
+    return L"float";
+  }
+  return L"double";
 }
 
 void FillConvertTextureFormatCombo(HWND combo) {
@@ -899,6 +920,7 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
   wchar_t meshStr[32]{};
   swprintf_s(meshStr, L"%d", meshSp);
   const std::wstring texFmt = GetTextureFormatArg(hwnd);
+  const std::wstring objFpType = GetObjFpTypeArg(hwnd);
   const int rmax = GetRasterReadMaxDimArg(hwnd);
   wchar_t rmaxStr[32]{};
   swprintf_s(rmaxStr, L"%d", rmax);
@@ -909,7 +931,8 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
                       L"  --output-unit " + QuoteArg(outUnit) + L"\r\n"
                       L"  --mesh-spacing " + QuoteArg(meshStr) + L"\r\n"
                       L"  --texture-format " + QuoteArg(texFmt) + L"\r\n"
-                      L"  --raster-max-dim " + QuoteArg(rmaxStr);
+                      L"  --raster-max-dim " + QuoteArg(rmaxStr) + L"\r\n"
+                      L"  --obj-fp-type " + QuoteArg(objFpType);
   if (!tcr.empty()) {
     tail += L"\r\n  --target-crs " + QuoteArg(tcr);
   }
@@ -983,6 +1006,7 @@ bool RunConvertBackendAsync(HWND hwnd) {
   wchar_t meshStr[32]{};
   swprintf_s(meshStr, L"%d", meshSp);
   const std::wstring texFmt = GetTextureFormatArg(hwnd);
+  const std::wstring objFpType = GetObjFpTypeArg(hwnd);
   const int rmax = GetRasterReadMaxDimArg(hwnd);
   wchar_t rmaxStr[32]{};
   swprintf_s(rmaxStr, L"%d", rmax);
@@ -992,7 +1016,7 @@ bool RunConvertBackendAsync(HWND hwnd) {
                      L" --coord-system " + QuoteArg(coord) + L" --vector-mode " + QuoteArg(vectorMode) +
                      L" --elev-horiz-ratio " + QuoteArg(ratioStr) + L" --output-unit " + QuoteArg(outUnit) +
                      L" --mesh-spacing " + QuoteArg(meshStr) + L" --texture-format " + QuoteArg(texFmt) +
-                     L" --raster-max-dim " + QuoteArg(rmaxStr);
+                     L" --raster-max-dim " + QuoteArg(rmaxStr) + L" --obj-fp-type " + QuoteArg(objFpType);
   if (!tcr.empty()) {
     cmd += L" --target-crs " + QuoteArg(tcr);
   }
@@ -1202,13 +1226,23 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TEXTURE_FORMAT)),
                         GetModuleHandleW(nullptr), nullptr);
       FillConvertTextureFormatCombo(texFmtCombo);
-      HWND coord = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 420, 240,
+      CreateWindowW(L"STATIC", L"OBJ 数值精度：", WS_CHILD | WS_VISIBLE, 280, 418, 168, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OBJ_FP_TYPE_LBL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      HWND objFpTypeCombo =
+          CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 420, 416, 98, 96, hwnd,
+                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OBJ_FP_TYPE)),
+                        GetModuleHandleW(nullptr), nullptr);
+      SendMessageW(objFpTypeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"double（默认）"));
+      SendMessageW(objFpTypeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"float"));
+      SendMessageW(objFpTypeCombo, CB_SETCURSEL, 0, 0);
+      HWND coord = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 446, 240,
                                  120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MODEL_COORD)),
                                  GetModuleHandleW(nullptr), nullptr);
       SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"projected（投影坐标，单位随 CRS）"));
       SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"cecf（地心地固 XYZ）"));
       SendMessageW(coord, CB_SETCURSEL, 0, 0);
-      HWND vmode = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 448, 240,
+      HWND vmode = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 474, 240,
                                  120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_VECTOR_MODE)),
                                  GetModuleHandleW(nullptr), nullptr);
       SendMessageW(vmode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"geometry（矢量转几何）"));
@@ -1271,6 +1305,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                       IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO, IDC_CONV_TARGET_CRS_LBL, IDC_CONV_TARGET_CRS,
                       IDC_CONV_OUTPUT_UNIT_LBL, IDC_CONV_OUTPUT_UNIT, IDC_CONV_MESH_SPACING_LBL, IDC_CONV_MESH_SPACING,
                       IDC_CONV_RASTER_MAX_LBL, IDC_CONV_RASTER_MAX, IDC_CONV_TEXTURE_FMT_LBL, IDC_CONV_TEXTURE_FORMAT,
+                      IDC_CONV_OBJ_FP_TYPE_LBL, IDC_CONV_OBJ_FP_TYPE,
                       IDC_CONV_OUTPUT_TYPE, IDC_CONV_OUTPUT_TYPE_HELP,
                       IDC_CONV_OUTPUT_SUBTYPE,
                       IDC_CONV_OUTPUT_SUBTYPE_HELP, IDC_CONV_OUTPUT_PATH, IDC_CONV_OUTPUT_BROWSE, IDC_CONV_OUTPUT_PREVIEW,
@@ -1405,6 +1440,11 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         UpdateConvertCmdlinePreview(hwnd);
         SyncConvertInfoByType(hwnd, false);
         break;
+      }
+      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_OBJ_FP_TYPE) {
+        RefreshConvertSettingPanels(hwnd);
+        UpdateConvertCmdlinePreview(hwnd);
+        return 0;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_OUTPUT_UNIT) {
         SyncConvertInfoByType(hwnd, false);

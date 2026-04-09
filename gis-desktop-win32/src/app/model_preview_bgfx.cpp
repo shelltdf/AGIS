@@ -319,6 +319,59 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
   lineIdx->clear();
   if (model.vertices.empty() || model.faces.empty()) return false;
   const float inv = 1.0f / (std::max)(0.001f, model.extent);
+  bool likelySpherical = false;
+  {
+    const size_t sampleN = (std::min)(model.vertices.size(), static_cast<size_t>(2048));
+    if (sampleN >= 64) {
+      double sumR = 0.0;
+      double sumR2 = 0.0;
+      for (size_t i = 0; i < sampleN; ++i) {
+        const auto& v = model.vertices[i];
+        const double x = static_cast<double>(v.x - model.center.x);
+        const double y = static_cast<double>(v.y - model.center.y);
+        const double z = static_cast<double>(v.z - model.center.z);
+        const double r = std::sqrt(x * x + y * y + z * z);
+        sumR += r;
+        sumR2 += r * r;
+      }
+      const double meanR = sumR / static_cast<double>(sampleN);
+      if (meanR > 1e-6) {
+        const double varR = (std::max)(0.0, sumR2 / static_cast<double>(sampleN) - meanR * meanR);
+        const double stdR = std::sqrt(varR);
+        likelySpherical = (stdR / meanR) < 0.08;
+      }
+    }
+  }
+  bool forceFlipUp = false;
+  if (!likelySpherical) {
+    const size_t sampleN = (std::min)(model.faces.size(), static_cast<size_t>(1024));
+    if (sampleN >= 16) {
+      double sumNz = 0.0;
+      size_t cnt = 0;
+      for (size_t i = 0; i < sampleN; ++i) {
+        const auto& f = model.faces[i];
+        if (f[0] < 0 || f[1] < 0 || f[2] < 0 || f[0] >= static_cast<int>(model.vertices.size()) ||
+            f[1] >= static_cast<int>(model.vertices.size()) || f[2] >= static_cast<int>(model.vertices.size())) {
+          continue;
+        }
+        const auto& a = model.vertices[f[0]];
+        const auto& b = model.vertices[f[1]];
+        const auto& c = model.vertices[f[2]];
+        const double ax = static_cast<double>(a.x - model.center.x) * inv;
+        const double ay = static_cast<double>(a.y - model.center.y) * inv;
+        const double bx = static_cast<double>(b.x - model.center.x) * inv;
+        const double by = static_cast<double>(b.y - model.center.y) * inv;
+        const double cx = static_cast<double>(c.x - model.center.x) * inv;
+        const double cy = static_cast<double>(c.y - model.center.y) * inv;
+        const double cz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        sumNz += cz;
+        ++cnt;
+      }
+      if (cnt > 0 && sumNz < 0.0) {
+        forceFlipUp = true;
+      }
+    }
+  }
   const size_t stride = ModelPreviewFaceStride(model.faces.size());
   const bool haveFt = model.faceTexcoord.size() == model.faces.size();
   for (size_t fi = 0; fi < model.faces.size(); fi += stride) {
@@ -336,9 +389,42 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
         cb = model.materials[mi].kdB;
       }
     }
-    const auto& a = model.vertices[f[0]];
-    const auto& b = model.vertices[f[1]];
-    const auto& c = model.vertices[f[2]];
+    int ia = f[0];
+    int ib = f[1];
+    int ic = f[2];
+    auto shouldFlipFace = [&]() -> bool {
+      const auto& a0 = model.vertices[ia];
+      const auto& b0 = model.vertices[ib];
+      const auto& c0 = model.vertices[ic];
+      const float ax0 = (a0.x - model.center.x) * inv;
+      const float ay0 = (a0.y - model.center.y) * inv;
+      const float az0 = (a0.z - model.center.z) * inv;
+      const float bx0 = (b0.x - model.center.x) * inv;
+      const float by0 = (b0.y - model.center.y) * inv;
+      const float bz0 = (b0.z - model.center.z) * inv;
+      const float cx0 = (c0.x - model.center.x) * inv;
+      const float cy0 = (c0.y - model.center.y) * inv;
+      const float cz0 = (c0.z - model.center.z) * inv;
+      const float nx0 = (by0 - ay0) * (cz0 - az0) - (bz0 - az0) * (cy0 - ay0);
+      const float ny0 = (bz0 - az0) * (cx0 - ax0) - (bx0 - ax0) * (cz0 - az0);
+      const float nz0 = (bx0 - ax0) * (cy0 - ay0) - (by0 - ay0) * (cx0 - ax0);
+      if (likelySpherical) {
+        const float mx = (ax0 + bx0 + cx0) * (1.0f / 3.0f);
+        const float my = (ay0 + by0 + cy0) * (1.0f / 3.0f);
+        const float mz = (az0 + bz0 + cz0) * (1.0f / 3.0f);
+        return (nx0 * mx + ny0 * my + nz0 * mz) < 0.0f;
+      }
+      if (forceFlipUp) {
+        return true;
+      }
+      return false;
+    };
+    if (shouldFlipFace()) {
+      std::swap(ib, ic);
+    }
+    const auto& a = model.vertices[ia];
+    const auto& b = model.vertices[ib];
+    const auto& c = model.vertices[ic];
     const float ax = (a.x - model.center.x) * inv;
     const float ay = (a.y - model.center.y) * inv;
     const float az = (a.z - model.center.z) * inv;
@@ -366,10 +452,14 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
     const float vx = 0.0f, vy = 0.0f, vz = 1.0f;
     const uint32_t base = static_cast<uint32_t>(verts->size());
     for (int k = 0; k < 3; ++k) {
-      const auto& v = model.vertices[f[k]];
+      const int vi = (k == 0) ? ia : (k == 1 ? ib : ic);
+      const auto& v = model.vertices[vi];
       float u = 0.f, tv = 0.f;
       if (haveFt && fi < model.faceTexcoord.size()) {
-        const int ti = model.faceTexcoord[fi][k];
+        const int ti0 = model.faceTexcoord[fi][0];
+        const int ti1 = model.faceTexcoord[fi][1];
+        const int ti2 = model.faceTexcoord[fi][2];
+        const int ti = (k == 0) ? ti0 : (k == 1 ? (ib == f[1] ? ti1 : ti2) : (ic == f[2] ? ti2 : ti1));
         if (ti >= 0 && ti < static_cast<int>(model.texcoords.size())) {
           u = model.texcoords[ti].u;
           tv = model.texcoords[ti].v;
@@ -384,11 +474,19 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
       float nmR = 0.5f, nmG = 0.5f, nmB = 1.0f;
       if (pseudoPbrEnabled) {
         if (cpuMaps) {
+          const bool polarBand = likelySpherical && (vTex < 0.01f || vTex > 0.99f);
           roughness = (std::clamp)(SampleImageGray01(cpuMaps->roughness, u, vTex), 0.04f, 1.0f);
           metallic = (std::clamp)(SampleImageGray01(cpuMaps->metallic, u, vTex), 0.0f, 1.0f);
           // 避免 AO 过度压暗导致黑斑，限制最低亮度。
           ao = (std::clamp)(SampleImageGray01(cpuMaps->ao, u, vTex), 0.65f, 1.0f);
           SampleImageRgb01(cpuMaps->normal, u, vTex, &nmR, &nmG, &nmB);
+          if (polarBand) {
+            // 极区避免边界贴图采样噪声放大为黑圈/色环。
+            ao = (std::max)(ao, 0.92f);
+            nmR = 0.5f;
+            nmG = 0.5f;
+            nmB = 1.0f;
+          }
         }
         // TBN 近似：从面法线构造一个稳定切线基，再把法线贴图从切线空间转到世界空间。
         float tx = -ny, ty = nx, tz = 0.0f;
@@ -647,7 +745,7 @@ void agis_bgfx_preview_shutdown(HWND hwnd, AgisBgfxPreviewContext* ctx) {
 }
 
 void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& viewportPx, float rotX, float rotY, float zoom,
-                            bool solid, bool showGrid) {
+                            bool solid, bool showGrid, bool backfaceCulling) {
   if (!ctx || !hwnd) return;
   AgisBgfxPreviewContextImpl* impl = AsImpl(ctx);
   if (!bgfx::isValid(impl->program)) return;
@@ -694,8 +792,9 @@ void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& 
     bgfx::setTexture(0, impl->s_texColor, impl->texture);
   }
   constexpr uint64_t kWrite = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+  const uint64_t cullState = backfaceCulling ? BGFX_STATE_CULL_CCW : 0ULL;
   if (solid && impl->triCount > 0) {
-    bgfx::setState(kWrite | BGFX_STATE_MSAA);
+    bgfx::setState(kWrite | cullState | BGFX_STATE_MSAA);
     bgfx::setIndexBuffer(impl->ibhTri, 0, impl->triCount);
     bgfx::submit(0, impl->program);
   }

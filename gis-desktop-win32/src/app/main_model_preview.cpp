@@ -57,6 +57,7 @@ struct ModelPreviewState {
   bool dragging = false;
   POINT lastPt{};
   bool solid = true;
+  bool backfaceCulling = false;
   bool showGrid = true;
   bool useTexture = true;
   std::vector<std::pair<std::wstring, std::wstring>> textureLayers;
@@ -177,6 +178,7 @@ std::vector<PreviewHudButton> BuildPreviewHudButtons(const RECT& vrc) {
     x += w + gap;
   };
   push(L"M", 'M', 26);
+  push(L"Cull", 'B', 46);
   push(L"Grid", 'G', 44);
   push(L"Tex", 'T', 40);
   push(L"PBR", 'P', 42);
@@ -267,8 +269,9 @@ void DrawRuntimeHud(HDC hdc, const RECT& vrc, const ModelPreviewState& st) {
     default: break;
   }
   wchar_t line3[640]{};
-  swprintf_s(line3, L"Renderer:%s | Solid:%s | Grid:%s | Texture:%s | Render:%s | Layer:%s", rendererText,
-             st.solid ? L"on" : L"off", st.showGrid ? L"on" : L"off", st.useTexture ? L"on" : L"off", pbrViewText, texLayer);
+  swprintf_s(line3, L"Renderer:%s | Solid:%s | Cull:%s | Grid:%s | Texture:%s | Render:%s | Layer:%s", rendererText,
+             st.solid ? L"on" : L"off", st.backfaceCulling ? L"on" : L"off", st.showGrid ? L"on" : L"off",
+             st.useTexture ? L"on" : L"off", pbrViewText, texLayer);
   TextOutW(hdc, panel.left + 8, panel.top + 54, line3, static_cast<int>(wcslen(line3)));
   const int vh = (std::max)(1L, vrc.bottom - vrc.top);
   const float unitsPerPx = (2.0f / (std::max)(0.05f, st.zoom)) / static_cast<float>((std::max)(1, vh));
@@ -289,6 +292,7 @@ void DrawRuntimeHud(HDC hdc, const RECT& vrc, const ModelPreviewState& st) {
     if (b.key == 'G') on = st.showGrid;
     if (b.key == 'T') on = st.useTexture;
     if (b.key == 'P') on = st.pseudoPbrMode;
+    if (b.key == 'B') on = st.backfaceCulling;
     FillRect(hdc, &b.rc, on ? bOn : bbg);
     Rectangle(hdc, b.rc.left, b.rc.top, b.rc.right, b.rc.bottom);
     TextOutW(hdc, b.rc.left + 6, b.rc.top + 5, b.label, static_cast<int>(wcslen(b.label)));
@@ -1343,6 +1347,9 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         case VK_SPACE:
           st->solid = !st->solid;
           break;
+        case 'B':
+          st->backfaceCulling = !st->backfaceCulling;
+          break;
         case 'G':
           st->showGrid = !st->showGrid;
           break;
@@ -1784,6 +1791,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             PostMessageW(hwnd, WM_KEYDOWN, 'M', 0);
           }
           if (ImGui::Checkbox("Solid", &st->solid)) {}
+          if (ImGui::Checkbox("Backface Culling", &st->backfaceCulling)) {}
           if (ImGui::Checkbox("Grid", &st->showGrid)) {}
           if (ImGui::Checkbox("Texture", &st->useTexture)) {
             if (st->bgfxCtx) {
@@ -1852,7 +1860,8 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           ImGui::End();
           imguiEndFrame();
         }
-        agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid, st->showGrid);
+        agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid, st->showGrid,
+                               st->backfaceCulling);
 #else
         if (st->backend == PreviewRenderBackend::kOpenGL) {
           InitPreviewGl(hwnd, st);

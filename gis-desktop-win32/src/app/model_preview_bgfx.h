@@ -35,7 +35,7 @@ enum class AgisBgfxPbrViewMode : int {
 bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRendererKind renderer, const ObjPreviewModel& model);
 void agis_bgfx_preview_shutdown(HWND hwnd, AgisBgfxPreviewContext* ctx);
 void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& viewportPx, float rotX, float rotY, float zoom,
-                            bool solid, bool showGrid);
+                            bool solid, bool showGrid, bool backfaceCulling);
 bool agis_bgfx_preview_get_runtime_stats(AgisBgfxPreviewContext* ctx, AgisBgfxRuntimeStats* out);
 bool agis_bgfx_preview_set_texture(AgisBgfxPreviewContext* ctx, const std::wstring& texturePath);
 bool agis_bgfx_preview_set_pbr_textures(AgisBgfxPreviewContext* ctx, const AgisBgfxPbrTexturePaths& paths);
