@@ -1,0 +1,317 @@
+{
+  "classes": {
+    "glTF": {
+      "overrideName": "Model",
+      "toBeInherited": true
+    },
+    "glTF Property": {
+      "overrideName": "CesiumUtility::ExtensibleObject",
+      "manuallyDefined": true
+    },
+    "glTF Child of Root Property": {
+      "overrideName": "CesiumGltf::NamedObject",
+      "manuallyDefined": true
+    },
+    "Buffer": {
+      "toBeInherited": true
+    },
+    "Image": {
+      "toBeInherited": true
+    },
+    "Accessor": {
+      "toBeInherited": true
+    },
+    "Texture Info": {
+      "isBaseClass": true
+    },
+    "CESIUM_RTC": {
+      "overrideName": "ExtensionCesiumRTC"
+    },
+    "KHR_texture_basisu glTF Texture Extension": {
+      "overrideName": "ExtensionKhrTextureBasisu"
+    },
+    "EXT_texture_webp glTF extension": {
+      "overrideName": "ExtensionTextureWebp"
+    },
+    "CESIUM_tile_edges glTF Mesh Primitive extension": {
+      "overrideName": "ExtensionCesiumTileEdges"
+    },
+    "EXT_instance_features glTF Node extension": {
+      "overrideName": "ExtensionExtInstanceFeatures"
+    },
+    "Feature ID in EXT_instance_features": {
+      "overrideName": "ExtensionExtInstanceFeaturesFeatureId"
+    },
+    "EXT_mesh_features glTF Mesh Primitive extension": {
+      "overrideName": "ExtensionExtMeshFeatures"
+    },
+    "Feature ID in EXT_mesh_features": {
+      "overrideName": "FeatureId"
+    },
+    "Feature ID Texture in EXT_mesh_features": {
+      "overrideName": "FeatureIdTexture"
+    },
+    "EXT_mesh_gpu_instancing glTF extension": {
+      "overrideName": "ExtensionExtMeshGpuInstancing"
+    },
+    "EXT_meshopt_compression buffer extension": {
+      "overrideName": "ExtensionBufferExtMeshoptCompression"
+    },
+    "EXT_meshopt_compression bufferView extension": {
+      "overrideName": "ExtensionBufferViewExtMeshoptCompression"
+    },
+    "EXT_structural_metadata glTF extension": {
+      "overrideName": "ExtensionExtStructuralMetadata"
+    },
+    "EXT_structural_metadata glTF Document extension": {
+      "overrideName": "ExtensionModelExtStructuralMetadata"
+    },
+    "EXT_structural_metadata glTF Mesh Primitive extension": {
+      "overrideName": "ExtensionMeshPrimitiveExtStructuralMetadata"
+    },
+    "Class Property in EXT_structural_metadata": {
+      "overrideName": "ClassProperty"
+    },
+    "Class in EXT_structural_metadata": {
+      "overrideName": "Class"
+    },
+    "Enum in EXT_structural_metadata": {
+      "overrideName": "Enum",
+      "toBeInherited": true
+    },
+    "Enum Value in EXT_structural_metadata": {
+      "overrideName": "EnumValue"
+    },
+    "Property Attribute Property in EXT_structural_metadata": {
+      "overrideName": "PropertyAttributeProperty"
+    },
+    "Property Attribute in EXT_structural_metadata": {
+      "overrideName": "PropertyAttribute"
+    },
+    "Property Table Property in EXT_structural_metadata": {
+      "overrideName": "PropertyTableProperty"
+    },
+    "Property Table in EXT_structural_metadata": {
+      "overrideName": "PropertyTable"
+    },
+    "Property Texture Property in EXT_structural_metadata": {
+      "overrideName": "PropertyTextureProperty"
+    },
+    "Property Texture in EXT_structural_metadata": {
+      "overrideName": "PropertyTexture"
+    },
+    "Schema in EXT_structural_metadata": {
+      "overrideName": "Schema",
+      "isAsset": true
+    },
+    "Any Value": {
+      "overrideName": "CesiumUtility::JsonValue"
+    },
+    "Numeric Value": {
+      "overrideName": "CesiumUtility::JsonValue"
+    },
+    "No Data Value": {
+      "overrideName": "CesiumUtility::JsonValue"
+    },
+    "KHR_draco_mesh_compression glTF Mesh Primitive Extension": {
+      "overrideName": "ExtensionKhrDracoMeshCompression"
+    },
+    "KHR_materials_variants glTF Document Extension": {
+      "overrideName": "ExtensionModelKhrMaterialsVariants"
+    },
+    "KHR_materials_variants glTF Mesh Primitive Extension": {
+      "overrideName": "ExtensionMeshPrimitiveKhrMaterialsVariants"
+    },
+    "KHR_materials_unlit glTF Material Extension": {
+      "overrideName": "ExtensionKhrMaterialsUnlit"
+    },
+    "MAXAR_mesh_variants glTF extension": {
+      "overrideName": "ExtensionModelMaxarMeshVariants"
+    },
+    "MAXAR_mesh_variants node extension": {
+      "overrideName": "ExtensionNodeMaxarMeshVariants"
+    },
+    "KHR_texture_transform glTF TextureInfo Extension": {
+      "overrideName": "ExtensionKhrTextureTransform"
+    },
+    "CESIUM_primitive_outline glTF primitive extension": {
+      "overrideName": "ExtensionCesiumPrimitiveOutline"
+    },
+    "KHR_implicit_shapes glTF Document Extension": {
+      "overrideName": "ExtensionKhrImplicitShapes"
+    },
+    "KHR_implicit_shapes Shape Resource": {
+      "overrideName": "Shape"
+    },
+    "KHR_implicit_shapes Box Shape": {
+      "overrideName": "Box"
+    },
+    "KHR_implicit_shapes Capsule Shape": {
+      "overrideName": "Capsule"
+    },
+    "KHR_implicit_shapes Cylinder Shape": {
+      "overrideName": "Cylinder"
+    },
+    "KHR_implicit_shapes Sphere Shape": {
+      "overrideName": "Sphere"
+    },
+    "EXT_implicit_ellipsoid_region extension on KHR_implicit_shapes.shape": {
+      "overrideName": "ExtensionExtImplicitEllipsoidRegion"
+    },
+    "EXT_implicit_cylinder_region extension on KHR_implicit_shapes.shape": {
+      "overrideName": "ExtensionExtImplicitCylinderRegion"
+    },
+    "EXT_primitive_voxels glTF Mesh Primitive extension": {
+      "overrideName": "ExtensionExtPrimitiveVoxels",
+      "toBeInherited": true
+    },
+    "KHR_gaussian_splatting glTF Mesh Primitive Extension": {
+      "overrideName": "ExtensionKhrGaussianSplatting",
+      "requireOptionalProperties": [
+        "projection",
+        "sortingMethod"
+      ]
+    },
+    "KHR_gaussian_splatting_compression_spz_2 glTF Mesh Primitive Extension": {
+      "overrideName": "ExtensionKhrGaussianSplattingCompressionSpz2"
+    }
+  },
+  "extensions": [
+    {
+      "extensionName": "CESIUM_RTC",
+      "schema": "../1.0/Vendor/CESIUM_RTC/CESIUM_RTC.schema.json",
+      "attachTo": [
+        "glTF"
+      ]
+    },
+    {
+      "extensionName": "CESIUM_tile_edges",
+      "schema": "Vendor/CESIUM_tile_edges/schema/mesh.primitive.CESIUM_tile_edges.schema.json"
+    },
+    {
+      "extensionName": "EXT_instance_features",
+      "schema": "Vendor/EXT_instance_features/schema/node.EXT_instance_features.schema.json"
+    },
+    {
+      "extensionName": "EXT_mesh_features",
+      "schema": "Vendor/EXT_mesh_features/schema/mesh.primitive.EXT_mesh_features.schema.json"
+    },
+    {
+      "extensionName": "EXT_mesh_gpu_instancing",
+      "schema": "Vendor/EXT_mesh_gpu_instancing/schema/glTF.EXT_mesh_gpu_instancing.schema.json",
+      "attachTo": [
+        "node"
+      ]
+    },
+    {
+      "extensionName": "EXT_meshopt_compression",
+      "schema": "Vendor/EXT_meshopt_compression/schema/buffer.EXT_meshopt_compression.schema.json"
+    },
+    {
+      "extensionName": "EXT_meshopt_compression",
+      "schema": "Vendor/EXT_meshopt_compression/schema/bufferView.EXT_meshopt_compression.schema.json"
+    },
+    {
+      "extensionName": "EXT_structural_metadata",
+      "schema": "Vendor/EXT_structural_metadata/schema/EXT_structural_metadata.schema.json",
+      "attachTo": [
+        "node",
+        "material"
+      ]
+    },
+    {
+      "extensionName": "EXT_structural_metadata",
+      "schema": "Vendor/EXT_structural_metadata/schema/glTF.EXT_structural_metadata.schema.json"
+    },
+    {
+      "extensionName": "EXT_structural_metadata",
+      "schema": "Vendor/EXT_structural_metadata/schema/mesh.primitive.EXT_structural_metadata.schema.json"
+    },
+    {
+      "extensionName": "KHR_draco_mesh_compression",
+      "schema": "Khronos/KHR_draco_mesh_compression/schema/mesh.primitive.KHR_draco_mesh_compression.schema.json"
+    },
+    {
+      "extensionName": "KHR_materials_unlit",
+      "schema": "Khronos/KHR_materials_unlit/schema/material.KHR_materials_unlit.schema.json"
+    },
+    {
+      "extensionName": "KHR_materials_variants",
+      "schema": "Khronos/KHR_materials_variants/schema/glTF.KHR_materials_variants.schema.json"
+    },
+    {
+      "extensionName": "KHR_materials_variants",
+      "schema": "Khronos/KHR_materials_variants/schema/mesh.primitive.KHR_materials_variants.schema.json"
+    },
+    {
+      "extensionName": "KHR_texture_basisu",
+      "schema": "Khronos/KHR_texture_basisu/schema/texture.KHR_texture_basisu.schema.json"
+    },
+    {
+      "extensionName": "MAXAR_mesh_variants",
+      "schema": "Vendor/MAXAR_mesh_variants/schema/glTF.MAXAR_mesh_variants.schema.json"
+    },
+    {
+      "extensionName": "MAXAR_mesh_variants",
+      "schema": "Vendor/MAXAR_mesh_variants/schema/node.MAXAR_mesh_variants.schema.json"
+    },
+    {
+      "extensionName": "KHR_texture_transform",
+      "schema": "Khronos/KHR_texture_transform/schema/textureInfo.KHR_texture_transform.schema.json",
+      "attachTo": [
+        "textureInfo",
+        "material.occlusionTextureInfo",
+        "material.normalTextureInfo",
+        "propertyTexture.property",
+        "featureIdTexture"
+      ]
+    },
+    {
+      "extensionName": "EXT_texture_webp",
+      "schema": "Vendor/EXT_texture_webp/schema/glTF.EXT_texture_webp.schema.json",
+      "attachTo": [
+        "texture"
+      ]
+    },
+    {
+      "extensionName": "CESIUM_primitive_outline",
+      "schema": "Vendor/CESIUM_primitive_outline/schema/primitive.CESIUM_primitive_outline.schema.json",
+      "attachTo": [
+        "mesh.primitive"
+      ]
+    },
+    {
+      "extensionName": "KHR_implicit_shapes",
+      "schema": "Khronos/KHR_implicit_shapes/schema/glTF.KHR_implicit_shapes.schema.json",
+      "attachTo": [
+        "glTF"
+      ]
+    },
+    {
+      "extensionName": "EXT_implicit_ellipsoid_region",
+      "schema": "Vendor/EXT_implicit_ellipsoid_region/schema/glTF.KHR_implicit_shapes.shape.EXT_implicit_ellipsoid_region.schema.json"
+    },
+    {
+      "extensionName": "EXT_implicit_cylinder_region",
+      "schema": "Vendor/EXT_implicit_cylinder_region/schema/glTF.KHR_implicit_shapes.shape.EXT_implicit_cylinder_region.schema.json"
+    },
+    {
+      "extensionName": "EXT_primitive_voxels",
+      "schema": "Vendor/EXT_primitive_voxels/schema/mesh.primitive.EXT_primitive_voxels.schema.json"
+    },
+    {
+      "extensionName": "KHR_gaussian_splatting",
+      "schema": "Khronos/KHR_gaussian_splatting/schema/mesh.primitive.KHR_gaussian_splatting.schema.json",
+      "attachTo": [
+        "mesh.primitive"
+      ]
+    },
+    {
+      "extensionName": "KHR_gaussian_splatting_compression_spz_2",
+      "schema": "Khronos/KHR_gaussian_splatting_compression_spz_2/schema/mesh.primitive.KHR_gaussian_splatting_compression_spz_2.schema.json",
+      "attachTo": [
+        "mesh.primitive.KHR_gaussian_splatting"
+      ]
+    }
+  ]
+}
