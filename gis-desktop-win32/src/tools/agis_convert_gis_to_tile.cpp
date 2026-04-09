@@ -13,18 +13,24 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
   return false;
 }
 void PrintHelp() {
-  if (IsChineseOsUi()) {
+  const bool zh = IsChineseOsUi();
+  if (zh) {
     std::wcout << L"用法:\n"
-               << L"  agis_convert_gis_to_tile --input <path> --output <dir> [options]\n\n"
+               << L"  agis_convert_gis_to_tile --input <path> --output <dir|file> [options]\n\n"
+               << L"  --output 形态取决于 --output-subtype：xyz/tms/wmts/3dtiles 为目录；mbtiles、gpkg 为单文件路径。\n\n"
                << L"必填参数:\n"
                << L"  --input <path>               输入 GIS 文件或目录\n"
-               << L"  --output <dir>               输出瓦片目录\n\n"
-               << L"可选参数:\n"
-               << L"  --help, -h, /?               显示帮助\n"
-               << L"  --input-type <text>          输入主类型（gis/model/tile）\n"
-               << L"  --input-subtype <text>       输入子类型\n"
-               << L"  --output-type <text>         输出主类型\n"
-               << L"  --output-subtype <xyz|tms|wmts|mbtiles|gpkg|3dtiles> 输出子类型（默认 xyz）\n"
+               << L"  --output <dir|file>          瓦片根目录，或 .mbtiles / .gpkg 文件路径\n\n"
+               << L"通用选项:\n"
+               << L"  --help, -h, /?               显示帮助\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, true,
+        L"  GIS→瓦片；主类型一般为 gis。\n",
+        L"  auto | vector | raster | gpkg（默认 auto）。\n",
+        L"  输出瓦片集；主类型一般为 tile。\n",
+        L"  xyz | tms | wmts | mbtiles | gpkg | 3dtiles（默认 xyz）。\n"
+        L"  mbtiles/gpkg：--output 指向单文件；其余子类型：--output 为目录。\n");
+    std::wcout << L"【其它选项】\n"
                << L"  --coord-system <v>           projected | cecf（默认 projected）\n"
                << L"  --vector-mode <v>            geometry | bake_texture（默认 geometry）\n"
                << L"  --elev-horiz-ratio <num>     高程/水平比，默认 1\n"
@@ -32,19 +38,25 @@ void PrintHelp() {
                << L"  --output-unit <v>            m | km | 1000km（默认 m）\n"
                << L"  --mesh-spacing <int>         1..1000000（默认 1）\n"
                << L"  --texture-format <v>         png | tif | tga | bmp（默认 png）\n"
-               << L"  --raster-max-dim <int>       64..16384（默认 4096）\n";
+               << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限控内存\n"
+               << L"  --tile-levels <auto|1..23>   瓦片层数（默认 auto）\n";
   } else {
     std::wcout << L"Usage:\n"
-               << L"  agis_convert_gis_to_tile --input <path> --output <dir> [options]\n\n"
+               << L"  agis_convert_gis_to_tile --input <path> --output <dir|file> [options]\n\n"
+               << L"  --output is a directory for xyz/tms/wmts/3dtiles, or a single file for mbtiles/gpkg.\n\n"
                << L"Required:\n"
                << L"  --input <path>               Input GIS file or directory\n"
-               << L"  --output <dir>               Output tile directory\n\n"
-               << L"Options:\n"
-               << L"  --help, -h, /?               Show help\n"
-               << L"  --input-type <text>          Input major type (gis/model/tile)\n"
-               << L"  --input-subtype <text>       Input subtype\n"
-               << L"  --output-type <text>         Output major type\n"
-               << L"  --output-subtype <xyz|tms|wmts|mbtiles|gpkg|3dtiles> Output subtype (default: xyz)\n"
+               << L"  --output <dir|file>          Tile root dir, or .mbtiles / .gpkg path\n\n"
+               << L"General:\n"
+               << L"  --help, -h, /?               Show help\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, false,
+        L"  GIS → tiles; major type is usually gis.\n",
+        L"  auto | vector | raster | gpkg (default: auto).\n",
+        L"  Tile output; major type is usually tile.\n",
+        L"  xyz | tms | wmts | mbtiles | gpkg | 3dtiles (default: xyz).\n"
+        L"  mbtiles/gpkg: --output is a file path; others: --output is a directory.\n");
+    std::wcout << L"Other options:\n"
                << L"  --coord-system <v>           projected | cecf (default: projected)\n"
                << L"  --vector-mode <v>            geometry | bake_texture (default: geometry)\n"
                << L"  --elev-horiz-ratio <num>     Elevation/horizontal ratio (default: 1)\n"
@@ -52,7 +64,8 @@ void PrintHelp() {
                << L"  --output-unit <v>            m | km | 1000km (default: m)\n"
                << L"  --mesh-spacing <int>         1..1000000 (default: 1)\n"
                << L"  --texture-format <v>         png | tif | tga | bmp (default: png)\n"
-               << L"  --raster-max-dim <int>       64..16384 (default: 4096)\n";
+               << L"  --raster-max-dim <int>       0=native full read (default); 64..16384=cap long side\n"
+               << L"  --tile-levels <auto|1..23>   tile levels (default: auto)\n";
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

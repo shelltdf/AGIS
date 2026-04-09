@@ -13,28 +13,54 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
   return false;
 }
 void PrintHelp() {
-  if (IsChineseOsUi()) {
-    std::wcout << L"用法:\n  agis_convert_model_to_gis --input <path> --output <path> [options]\n\n"
-               << L"必填参数: --input, --output\n"
-               << L"可选参数: --help, --input-type, --input-subtype, --output-type, --output-subtype,\n"
-               << L"         --coord-system, --vector-mode, --elev-horiz-ratio, --target-crs,\n"
-               << L"         --output-unit, --mesh-spacing, --texture-format, --raster-max-dim\n";
+  const bool zh = IsChineseOsUi();
+  if (zh) {
+    std::wcout << L"用法:\n"
+               << L"  agis_convert_model_to_gis --input <path> --output <path> [options]\n\n"
+               << L"必填参数:\n"
+               << L"  --input <path>               输入模型路径\n"
+               << L"  --output <path>              输出 GIS 路径（如 .geojson）\n\n"
+               << L"通用选项:\n"
+               << L"  --help, -h, /?               显示帮助\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, true,
+        L"  模型→GIS；主类型一般为 model。\n",
+        L"  tin | dem | 3dmesh | pointcloud（默认 tin）。\n",
+        L"  输出 GIS；主类型一般为 gis。\n",
+        L"  auto | vector | raster | gpkg（默认 auto；本工具多为矢量 GeoJSON 场景）。\n");
+    std::wcout << L"【其它选项】\n"
+               << L"  --coord-system <projected|cecf>\n"
+               << L"  --vector-mode <geometry|bake_texture>\n"
+               << L"  --elev-horiz-ratio <num>\n"
+               << L"  --target-crs <EPSG:xxxx|WKT>\n"
+               << L"  --output-unit <m|km|1000km>\n"
+               << L"  --mesh-spacing <1..1000000>\n"
+               << L"  --texture-format <png|tif|tga|bmp>\n"
+               << L"  --raster-max-dim <0|64..16384>  (0=默认不降采样)\n";
   } else {
-    std::wcout << L"Usage:\n  agis_convert_model_to_gis --input <path> --output <path> [options]\n\n"
-               << L"Required: --input, --output\n"
-               << L"Options : --help, --input-type, --input-subtype, --output-type, --output-subtype,\n"
-               << L"          --coord-system, --vector-mode, --elev-horiz-ratio, --target-crs,\n"
-               << L"          --output-unit, --mesh-spacing, --texture-format, --raster-max-dim\n";
+    std::wcout << L"Usage:\n"
+               << L"  agis_convert_model_to_gis --input <path> --output <path> [options]\n\n"
+               << L"Required:\n"
+               << L"  --input <path>               Input model path\n"
+               << L"  --output <path>              Output GIS path (e.g. .geojson)\n\n"
+               << L"General:\n"
+               << L"  --help, -h, /?               Show help\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, false,
+        L"  Model → GIS; major type is usually model.\n",
+        L"  tin | dem | 3dmesh | pointcloud (default: tin).\n",
+        L"  GIS output; major type is usually gis.\n",
+        L"  auto | vector | raster | gpkg (default: auto).\n");
+    std::wcout << L"Other options:\n"
+               << L"  --coord-system <projected|cecf>\n"
+               << L"  --vector-mode <geometry|bake_texture>\n"
+               << L"  --elev-horiz-ratio <num>\n"
+               << L"  --target-crs <EPSG:xxxx|WKT>\n"
+               << L"  --output-unit <m|km|1000km>\n"
+               << L"  --mesh-spacing <1..1000000>\n"
+               << L"  --texture-format <png|tif|tga|bmp>\n"
+               << L"  --raster-max-dim <0|64..16384>  (0=native default)\n";
   }
-  std::wcout << L"\nDetailed options:\n"
-             << L"  --coord-system <projected|cecf>\n"
-             << L"  --vector-mode <geometry|bake_texture>\n"
-             << L"  --elev-horiz-ratio <num>\n"
-             << L"  --target-crs <EPSG:xxxx|WKT>\n"
-             << L"  --output-unit <m|km|1000km>\n"
-             << L"  --mesh-spacing <1..1000000>\n"
-             << L"  --texture-format <png|tif|tga|bmp>\n"
-             << L"  --raster-max-dim <64..16384>\n";
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {
   PrintConvertBanner(title, args);

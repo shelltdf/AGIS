@@ -9,8 +9,13 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_map>
+#include <cstring>
+#include <cstdlib>
 #include <cwctype>
+#include <memory>
 #include <new>
+#include <optional>
 
 #include <windows.h>
 #include <windowsx.h>
@@ -29,9 +34,22 @@
 #include "app/model_preview_bgfx.h"
 #include "imgui/imgui.h"
 #endif
+#include "app/tiles_gltf_loader.h"
+#include <gdiplus.h>
 #include "app/ui_font.h"
 #include "main_app.h"
 #include "main_globals.h"
+
+#ifndef GIS_DESKTOP_HAVE_GDAL
+#define GIS_DESKTOP_HAVE_GDAL 0
+#endif
+#if GIS_DESKTOP_HAVE_GDAL
+#include "app/agis_gdal_runtime_env.h"
+#include <cpl_error.h>
+#include <gdal.h>
+#include <gdal_priv.h>
+#include <ogrsf_frmts.h>
+#endif
 
 struct ObjPreviewStats {
   uint64_t vertices = 0;
@@ -46,6 +64,15 @@ struct ObjPreviewStats {
 #if !AGIS_USE_BGFX
 enum class PreviewRenderBackend { kOpenGL, kDx11 };
 #endif
+
+struct LasPointFltRaw {
+  double x = 0;
+  double y = 0;
+  double z = 0;
+  std::uint8_t r = 200;
+  std::uint8_t g = 200;
+  std::uint8_t b = 200;
+};
 
 struct ModelPreviewState {
   ObjPreviewModel model;
@@ -105,6 +132,17 @@ struct ModelPreviewState {
   HANDLE loadThread = nullptr;
   ObjPreviewModel loadedModel;
   ObjPreviewStats loadedStats;
+  /// >0 表示上次成功加载来自 LAS（用于信息面板文案）。
+  uint64_t lasSourcePointCount = 0;
+  /// LAS/LAZ 源点缓存（含下采样前完整读入集），用于在 UI 中调整点大小后快速重建网格。
+  std::vector<LasPointFltRaw> lasPointCache;
+  /// 点云「屏幕像素」近似大小（双三角点精灵），默认 5。
+  float lasPointScreenPx = 5.f;
+  /// LAZ 经 GDAL 打开失败时由 CPL/实现侧填写的说明（LAS 路径通常为空）。
+  std::wstring lazPreviewDiag;
+  bool loadAs3DTiles = false;
+  bool sourceIs3DTiles = false;
+  std::wstring tilesLoadDiag;
 };
 
 constexpr UINT kPreviewLoadedMsg = WM_APP + 201;
@@ -112,6 +150,590 @@ struct PreviewLoadCtx {
   HWND hwnd = nullptr;
   ModelPreviewState* st = nullptr;
 };
+
+namespace {
+constexpr uint64_t kPreviewObjFaceHardLimit = 5000000ull;
+constexpr uint32_t kLasPreviewMaxSourcePoints = 25'000'000u;
+/// 每个 LAS 点用 2 个三角面近似方形点斑，故面数上限需覆盖点数×2。
+constexpr size_t kLasPreviewMaxOutputTriangles = 900'000u;
+
+std::string PreviewWideToUtf8(const std::wstring& ws);
+
+static int PeekLasRecordCount(const std::wstring& pathW, std::uint32_t* nOut) {
+  if (!nOut) {
+    return 7;
+  }
+  std::ifstream ifs(std::filesystem::path(pathW), std::ios::binary);
+  if (!ifs) {
+    return 3;
+  }
+  char sig[4]{};
+  ifs.read(sig, 4);
+  if (!ifs || std::memcmp(sig, "LASF", 4) != 0) {
+    return 7;
+  }
+  ifs.seekg(96);
+  std::uint32_t offData = 0;
+  ifs.read(reinterpret_cast<char*>(&offData), 4);
+  ifs.seekg(104);
+  unsigned char pdrf = 0;
+  ifs.read(reinterpret_cast<char*>(&pdrf), 1);
+  std::uint16_t pdlen = 0;
+  ifs.read(reinterpret_cast<char*>(&pdlen), 2);
+  std::uint32_t nrec = 0;
+  ifs.read(reinterpret_cast<char*>(&nrec), 4);
+  if (!ifs || offData < 227 || pdlen < 20 || nrec == 0) {
+    return 7;
+  }
+  *nOut = nrec;
+  return 0;
+}
+
+static bool ReadLasPointsPreview(const std::wstring& pathW, std::vector<LasPointFltRaw>* outPts, int* progressPct) {
+  if (!outPts) {
+    return false;
+  }
+  outPts->clear();
+  std::ifstream ifs(std::filesystem::path(pathW), std::ios::binary);
+  if (!ifs) {
+    return false;
+  }
+  char sig[4]{};
+  ifs.read(sig, 4);
+  if (!ifs || std::memcmp(sig, "LASF", 4) != 0) {
+    return false;
+  }
+  ifs.seekg(96);
+  std::uint32_t offData = 0;
+  ifs.read(reinterpret_cast<char*>(&offData), 4);
+  ifs.seekg(104);
+  unsigned char pdrf = 0;
+  ifs.read(reinterpret_cast<char*>(&pdrf), 1);
+  std::uint16_t pdlen = 0;
+  ifs.read(reinterpret_cast<char*>(&pdlen), 2);
+  std::uint32_t nrec = 0;
+  ifs.read(reinterpret_cast<char*>(&nrec), 4);
+  if (!ifs || offData < 227 || pdlen < 20 || nrec == 0) {
+    return false;
+  }
+  double xs = 0.001, ys = 0.001, zs = 0.001, xo = 0, yo = 0, zo = 0;
+  ifs.seekg(131);
+  ifs.read(reinterpret_cast<char*>(&xs), 8);
+  ifs.read(reinterpret_cast<char*>(&ys), 8);
+  ifs.read(reinterpret_cast<char*>(&zs), 8);
+  ifs.read(reinterpret_cast<char*>(&xo), 8);
+  ifs.read(reinterpret_cast<char*>(&yo), 8);
+  ifs.read(reinterpret_cast<char*>(&zo), 8);
+  if (!ifs) {
+    return false;
+  }
+  ifs.seekg(static_cast<std::streamoff>(offData));
+  outPts->reserve(nrec);
+  for (std::uint32_t i = 0; i < nrec; ++i) {
+    if (progressPct && (i & 0x3FFFu) == 0) {
+      *progressPct = 5 + static_cast<int>((static_cast<uint64_t>(i) * 85u) / (std::max)(1u, nrec));
+    }
+    std::vector<unsigned char> buf(pdlen);
+    ifs.read(reinterpret_cast<char*>(buf.data()), pdlen);
+    if (!ifs) {
+      break;
+    }
+    if (buf.size() < 12) {
+      continue;
+    }
+    std::int32_t xi = 0, yi = 0, zi = 0;
+    std::memcpy(&xi, buf.data() + 0, 4);
+    std::memcpy(&yi, buf.data() + 4, 4);
+    std::memcpy(&zi, buf.data() + 8, 4);
+    LasPointFltRaw p;
+    p.x = static_cast<double>(xi) * xs + xo;
+    p.y = static_cast<double>(yi) * ys + yo;
+    p.z = static_cast<double>(zi) * zs + zo;
+    if (pdrf == 2 && buf.size() >= 26) {
+      std::uint16_t R = 0, G = 0, B = 0;
+      std::memcpy(&R, buf.data() + 20, 2);
+      std::memcpy(&G, buf.data() + 22, 2);
+      std::memcpy(&B, buf.data() + 24, 2);
+      p.r = static_cast<std::uint8_t>((std::min)(255, static_cast<int>(R / 256)));
+      p.g = static_cast<std::uint8_t>((std::min)(255, static_cast<int>(G / 256)));
+      p.b = static_cast<std::uint8_t>((std::min)(255, static_cast<int>(B / 256)));
+    } else if (pdrf == 3 && buf.size() >= 34) {
+      std::uint16_t R = 0, G = 0, B = 0;
+      std::memcpy(&R, buf.data() + 28, 2);
+      std::memcpy(&G, buf.data() + 30, 2);
+      std::memcpy(&B, buf.data() + 32, 2);
+      p.r = static_cast<std::uint8_t>((std::min)(255, static_cast<int>(R / 256)));
+      p.g = static_cast<std::uint8_t>((std::min)(255, static_cast<int>(G / 256)));
+      p.b = static_cast<std::uint8_t>((std::min)(255, static_cast<int>(B / 256)));
+    }
+    outPts->push_back(p);
+  }
+  if (progressPct) {
+    *progressPct = 95;
+  }
+  return !outPts->empty();
+}
+
+#if GIS_DESKTOP_HAVE_GDAL
+static std::wstring GdalUtf8ErrToWide(const char* utf8) {
+  if (!utf8 || !utf8[0]) {
+    return {};
+  }
+  const int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+  if (n <= 0) {
+    return {};
+  }
+  std::wstring w(static_cast<size_t>(n - 1), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w.data(), n);
+  return w;
+}
+
+static void AppendLazGdalDriverHint(std::wstring* d) {
+  if (!d) {
+    return;
+  }
+  *d += L"\n\n";
+  *d += L"【依赖】LAZ 为 LASzip 压缩。建议将 LASzip 源码置于 ../3rdparty/LASzip（见 README-LASZIP.md）；若未启用 bundled "
+        L"LASzip，则会尝试 GDAL 矢量驱动，此时 GDAL 侧可能报无法识别或缺解压依赖。\n";
+  *d += L"【可选】将 LAZ 转为 .las；或确保 CMake 已检测到 bundled LASzip / GDAL LAZ。";
+}
+
+static bool ReadLazPointsPreviewGdal(const std::wstring& pathW, std::vector<LasPointFltRaw>* outPts, int* progressPct,
+                                     std::wstring* diagOut) {
+  if (!outPts) {
+    return false;
+  }
+  outPts->clear();
+  auto setDiag = [&](std::wstring head) {
+    if (!diagOut) {
+      return;
+    }
+    diagOut->swap(head);
+    const char* cpl = CPLGetLastErrorMsg();
+    if (cpl && cpl[0]) {
+      diagOut->append(L"\n\n[CPL] ");
+      diagOut->append(GdalUtf8ErrToWide(cpl));
+    }
+    AppendLazGdalDriverHint(diagOut);
+  };
+  AgisEnsureGdalDataPath();
+  CPLErrorReset();
+  GDALAllRegister();
+  std::string utf8;
+  {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, pathW.c_str(), static_cast<int>(pathW.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) {
+      setDiag(L"内部错误：无法将路径转为 UTF-8 供 GDALOpenEx 使用。");
+      return false;
+    }
+    utf8.assign(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, pathW.c_str(), static_cast<int>(pathW.size()), utf8.data(), n, nullptr, nullptr);
+  }
+  CPLErrorReset();
+  GDALDataset* ds = static_cast<GDALDataset*>(
+      GDALOpenEx(utf8.c_str(), GDAL_OF_VECTOR | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
+  if (!ds) {
+    setDiag(L"GDAL 未能打开该文件（可能不是 LAZ、驱动未注册，或缺 LASzip 导致无法解压）。");
+    return false;
+  }
+  OGRLayer* layer = ds->GetLayer(0);
+  if (!layer) {
+    setDiag(L"GDAL 已打开数据集，但不存在第 0 个矢量图层。");
+    GDALClose(ds);
+    return false;
+  }
+  layer->ResetReading();
+  OGRFeatureDefn* defn = layer->GetLayerDefn();
+  auto findField = [defn](const char* a, const char* b) -> int {
+    int i = defn->GetFieldIndex(a);
+    if (i < 0) {
+      i = defn->GetFieldIndex(b);
+    }
+    return i;
+  };
+  const int iRed = findField("Color Red", "Red");
+  const int iGreen = findField("Color Green", "Green");
+  const int iBlue = findField("Color Blue", "Blue");
+
+  const GIntBig fc = layer->GetFeatureCount(FALSE);
+  if (fc > 0) {
+    const size_t cap = (std::min)(static_cast<size_t>(fc), static_cast<size_t>(kLasPreviewMaxSourcePoints));
+    outPts->reserve(cap);
+  }
+
+  OGRFeature* f = nullptr;
+  GIntBig idx = 0;
+  while ((f = layer->GetNextFeature()) != nullptr) {
+    if (outPts->size() >= kLasPreviewMaxSourcePoints) {
+      OGRFeature::DestroyFeature(f);
+      break;
+    }
+    if (progressPct && (idx & 0x3FFF) == 0) {
+      if (fc > 0) {
+        *progressPct =
+            5 + static_cast<int>((static_cast<double>(idx) * 85.0) / (std::max)(static_cast<GIntBig>(1), fc));
+      } else {
+        *progressPct = 5 + static_cast<int>((idx & 0xFF) % 85);
+      }
+    }
+    OGRGeometry* geom = f->GetGeometryRef();
+    if (!geom || geom->IsEmpty()) {
+      OGRFeature::DestroyFeature(f);
+      ++idx;
+      continue;
+    }
+    if (wkbFlatten(geom->getGeometryType()) != wkbPoint) {
+      OGRFeature::DestroyFeature(f);
+      ++idx;
+      continue;
+    }
+    const OGRPoint* const pt = geom->toPoint();
+    if (!pt) {
+      OGRFeature::DestroyFeature(f);
+      ++idx;
+      continue;
+    }
+    LasPointFltRaw p{};
+    p.x = pt->getX();
+    p.y = pt->getY();
+    p.z = pt->getZ();
+    auto clampU8 = [](int v) -> std::uint8_t {
+      return static_cast<std::uint8_t>((std::clamp)(v, 0, 255));
+    };
+    if (iRed >= 0 && iGreen >= 0 && iBlue >= 0) {
+      const int R = f->GetFieldAsInteger(iRed);
+      const int G = f->GetFieldAsInteger(iGreen);
+      const int B = f->GetFieldAsInteger(iBlue);
+      p.r = clampU8(R / 256);
+      p.g = clampU8(G / 256);
+      p.b = clampU8(B / 256);
+    }
+    outPts->push_back(p);
+    OGRFeature::DestroyFeature(f);
+    ++idx;
+  }
+  GDALClose(ds);
+  if (progressPct) {
+    *progressPct = 95;
+  }
+  if (outPts->empty()) {
+    setDiag(L"图层可读但未得到任何 Point 要素（几何过滤后为空）。");
+    return false;
+  }
+  if (diagOut) {
+    diagOut->clear();
+  }
+  return true;
+}
+#endif
+
+#if defined(AGIS_HAVE_LASZIP) && AGIS_HAVE_LASZIP
+#include <laszip_api.h>
+
+static std::wstring LaszipUtf8ToWide(const char* utf8) {
+  if (!utf8 || !utf8[0]) {
+    return {};
+  }
+  const int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+  if (n <= 0) {
+    return {};
+  }
+  std::wstring w(static_cast<size_t>(n - 1), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w.data(), n);
+  return w;
+}
+
+static void AppendLaszipLastError(std::wstring* d, laszip_POINTER laszip) {
+  if (!d || !laszip) {
+    return;
+  }
+  laszip_CHAR* err = nullptr;
+  if (laszip_get_error(laszip, &err) != 0 || !err || !err[0]) {
+    return;
+  }
+  d->append(L"\n[LASzip] ");
+  d->append(LaszipUtf8ToWide(err));
+}
+
+/// @return 0 成功；3 路径/创建失败；7 非有效 LAS/LAZ 或读头失败
+static int PeekLazPointCountLaszip(const std::wstring& pathW, std::uint64_t* nOut, std::wstring* diagOut) {
+  if (!nOut) {
+    return 7;
+  }
+  *nOut = 0;
+  laszip_POINTER laszip = nullptr;
+  if (laszip_create(&laszip) != 0 || !laszip) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：laszip_create 失败。");
+    }
+    return 3;
+  }
+  const std::string utf8 = PreviewWideToUtf8(pathW);
+  if (utf8.empty() && !pathW.empty()) {
+    if (diagOut) {
+      diagOut->assign(L"内部错误：无法将路径转为 UTF-8。");
+    }
+    laszip_destroy(laszip);
+    return 3;
+  }
+  laszip_BOOL compressed = 0;
+  if (laszip_open_reader(laszip, utf8.c_str(), &compressed) != 0) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：无法打开读端（可能不是 LAZ/LAS 或文件损坏）。");
+      AppendLaszipLastError(diagOut, laszip);
+    }
+    laszip_destroy(laszip);
+    return 7;
+  }
+  laszip_I64 cnt = 0;
+  if (laszip_get_point_count(laszip, &cnt) != 0 || cnt <= 0) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：无法读取有效点数。");
+      AppendLaszipLastError(diagOut, laszip);
+    }
+    laszip_close_reader(laszip);
+    laszip_destroy(laszip);
+    return 7;
+  }
+  laszip_close_reader(laszip);
+  laszip_destroy(laszip);
+  *nOut = static_cast<std::uint64_t>(cnt);
+  return 0;
+}
+
+static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointFltRaw>* outPts, int* progressPct,
+                                std::wstring* diagOut) {
+  if (!outPts) {
+    return false;
+  }
+  outPts->clear();
+  laszip_POINTER laszip = nullptr;
+  if (laszip_create(&laszip) != 0 || !laszip) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：laszip_create 失败。");
+    }
+    return false;
+  }
+  const std::string utf8 = PreviewWideToUtf8(pathW);
+  if (utf8.empty() && !pathW.empty()) {
+    if (diagOut) {
+      diagOut->assign(L"内部错误：无法将路径转为 UTF-8。");
+    }
+    laszip_destroy(laszip);
+    return false;
+  }
+  laszip_BOOL compressed = 0;
+  if (laszip_open_reader(laszip, utf8.c_str(), &compressed) != 0) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：无法打开读端。");
+      AppendLaszipLastError(diagOut, laszip);
+    }
+    laszip_destroy(laszip);
+    return false;
+  }
+  laszip_header_struct* header = nullptr;
+  if (laszip_get_header_pointer(laszip, &header) != 0 || !header) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：无法读取文件头。");
+      AppendLaszipLastError(diagOut, laszip);
+    }
+    laszip_close_reader(laszip);
+    laszip_destroy(laszip);
+    return false;
+  }
+  laszip_I64 npoints = 0;
+  if (laszip_get_point_count(laszip, &npoints) != 0 || npoints <= 0) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：点数无效。");
+      AppendLaszipLastError(diagOut, laszip);
+    }
+    laszip_close_reader(laszip);
+    laszip_destroy(laszip);
+    return false;
+  }
+  laszip_point_struct* point = nullptr;
+  if (laszip_get_point_pointer(laszip, &point) != 0 || !point) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：无法取得点缓冲指针。");
+      AppendLaszipLastError(diagOut, laszip);
+    }
+    laszip_close_reader(laszip);
+    laszip_destroy(laszip);
+    return false;
+  }
+
+  const size_t maxRead =
+      (std::min)(static_cast<size_t>(npoints), static_cast<size_t>(kLasPreviewMaxSourcePoints));
+  outPts->reserve(maxRead);
+  const unsigned pdrf = header->point_data_format;
+  auto clampU8 = [](int v) -> std::uint8_t { return static_cast<std::uint8_t>((std::clamp)(v, 0, 255)); };
+
+  for (laszip_I64 i = 0; i < npoints && outPts->size() < kLasPreviewMaxSourcePoints; ++i) {
+    if (laszip_read_point(laszip) != 0) {
+      if (diagOut) {
+        diagOut->assign(L"LASzip：读取第 ")
+            .append(std::to_wstring(static_cast<unsigned long long>(i)))
+            .append(L" 个点失败。");
+        AppendLaszipLastError(diagOut, laszip);
+      }
+      laszip_close_reader(laszip);
+      laszip_destroy(laszip);
+      outPts->clear();
+      return false;
+    }
+    laszip_F64 coords[3]{};
+    if (laszip_get_coordinates(laszip, coords) != 0) {
+      if (diagOut) {
+        diagOut->assign(L"LASzip：坐标解码失败。");
+        AppendLaszipLastError(diagOut, laszip);
+      }
+      laszip_close_reader(laszip);
+      laszip_destroy(laszip);
+      outPts->clear();
+      return false;
+    }
+    LasPointFltRaw p{};
+    p.x = coords[0];
+    p.y = coords[1];
+    p.z = coords[2];
+    if (pdrf == 2 || pdrf == 3 || pdrf == 5 || pdrf == 7) {
+      p.r = clampU8(static_cast<int>(point->rgb[0] / 256));
+      p.g = clampU8(static_cast<int>(point->rgb[1] / 256));
+      p.b = clampU8(static_cast<int>(point->rgb[2] / 256));
+    }
+    outPts->push_back(p);
+    if (progressPct && (i & 0x3FFF) == 0) {
+      *progressPct =
+          5 + static_cast<int>((static_cast<std::uint64_t>(i) * 85u) /
+                               (std::max)(static_cast<std::uint64_t>(1), static_cast<std::uint64_t>(npoints)));
+    }
+  }
+  laszip_close_reader(laszip);
+  laszip_destroy(laszip);
+  if (progressPct) {
+    *progressPct = 95;
+  }
+  if (outPts->empty()) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：未得到任何点。");
+    }
+    return false;
+  }
+  if (diagOut) {
+    diagOut->clear();
+  }
+  return true;
+}
+#endif  // AGIS_HAVE_LASZIP
+
+static bool BuildObjPreviewFromLasPoints(const std::vector<LasPointFltRaw>& pts, float pointScreenSizePx,
+                                          ObjPreviewModel* out) {
+  if (!out || pts.empty()) {
+    return false;
+  }
+  PreviewVec3 vmin{1e9f, 1e9f, 1e9f};
+  PreviewVec3 vmax{-1e9f, -1e9f, -1e9f};
+  for (const auto& p : pts) {
+    const float x = static_cast<float>(p.x);
+    const float y = static_cast<float>(p.y);
+    const float z = static_cast<float>(p.z);
+    vmin.x = (std::min)(vmin.x, x);
+    vmin.y = (std::min)(vmin.y, y);
+    vmin.z = (std::min)(vmin.z, z);
+    vmax.x = (std::max)(vmax.x, x);
+    vmax.y = (std::max)(vmax.y, y);
+    vmax.z = (std::max)(vmax.z, z);
+  }
+  out->vertices.clear();
+  out->texcoords.clear();
+  out->faces.clear();
+  out->faceTexcoord.clear();
+  out->faceMaterial.clear();
+  out->materials.clear();
+  out->hasVertexTexcoords = false;
+  out->primaryMapKdPath.clear();
+  out->center = {(vmin.x + vmax.x) * 0.5f, (vmin.y + vmax.y) * 0.5f, (vmin.z + vmax.z) * 0.5f};
+  const float ex = (std::max)(1e-6f, vmax.x - vmin.x);
+  const float ey = (std::max)(1e-6f, vmax.y - vmin.y);
+  const float ez = (std::max)(1e-6f, vmax.z - vmin.z);
+  out->extentHoriz = (std::max)((std::max)(ex, ey), 1e-6f);
+  out->extent = (std::max)(out->extentHoriz, ez);
+  out->kdR = 0.55f;
+  out->kdG = 0.55f;
+  out->kdB = 0.6f;
+
+  const float pxScale = (std::clamp)(pointScreenSizePx, 0.5f, 64.f) / 5.f;
+  size_t stride = 1;
+  constexpr size_t kMaxPointsBudget = kLasPreviewMaxOutputTriangles / 2;
+  if (pts.size() > kMaxPointsBudget) {
+    stride = (pts.size() + kMaxPointsBudget - 1) / kMaxPointsBudget;
+  }
+  /// XY 平面上的「半边长」，按包围范围与目标像素尺寸缩放，近似屏幕常量大小点斑（GPU 用三角面而非 PT_POINTS，兼容可调的屏幕像素感）。
+  const float hx =
+      (std::max)(out->extent * 1e-6f, out->extent * 0.0020f * pxScale);
+  const float hy = hx;
+
+  const size_t approxPt = (pts.size() + stride - 1) / stride;
+  out->materials.reserve(approxPt);
+  out->vertices.reserve(approxPt * 4);
+  out->faces.reserve(approxPt * 2);
+  out->faceTexcoord.reserve(approxPt * 2);
+  out->faceMaterial.reserve(approxPt * 2);
+
+  for (size_t i = 0; i < pts.size(); i += stride) {
+    const auto& p = pts[i];
+    ObjPreviewModel::MaterialInfo m{};
+    m.name = L"las";
+    m.kdR = static_cast<float>(p.r) / 255.0f;
+    m.kdG = static_cast<float>(p.g) / 255.0f;
+    m.kdB = static_cast<float>(p.b) / 255.0f;
+    const int mid = static_cast<int>(out->materials.size());
+    out->materials.push_back(std::move(m));
+
+    const float px = static_cast<float>(p.x);
+    const float py = static_cast<float>(p.y);
+    const float pz = static_cast<float>(p.z);
+    const int b0 = static_cast<int>(out->vertices.size());
+    out->vertices.push_back({px - hx, py - hy, pz});
+    out->vertices.push_back({px + hx, py - hy, pz});
+    out->vertices.push_back({px + hx, py + hy, pz});
+    out->vertices.push_back({px - hx, py + hy, pz});
+    out->faces.push_back({b0, b0 + 1, b0 + 2});
+    out->faces.push_back({b0, b0 + 2, b0 + 3});
+    out->faceTexcoord.push_back({-1, -1, -1});
+    out->faceTexcoord.push_back({-1, -1, -1});
+    out->faceMaterial.push_back(mid);
+    out->faceMaterial.push_back(mid);
+  }
+  return !out->faces.empty();
+}
+
+static bool PreviewPathIsLasFile(const std::wstring& path) {
+  return _wcsicmp(std::filesystem::path(path).extension().c_str(), L".las") == 0;
+}
+
+static bool PreviewPathIsLazFile(const std::wstring& path) {
+  return _wcsicmp(std::filesystem::path(path).extension().c_str(), L".laz") == 0;
+}
+
+static bool PreviewPathIsPointCloudFile(const std::wstring& path) {
+  return PreviewPathIsLasFile(path) || PreviewPathIsLazFile(path);
+}
+
+std::string PreviewWideToUtf8(const std::wstring& ws) {
+  if (ws.empty()) {
+    return {};
+  }
+  const int n =
+      WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
+  if (n <= 0) {
+    return {};
+  }
+  std::string out(static_cast<size_t>(n), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), static_cast<int>(ws.size()), out.data(), n, nullptr, nullptr);
+  return out;
+}
+}  // namespace
 
 std::wstring BuildFrameMsSparkline(const ModelPreviewState& st);
 
@@ -232,6 +854,39 @@ void DrawAxisOverlay(HDC hdc, const RECT& vrc, const ModelPreviewState& st) {
   DeleteObject(gx);
   DeleteObject(bx);
 }
+
+#if AGIS_USE_BGFX
+namespace {
+void DrawAxisImGuiOverlay(const RECT& vrc, float rotX, float rotY) {
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  const float ox = static_cast<float>(vrc.left + 28);
+  const float oy = static_cast<float>(vrc.bottom - 28);
+  const float len = 20.0f;
+  const float cx = std::cos(rotX), sx = std::sin(rotX);
+  const float cy = std::cos(rotY), sy = std::sin(rotY);
+  auto rot = [&](float x, float y, float z) {
+    float x1 = x;
+    float y1 = y * cx - z * sx;
+    float z1 = y * sx + z * cx;
+    float x2 = x1 * cy + z1 * sy;
+    float y2 = y1;
+    return ImVec2(ox + x2 * len, oy - y2 * len);
+  };
+  const ImVec2 px = rot(1, 0, 0);
+  const ImVec2 py = rot(0, 1, 0);
+  const ImVec2 pz = rot(0, 0, 1);
+  dl->AddLine(ImVec2(ox, oy), px, IM_COL32(220, 60, 60, 255), 2.0f);
+  dl->AddLine(ImVec2(ox, oy), py, IM_COL32(60, 180, 70, 255), 2.0f);
+  dl->AddLine(ImVec2(ox, oy), pz, IM_COL32(70, 110, 220, 255), 2.0f);
+  ImFont* font = ImGui::GetFont();
+  if (font) {
+    dl->AddText(font, 13.0f, ImVec2(px.x + 3.0f, px.y - 10.0f), IM_COL32(220, 60, 60, 255), "X");
+    dl->AddText(font, 13.0f, ImVec2(py.x + 3.0f, py.y - 10.0f), IM_COL32(60, 180, 70, 255), "Y");
+    dl->AddText(font, 13.0f, ImVec2(pz.x + 3.0f, pz.y - 10.0f), IM_COL32(70, 110, 220, 255), "Z");
+  }
+}
+}  // namespace
+#endif
 
 void DrawRuntimeHud(HDC hdc, const RECT& vrc, const ModelPreviewState& st) {
   const RECT panel{vrc.left + 10, vrc.top + 10, vrc.left + 560, vrc.top + 108};
@@ -1179,6 +1834,36 @@ std::wstring BuildObjInfoText(const std::wstring& path) {
   return ss.str();
 }
 
+static std::wstring BuildModelPreviewInfoText(const ModelPreviewState& st) {
+  if (st.sourceIs3DTiles) {
+    std::wstringstream ss;
+    ss << L"3D Tiles（内建 glTF 解析，无 vcpkg）\r\n";
+    ss << L"路径: " << st.path << L"\r\n\r\n";
+    ss << L"顶点: " << st.stats.vertices << L"\r\n面片: " << st.stats.faces << L"\r\n";
+    ss << L"材质槽: " << st.stats.materials << L"\r\n";
+    ss << L"\r\n说明: 合并遍历 tileset 中本地 b3dm/i3dm/glb/cmpt；Draco、仅 http 外链、pnts 等跳过。\r\n";
+    return ss.str();
+  }
+  if (st.lasSourcePointCount > 0) {
+    std::wstringstream ss;
+    ss << L"文件: " << st.path << L"\r\n";
+    std::error_code ec;
+    const uint64_t fb = std::filesystem::file_size(st.path, ec);
+    if (!ec) {
+      ss << L"文件体积: " << ToHumanBytes(fb) << L"\r\n\r\n";
+    } else {
+      ss << L"\r\n";
+    }
+    ss << L"[点云 LAS/LAZ]\r\n";
+    ss << L"源点数: " << st.lasSourcePointCount << L"\r\n";
+    ss << L"点斑近似像素: " << st.lasPointScreenPx << L" px（每点 2 三角/XY 点精灵；非 GPU PT_POINTS，便于稳定控制大小）\r\n";
+    ss << L"预览三角面: " << st.model.faces.size()
+       << L"（已按上限下采样；颜色：LAS/经 LASzip 读的 LAZ 取 PDRF 2/3/5/7 的 RGB；经 GDAL 的 LAZ 依赖属性字段）\r\n";
+    return ss.str();
+  }
+  return BuildObjInfoText(st.path);
+}
+
 void FitPreviewCamera(ModelPreviewState* st) {
   if (!st) return;
   st->rotX = 0.0f;
@@ -1190,9 +1875,145 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   auto* ctx = reinterpret_cast<PreviewLoadCtx*>(param);
   if (!ctx || !ctx->st) return 1;
   ModelPreviewState* st = ctx->st;
+  st->lasSourcePointCount = 0;
+  st->lasPointCache.clear();
+
+  if (st->loadAs3DTiles) {
+    st->tilesLoadDiag.clear();
+    st->loadStage = 1;
+    st->loadProgress = 2;
+    std::wstring err;
+    if (!AgisLoad3DTilesForPreview(st->path, &st->loadedModel, &err, &st->loadProgress)) {
+      st->loadFailed = true;
+      st->tilesLoadDiag = std::move(err);
+      st->loadStage = 9;
+      st->loadProgress = 100;
+      PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 0, 0);
+      delete ctx;
+      return 2;
+    }
+    if (st->loadedModel.faces.size() > kPreviewObjFaceHardLimit) {
+      st->loadedStats.faces = st->loadedModel.faces.size();
+      st->loadStage = 9;
+      st->loadProgress = 100;
+      PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 3, 0);
+      delete ctx;
+      return 2;
+    }
+    st->loadedStats = {};
+    st->loadedStats.vertices = st->loadedModel.vertices.size();
+    st->loadedStats.faces = st->loadedModel.faces.size();
+    st->loadedStats.materials = st->loadedModel.materials.size();
+    st->loadedStats.texcoords = st->loadedModel.texcoords.size();
+    st->textureLayers = DetectTextureLayers(st->loadedModel);
+    st->sourceIs3DTiles = true;
+    st->loadStage = 4;
+    st->loadProgress = 100;
+    PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 1, 0);
+    delete ctx;
+    return 0;
+  }
+
+  if (PreviewPathIsPointCloudFile(st->path)) {
+    st->lazPreviewDiag.clear();
+    st->loadStage = 1;
+    st->loadProgress = 3;
+    std::vector<LasPointFltRaw> pts;
+    if (PreviewPathIsLasFile(st->path)) {
+      std::uint32_t nrec = 0;
+      if (PeekLasRecordCount(st->path, &nrec) != 0) {
+        st->loadFailed = true;
+        st->loadStage = 9;
+        st->loadProgress = 100;
+        PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 0, 0);
+        delete ctx;
+        return 2;
+      }
+      if (nrec > kLasPreviewMaxSourcePoints) {
+        st->loadStage = 9;
+        st->loadProgress = 100;
+        PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 4, 0);
+        delete ctx;
+        return 2;
+      }
+      if (!ReadLasPointsPreview(st->path, &pts, &st->loadProgress)) {
+        st->loadFailed = true;
+        st->loadStage = 9;
+        st->loadProgress = 100;
+        PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 0, 0);
+        delete ctx;
+        return 2;
+      }
+    } else {
+      bool lazOk = false;
+#if defined(AGIS_HAVE_LASZIP) && AGIS_HAVE_LASZIP
+      std::uint64_t nLaz = 0;
+      if (PeekLazPointCountLaszip(st->path, &nLaz, &st->lazPreviewDiag) == 0) {
+        if (nLaz > kLasPreviewMaxSourcePoints) {
+          st->loadStage = 9;
+          st->loadProgress = 100;
+          PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 4, 0);
+          delete ctx;
+          return 2;
+        }
+        lazOk = ReadLazPointsLaszip(st->path, &pts, &st->loadProgress, &st->lazPreviewDiag);
+      }
+#endif
+#if GIS_DESKTOP_HAVE_GDAL
+      if (!lazOk) {
+        st->lazPreviewDiag.clear();
+        lazOk = ReadLazPointsPreviewGdal(st->path, &pts, &st->loadProgress, &st->lazPreviewDiag);
+      }
+#endif
+      if (!lazOk) {
+        st->loadFailed = true;
+        st->loadStage = 9;
+        st->loadProgress = 100;
+#if (defined(AGIS_HAVE_LASZIP) && AGIS_HAVE_LASZIP) || GIS_DESKTOP_HAVE_GDAL
+        PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 0, 0);
+#else
+        PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 5, 0);
+#endif
+        delete ctx;
+        return 2;
+      }
+    }
+    st->loadStage = 2;
+    st->loadProgress = 92;
+    if (!BuildObjPreviewFromLasPoints(pts, st->lasPointScreenPx, &st->loadedModel)) {
+      st->loadFailed = true;
+      st->loadStage = 9;
+      st->loadProgress = 100;
+      PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 0, 0);
+      delete ctx;
+      return 2;
+    }
+    std::error_code ec;
+    st->loadedStats = {};
+    st->loadedStats.fileBytes = std::filesystem::file_size(st->path, ec);
+    st->loadedStats.vertices = pts.size();
+    st->loadedStats.faces = st->loadedModel.faces.size();
+    st->loadedStats.materials = st->loadedModel.materials.size();
+    st->lasSourcePointCount = pts.size();
+    st->lasPointCache = std::move(pts);
+    st->textureLayers.clear();
+    st->loadStage = 4;
+    st->loadProgress = 100;
+    PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 1, 0);
+    delete ctx;
+    return 0;
+  }
+
   st->loadStage = 1;
   st->loadProgress = 8;
   st->loadedStats = ScanObjStats(st->path);
+  if (st->loadedStats.faces > kPreviewObjFaceHardLimit) {
+    st->loadStage = 9;
+    st->loadProgress = 100;
+    PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 3, 0);
+    delete ctx;
+    return 2;
+  }
   st->loadStage = 2;
   st->loadProgress = 5;
   int parsePct = 0;
@@ -1232,6 +2053,8 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_CREATE: {
       auto* st = new ModelPreviewState();
       st->path = g_pendingPreviewModelPath;
+      st->loadAs3DTiles = g_pendingPreviewLoadAs3DTiles;
+      g_pendingPreviewLoadAs3DTiles = false;
       st->lastFpsTick = GetTickCount();
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
       CreateWindowW(L"STATIC", L"渲染模式：", WS_CHILD | WS_VISIBLE, 12, 12, 72, 20, hwnd, nullptr,
@@ -1578,13 +2401,74 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case kPreviewLoadedMsg: {
       auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
       if (!st) return 0;
+      if (wParam == 5) {
+        if (st->loadThread) {
+          CloseHandle(st->loadThread);
+          st->loadThread = nullptr;
+        }
+        st->loading = false;
+        MessageBoxW(hwnd,
+                    L"LAZ 预览需要下列之一：\n"
+                    L"（1）在 ../3rdparty/LASzip 放置 LASzip 源码包并重新 CMake 配置编译（推荐，见 3rdparty/README-LASZIP.md）；\n"
+                    L"（2）使用 AGIS_USE_GDAL=on 且 GDAL 能读 LAZ 的构建；\n"
+                    L"或先将 LAZ 解压/转为 .las。",
+                    L"模型预览", MB_OK | MB_ICONINFORMATION);
+        DestroyWindow(hwnd);
+        return 0;
+      }
+      if (wParam == 4) {
+        if (st->loadThread) {
+          CloseHandle(st->loadThread);
+          st->loadThread = nullptr;
+        }
+        st->loading = false;
+        MessageBoxW(hwnd,
+                    L"LAS 点数超过内置预览上限（约 2500 万点），为防内存过高已中止。\n请先用外部工具抽稀或切分后再预览。",
+                    L"模型预览", MB_OK | MB_ICONWARNING);
+        DestroyWindow(hwnd);
+        return 0;
+      }
+      if (wParam == 3) {
+        if (st->loadThread) {
+          CloseHandle(st->loadThread);
+          st->loadThread = nullptr;
+        }
+        st->loading = false;
+        wchar_t msg[512]{};
+        swprintf_s(msg,
+                   L"当前 OBJ 面片过大（%llu），直接预览可能导致卡死。\n请提高 mesh-spacing 或使用更粗网格后再试（建议 <= %llu 面）。",
+                   static_cast<unsigned long long>(st->loadedStats.faces),
+                   static_cast<unsigned long long>(kPreviewObjFaceHardLimit));
+        MessageBoxW(hwnd, msg, L"模型预览", MB_OK | MB_ICONWARNING);
+        DestroyWindow(hwnd);
+        return 0;
+      }
       if (st->loadThread) {
         CloseHandle(st->loadThread);
         st->loadThread = nullptr;
       }
       st->loading = false;
       if (wParam == 0 || st->loadFailed) {
-        MessageBoxW(hwnd, L"模型解析失败：OBJ 文件损坏或缺少有效顶点/面。", L"模型预览", MB_OK | MB_ICONWARNING);
+        const wchar_t* failMsg = nullptr;
+        if (!st->tilesLoadDiag.empty()) {
+          failMsg = L"3D Tiles 预览加载失败。";
+        } else if (PreviewPathIsLazFile(st->path)) {
+          failMsg = L"LAZ 点云预览失败（详见下方 LASzip/GDAL 说明）。";
+        } else if (PreviewPathIsLasFile(st->path)) {
+          failMsg = L"LAS 点云预览失败：文件非 LAS、头无效、无点记录或已截断读取出错。";
+        } else {
+          failMsg = L"模型解析失败：OBJ 文件损坏或缺少有效顶点/面。";
+        }
+        std::wstring box = failMsg;
+        if (!st->tilesLoadDiag.empty()) {
+          box += L"\n\n";
+          box += st->tilesLoadDiag;
+        }
+        if (PreviewPathIsLazFile(st->path) && !st->lazPreviewDiag.empty()) {
+          box += L"\n\n—— 详情 ——\n";
+          box += st->lazPreviewDiag;
+        }
+        MessageBoxW(hwnd, box.c_str(), L"模型预览", MB_OK | MB_ICONWARNING);
         DestroyWindow(hwnd);
         return 0;
       }
@@ -1592,7 +2476,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       st->stats = st->loadedStats;
       st->loadStage = 4;
       if (HWND info = GetDlgItem(hwnd, kPreviewInfoEditId)) {
-        SetWindowTextW(info, BuildObjInfoText(st->path).c_str());
+        SetWindowTextW(info, BuildModelPreviewInfoText(*st).c_str());
       }
       if (HWND texLayer = GetDlgItem(hwnd, kPreviewTexLayerComboId)) {
         SendMessageW(texLayer, CB_RESETCONTENT, 0, 0);
@@ -1605,7 +2489,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       }
 #if AGIS_USE_BGFX
       if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model)) {
-        MessageBoxW(hwnd, L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ 含顶点与面）。", L"模型预览",
+        MessageBoxW(hwnd, L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ/点云网格有效）。", L"模型预览",
                     MB_OK | MB_ICONWARNING);
         DestroyWindow(hwnd);
         return 0;
@@ -1740,15 +2624,29 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           FrameRect(hdc, &panel, reinterpret_cast<HBRUSH>(GetStockObject(GRAY_BRUSH)));
           SetBkMode(hdc, TRANSPARENT);
           SetTextColor(hdc, RGB(32, 32, 32));
-          const std::wstring line = L"模型加载中... " + std::to_wstring((std::clamp)(st->loadProgress, 0, 100)) + L"%";
+          const bool lasWait = PreviewPathIsPointCloudFile(st->path);
+          const std::wstring line =
+              (lasWait ? L"点云加载中... " : L"模型加载中... ") + std::to_wstring((std::clamp)(st->loadProgress, 0, 100)) + L"%";
           const wchar_t* stage = L"准备中...";
-          switch (st->loadStage) {
-            case 1: stage = L"正在统计模型信息..."; break;
-            case 2: stage = L"正在解析 OBJ 网格..."; break;
-            case 3: stage = L"正在分析贴图层..."; break;
-            case 4: stage = L"正在初始化渲染资源..."; break;
-            case 9: stage = L"模型解析失败"; break;
-            default: break;
+          if (lasWait) {
+            switch (st->loadStage) {
+              case 1:
+                stage = PreviewPathIsLazFile(st->path) ? L"正在读取 LAZ 点云（优先 LASzip）..." : L"正在读取 LAS 点云...";
+                break;
+              case 2: stage = L"正在生成预览点斑..."; break;
+              case 4: stage = L"即将完成..."; break;
+              case 9: stage = L"点云读取失败"; break;
+              default: break;
+            }
+          } else {
+            switch (st->loadStage) {
+              case 1: stage = L"正在统计模型信息..."; break;
+              case 2: stage = L"正在解析 OBJ 网格..."; break;
+              case 3: stage = L"正在分析贴图层..."; break;
+              case 4: stage = L"正在初始化渲染资源..."; break;
+              case 9: stage = L"模型解析失败"; break;
+              default: break;
+            }
           }
           TextOutW(hdc, panel.left + 14, panel.top + 12, line.c_str(), static_cast<int>(line.size()));
           TextOutW(hdc, panel.left + 14, panel.top + 34, stage, static_cast<int>(wcslen(stage)));
@@ -1821,6 +2719,20 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
               agis_bgfx_preview_set_pbr_view_mode(st->bgfxCtx, st->pbrViewMode);
             }
           }
+          if (st->lasSourcePointCount > 0 && !st->lasPointCache.empty()) {
+            float pxSz = st->lasPointScreenPx;
+            if (ImGui::SliderFloat("点大小(像素)", &pxSz, 1.f, 32.f, "%.0f")) {
+              st->lasPointScreenPx = pxSz;
+              BuildObjPreviewFromLasPoints(st->lasPointCache, st->lasPointScreenPx, &st->model);
+              if (st->bgfxCtx) {
+                agis_bgfx_preview_reload_model(st->bgfxCtx, st->model);
+              }
+              st->stats.faces = st->model.faces.size();
+              if (HWND info = GetDlgItem(hwnd, kPreviewInfoEditId)) {
+                SetWindowTextW(info, BuildModelPreviewInfoText(*st).c_str());
+              }
+            }
+          }
           if (!st->textureLayers.empty()) {
             std::string layerPreview;
             for (wchar_t ch : st->textureLayers[st->currentTextureLayer].first) {
@@ -1857,7 +2769,28 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           const float unitsPerPxHud = (2.0f / (std::max)(0.05f, st->zoom)) / static_cast<float>(vhud);
           ImGui::Text("FPS %.1f | Frame %.2f ms", st->fps, st->lastFrameMs);
           ImGui::Text("Scale: 100px ~= %.4f units | Grid length: 2.0 units", unitsPerPxHud * 100.0f);
+          const std::wstring sparkNow = BuildFrameMsSparkline(*st);
+          float cpuMsHud = st->lastFrameMs;
+          float gpuMsHud = 0.0f;
+          float waitSubmitMsHud = 0.0f;
+          float waitRenderMsHud = 0.0f;
+          uint32_t drawCallsHud = static_cast<uint32_t>(st->stats.faces);
+          AgisBgfxRuntimeStats bgfxHud{};
+          if (agis_bgfx_preview_get_runtime_stats(st->bgfxCtx, &bgfxHud)) {
+            cpuMsHud = (std::max)(cpuMsHud, bgfxHud.cpuFrameMs);
+            gpuMsHud = bgfxHud.gpuFrameMs;
+            waitSubmitMsHud = bgfxHud.waitSubmitMs;
+            waitRenderMsHud = bgfxHud.waitRenderMs;
+            drawCallsHud = bgfxHud.drawCalls;
+          }
+          const std::wstring bottleneckNow =
+              EvaluatePreviewBottleneck(*st, cpuMsHud, gpuMsHud, drawCallsHud, waitSubmitMsHud, waitRenderMsHud);
+          ImGui::Separator();
+          ImGui::Text("CPU %.2f ms | GPU %.2f ms | Draw %u", cpuMsHud, gpuMsHud, drawCallsHud);
+          ImGui::Text("瓶颈: %s", PreviewWideToUtf8(bottleneckNow).c_str());
+          ImGui::Text("曲线: %s", PreviewWideToUtf8(sparkNow).c_str());
           ImGui::End();
+          DrawAxisImGuiOverlay(vrc, st->rotX, st->rotY);
           imguiEndFrame();
         }
         agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid, st->showGrid,
@@ -1910,7 +2843,13 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                      st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), spark.c_str());
           SetWindowTextW(GetDlgItem(hwnd, kPreviewRuntimeTextId), line);
         }
+#if AGIS_USE_BGFX
+        if (!st->imguiReady) {
+          DrawAxisOverlay(hdc, vrc, *st);
+        }
+#else
         DrawAxisOverlay(hdc, vrc, *st);
+#endif
         if (!st->imguiReady) {
           DrawRuntimeHud(hdc, vrc, *st);
         }
@@ -1955,18 +2894,966 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 }
 
 void OpenModelPreviewWindow(HWND owner, const std::wstring& path) {
-  const ObjPreviewStats stat = ScanObjStats(path);
-  constexpr uint64_t kPreviewFaceHardLimit = 5000000ull;
-  if (stat.faces > kPreviewFaceHardLimit) {
-    wchar_t msg[512]{};
-    swprintf_s(msg,
-               L"当前 OBJ 面片过大（%llu），直接打开预览会导致卡死风险。\n请提高 mesh-spacing 或使用更粗网格后再预览（建议 <= %llu 面）。",
-               static_cast<unsigned long long>(stat.faces), static_cast<unsigned long long>(kPreviewFaceHardLimit));
-    MessageBoxW(owner, msg, L"模型预览", MB_OK | MB_ICONWARNING);
-    return;
-  }
+  g_pendingPreviewLoadAs3DTiles = false;
   g_pendingPreviewModelPath = path;
   CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"模型数据预览",
                   WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
                   CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
+
+void OpenModelPreviewWindow3DTiles(HWND owner, const std::wstring& tilesetRootOrFile) {
+  g_pendingPreviewLoadAs3DTiles = true;
+  g_pendingPreviewModelPath = tilesetRootOrFile;
+  CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"3D Tiles 预览",
+                  WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
+                  CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
+// --- 瓦片：平面四叉树 (slippy z/x/y) + 3D Tiles BVH/体积元数据（tileset.json 根 region）---
+
+enum class TileSampleResult { kOk, kNoRaster, kContainerUnsupported };
+
+struct TileFindResult {
+  TileSampleResult code = TileSampleResult::kNoRaster;
+  std::wstring path;
+};
+
+static bool IsRasterTileExtension(const std::wstring& ext) {
+  return _wcsicmp(ext.c_str(), L".png") == 0 || _wcsicmp(ext.c_str(), L".jpg") == 0 ||
+         _wcsicmp(ext.c_str(), L".jpeg") == 0 || _wcsicmp(ext.c_str(), L".webp") == 0 ||
+         _wcsicmp(ext.c_str(), L".bmp") == 0;
+}
+
+static bool TryParseNonNegIntW(const std::wstring& s, int* out) {
+  if (!out || s.empty()) {
+    return false;
+  }
+  wchar_t* end = nullptr;
+  const long v = std::wcstol(s.c_str(), &end, 10);
+  if (end == s.c_str() || v < 0 || v > 0x0fffffff) {
+    return false;
+  }
+  *out = static_cast<int>(v);
+  return true;
+}
+
+static uint64_t PackTileKey(int z, int x, int y) {
+  return (static_cast<uint64_t>(static_cast<unsigned char>(z)) << 56) | (static_cast<uint64_t>(x) << 28) |
+         static_cast<uint64_t>(y);
+}
+
+static TileFindResult FindSampleTileRaster(const std::wstring& pathW) {
+  std::error_code ec;
+  const std::filesystem::path p(pathW);
+  if (std::filesystem::is_regular_file(p, ec)) {
+    const std::wstring ext = p.extension().wstring();
+    if (IsRasterTileExtension(ext)) {
+      return {TileSampleResult::kOk, p.wstring()};
+    }
+    if (_wcsicmp(ext.c_str(), L".mbtiles") == 0 || _wcsicmp(ext.c_str(), L".gpkg") == 0) {
+      return {TileSampleResult::kContainerUnsupported, L""};
+    }
+    return {TileSampleResult::kNoRaster, L""};
+  }
+  if (!std::filesystem::is_directory(p, ec)) {
+    return {TileSampleResult::kNoRaster, L""};
+  }
+  int scanned = 0;
+  constexpr int kMaxScan = 6000;
+  for (std::filesystem::recursive_directory_iterator it(
+           p, std::filesystem::directory_options::skip_permission_denied, ec);
+       it != std::filesystem::recursive_directory_iterator{} && scanned < kMaxScan; ++it, ++scanned) {
+    if (!it->is_regular_file(ec)) {
+      continue;
+    }
+    const std::wstring ext = it->path().extension().wstring();
+    if (IsRasterTileExtension(ext)) {
+      return {TileSampleResult::kOk, it->path().wstring()};
+    }
+  }
+  return {TileSampleResult::kNoRaster, L""};
+}
+
+static bool ReadWholeFileAscii(const std::wstring& pathW, std::string* out) {
+  if (!out) {
+    return false;
+  }
+  std::ifstream ifs(std::filesystem::path(pathW), std::ios::binary);
+  if (!ifs) {
+    return false;
+  }
+  std::string buf((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+  out->swap(buf);
+  return !out->empty();
+}
+
+/// 磁盘为 TMS 行号文件名（AGIS 写出为 `y_tms`）时，预览栅格需按 XYZ 映射：y_xyz = (2^z-1-y_disk)。
+static bool DetectTmsTileLayoutOnDisk(const std::filesystem::path& root) {
+  std::error_code ec;
+  if (std::filesystem::is_regular_file(root / L"tms.xml", ec)) {
+    return true;
+  }
+  std::string raw;
+  if (ReadWholeFileAscii((root / L"README.txt").wstring(), &raw)) {
+    if (raw.find("protocol=tms") != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+#if GIS_DESKTOP_HAVE_GDAL
+static std::unique_ptr<Gdiplus::Bitmap> TryLoadGdalRasterTileContainerPreview(const std::wstring& pathW,
+                                                                              std::wstring* diagOut) {
+  if (diagOut) {
+    diagOut->clear();
+  }
+  AgisEnsureGdalDataPath();
+  CPLErrorReset();
+  GDALAllRegister();
+  std::string utf8;
+  {
+    const int n =
+        WideCharToMultiByte(CP_UTF8, 0, pathW.c_str(), static_cast<int>(pathW.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) {
+      if (diagOut) {
+        *diagOut = L"路径无法转为 UTF-8。";
+      }
+      return nullptr;
+    }
+    utf8.assign(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, pathW.c_str(), static_cast<int>(pathW.size()), utf8.data(), n, nullptr, nullptr);
+  }
+  GDALDatasetH ds = GDALOpenEx(utf8.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr);
+  if (!ds) {
+    if (diagOut) {
+      *diagOut = L"GDAL 无法以栅格方式打开该文件（驱动缺失、需 PROJ/GDAL_DATA，或不是平铺栅格内容）。";
+      const char* cpl = CPLGetLastErrorMsg();
+      if (cpl && cpl[0]) {
+        const int wn = MultiByteToWideChar(CP_UTF8, 0, cpl, -1, nullptr, 0);
+        if (wn > 1) {
+          std::wstring wc(static_cast<size_t>(wn - 1), L'\0');
+          MultiByteToWideChar(CP_UTF8, 0, cpl, -1, wc.data(), wn);
+          diagOut->append(L"\n");
+          diagOut->append(wc);
+        }
+      }
+    }
+    return nullptr;
+  }
+  const int w = GDALGetRasterXSize(ds);
+  const int h = GDALGetRasterYSize(ds);
+  const int bands = GDALGetRasterCount(ds);
+  if (w < 1 || h < 1 || bands < 1) {
+    GDALClose(ds);
+    if (diagOut) {
+      *diagOut = L"数据集无有效栅格尺寸。";
+    }
+    return nullptr;
+  }
+  constexpr int kMaxDim = 2048;
+  int outW = w;
+  int outH = h;
+  if (w >= h) {
+    if (outW > kMaxDim) {
+      outW = kMaxDim;
+      outH = (std::max)(1, static_cast<int>(std::lround(static_cast<double>(h) * static_cast<double>(kMaxDim) /
+                                                         static_cast<double>(w))));
+    }
+  } else {
+    if (outH > kMaxDim) {
+      outH = kMaxDim;
+      outW = (std::max)(1, static_cast<int>(std::lround(static_cast<double>(w) * static_cast<double>(kMaxDim) /
+                                                         static_cast<double>(h))));
+    }
+  }
+  std::vector<uint8_t> planeR(static_cast<size_t>(outW) * static_cast<size_t>(outH));
+  std::vector<uint8_t> planeG(planeR.size());
+  std::vector<uint8_t> planeB(planeR.size());
+  auto readPlane = [&](int bandIdx, uint8_t* dst) -> bool {
+    GDALRasterBandH bh = GDALGetRasterBand(ds, bandIdx);
+    if (!bh) {
+      return false;
+    }
+    return GDALRasterIO(bh, GF_Read, 0, 0, w, h, dst, outW, outH, GDT_Byte, 1, outW) == CE_None;
+  };
+  bool ok = false;
+  if (bands >= 3) {
+    ok = readPlane(1, planeR.data()) && readPlane(2, planeG.data()) && readPlane(3, planeB.data());
+  } else {
+    ok = readPlane(1, planeR.data());
+    if (ok) {
+      planeG = planeR;
+      planeB = planeR;
+    }
+  }
+  GDALClose(ds);
+  if (!ok) {
+    if (diagOut) {
+      *diagOut = L"RasterIO 读缩略图失败（波段类型可能非 Byte，或仅为矢量 GeoPackage）。";
+    }
+    return nullptr;
+  }
+  auto bmp = std::make_unique<Gdiplus::Bitmap>(outW, outH, PixelFormat24bppRGB);
+  if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) {
+    return nullptr;
+  }
+  Gdiplus::BitmapData bd{};
+  Gdiplus::Rect r(0, 0, outW, outH);
+  if (bmp->LockBits(&r, Gdiplus::ImageLockModeWrite, PixelFormat24bppRGB, &bd) != Gdiplus::Ok) {
+    return nullptr;
+  }
+  auto* dstBase = static_cast<uint8_t*>(bd.Scan0);
+  for (int yy = 0; yy < outH; ++yy) {
+    uint8_t* row = dstBase + yy * bd.Stride;
+    for (int xx = 0; xx < outW; ++xx) {
+      const size_t i = static_cast<size_t>(yy) * static_cast<size_t>(outW) + static_cast<size_t>(xx);
+      row[xx * 3 + 0] = planeB[i];
+      row[xx * 3 + 1] = planeG[i];
+      row[xx * 3 + 2] = planeR[i];
+    }
+  }
+  bmp->UnlockBits(&bd);
+  return bmp;
+}
+#endif  // GIS_DESKTOP_HAVE_GDAL
+
+static std::optional<std::wstring> FindTilesetJsonPath(const std::wstring& rootW) {
+  std::error_code ec;
+  const std::filesystem::path p(rootW);
+  if (std::filesystem::is_regular_file(p, ec)) {
+    if (_wcsicmp(p.filename().c_str(), L"tileset.json") == 0) {
+      return p.wstring();
+    }
+    return std::nullopt;
+  }
+  if (!std::filesystem::is_directory(p, ec)) {
+    return std::nullopt;
+  }
+  const auto tj = p / L"tileset.json";
+  if (std::filesystem::is_regular_file(tj, ec)) {
+    return tj.wstring();
+  }
+  return std::nullopt;
+}
+
+static std::filesystem::path ThreeDTilesContentDirectory(const std::wstring& rootW, const std::wstring& tilesetJsonW) {
+  const std::filesystem::path ts(tilesetJsonW);
+  std::error_code ec;
+  if (std::filesystem::is_regular_file(ts, ec)) {
+    return ts.parent_path();
+  }
+  return std::filesystem::path(rootW);
+}
+
+static std::wstring Utf8JsonToWide(const std::string& u8) {
+  if (u8.empty()) {
+    return {};
+  }
+  const int n = MultiByteToWideChar(CP_UTF8, 0, u8.data(), static_cast<int>(u8.size()), nullptr, 0);
+  if (n <= 0) {
+    return std::wstring(u8.begin(), u8.end());
+  }
+  std::wstring w(static_cast<size_t>(n), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, u8.data(), static_cast<int>(u8.size()), w.data(), n);
+  return w;
+}
+
+static bool TryParseFirstDoubleAfterKey(const std::string& raw, const char* key, double* out) {
+  if (!out || !key) {
+    return false;
+  }
+  const size_t pos = raw.find(key);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  const size_t colon = raw.find(':', pos);
+  if (colon == std::string::npos) {
+    return false;
+  }
+  const char* p = raw.c_str() + colon + 1;
+  while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+    ++p;
+  }
+  char* endp = nullptr;
+  const double v = std::strtod(p, &endp);
+  if (endp == p) {
+    return false;
+  }
+  *out = v;
+  return true;
+}
+
+static bool TryExtractTilesetAssetVersion(const std::string& raw, std::string* ver) {
+  if (!ver) {
+    return false;
+  }
+  const size_t apos = raw.find("\"asset\"");
+  if (apos == std::string::npos) {
+    return false;
+  }
+  const size_t searchEnd = (std::min)(apos + 900, raw.size());
+  const size_t vpos = raw.find("\"version\"", apos);
+  if (vpos == std::string::npos || vpos > searchEnd) {
+    return false;
+  }
+  const size_t colon = raw.find(':', vpos);
+  if (colon == std::string::npos) {
+    return false;
+  }
+  size_t i = colon + 1;
+  while (i < raw.size() && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\n' || raw[i] == '\r')) {
+    ++i;
+  }
+  if (i >= raw.size() || raw[i] != '"') {
+    return false;
+  }
+  ++i;
+  size_t j = i;
+  while (j < raw.size() && raw[j] != '"') {
+    if (raw[j] == '\\' && j + 1 < raw.size()) {
+      j += 2;
+    } else {
+      ++j;
+    }
+  }
+  if (j <= i) {
+    return false;
+  }
+  *ver = raw.substr(i, j - i);
+  return !ver->empty();
+}
+
+static void CollectSampleUris(const std::string& raw, int maxN, std::vector<std::string>* out) {
+  if (!out || maxN <= 0) {
+    return;
+  }
+  std::set<std::string> seen;
+  size_t pos = 0;
+  while (static_cast<int>(out->size()) < maxN && pos < raw.size()) {
+    pos = raw.find("\"uri\"", pos);
+    if (pos == std::string::npos) {
+      break;
+    }
+    const size_t colon = raw.find(':', pos);
+    if (colon == std::string::npos) {
+      pos += 5;
+      continue;
+    }
+    size_t i = colon + 1;
+    while (i < raw.size() && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\n' || raw[i] == '\r')) {
+      ++i;
+    }
+    if (i >= raw.size() || raw[i] != '"') {
+      pos = colon + 1;
+      continue;
+    }
+    ++i;
+    size_t j = i;
+    while (j < raw.size() && raw[j] != '"') {
+      if (raw[j] == '\\' && j + 1 < raw.size()) {
+        j += 2;
+      } else {
+        ++j;
+      }
+    }
+    if (j > i) {
+      const std::string uri = raw.substr(i, j - i);
+      if (!uri.empty() && seen.insert(uri).second) {
+        out->push_back(uri);
+      }
+    }
+    pos = j + 1;
+  }
+}
+
+struct ThreeDTilesContentStats {
+  size_t b3dm = 0;
+  size_t i3dm = 0;
+  size_t pnts = 0;
+  size_t cmpt = 0;
+  size_t glb = 0;
+  size_t gltf = 0;
+};
+
+static void ScanThreeDTilesPayloadFiles(const std::filesystem::path& contentRoot, ThreeDTilesContentStats* s) {
+  if (!s) {
+    return;
+  }
+  std::error_code ec;
+  if (!std::filesystem::is_directory(contentRoot, ec)) {
+    return;
+  }
+  size_t scanned = 0;
+  constexpr size_t kMaxScan = 12000;
+  for (std::filesystem::recursive_directory_iterator it(
+           contentRoot, std::filesystem::directory_options::skip_permission_denied, ec);
+       it != std::filesystem::recursive_directory_iterator{} && scanned < kMaxScan; ++it, ++scanned) {
+    if (!it->is_regular_file(ec)) {
+      continue;
+    }
+    const std::wstring ext = it->path().extension().wstring();
+    if (_wcsicmp(ext.c_str(), L".b3dm") == 0) {
+      ++s->b3dm;
+    } else if (_wcsicmp(ext.c_str(), L".i3dm") == 0) {
+      ++s->i3dm;
+    } else if (_wcsicmp(ext.c_str(), L".pnts") == 0) {
+      ++s->pnts;
+    } else if (_wcsicmp(ext.c_str(), L".cmpt") == 0) {
+      ++s->cmpt;
+    } else if (_wcsicmp(ext.c_str(), L".glb") == 0) {
+      ++s->glb;
+    } else if (_wcsicmp(ext.c_str(), L".gltf") == 0) {
+      ++s->gltf;
+    }
+  }
+}
+
+static std::wstring BuildThreeDTilesDashboard(const std::wstring& rootW, const std::wstring& tilesetJsonW,
+                                              const std::wstring& bvHintLines) {
+  std::string raw;
+  if (!ReadWholeFileAscii(tilesetJsonW, &raw)) {
+    std::wstring w = L"【3D Tiles】无法读取 tileset.json。\n路径：\n" + tilesetJsonW;
+    return w;
+  }
+  std::wstring dash = L"【3D Tiles · 元数据预览】\n";
+  dash += L"AGIS 内建说明与目录扫描（不加载 glTF/b3dm 网格）。完整浏览请用 Cesium 或「系统默认打开」。\n";
+  dash += L"对接 C++ 运行时请参考仓库 3rdparty/README-CESIUM-NATIVE.md（cesium-native 源码已在 3rdparty/cesium-native-*）。\n\n";
+  if (!bvHintLines.empty()) {
+    dash += bvHintLines;
+    dash += L"\n\n";
+  }
+  std::string aver;
+  if (TryExtractTilesetAssetVersion(raw, &aver)) {
+    dash += L"asset.version（粗解析）: ";
+    dash += Utf8JsonToWide(aver);
+    dash += L"\n";
+  }
+  double ge = 0;
+  if (TryParseFirstDoubleAfterKey(raw, "\"geometricError\"", &ge)) {
+    dash += L"首个 geometricError（粗解析，多为根节点）: ";
+    dash += std::to_wstring(ge);
+    dash += L"\n";
+  }
+  const auto contentDir = ThreeDTilesContentDirectory(rootW, tilesetJsonW);
+  ThreeDTilesContentStats st{};
+  ScanThreeDTilesPayloadFiles(contentDir, &st);
+  const size_t tileFiles = st.b3dm + st.i3dm + st.pnts + st.cmpt;
+  dash += L"\n内容瓦片文件（子目录扫描≤12000，按扩展名计数）：\n";
+  dash += L"  b3dm=" + std::to_wstring(st.b3dm) + L" i3dm=" + std::to_wstring(st.i3dm) + L" pnts=" +
+          std::to_wstring(st.pnts) + L" cmpt=" + std::to_wstring(st.cmpt) + L"\n";
+  dash += L"  glb=" + std::to_wstring(st.glb) + L" gltf=" + std::to_wstring(st.gltf) + L"\n";
+  if (tileFiles == 0 && st.glb == 0 && st.gltf == 0) {
+    dash += L"（未见常见载荷扩展名：可能仅外链 URL、或路径不在当前目录树下。）\n";
+  }
+  std::vector<std::string> uris;
+  CollectSampleUris(raw, 8, &uris);
+  if (!uris.empty()) {
+    dash += L"\ntileset 内 uri 抽样（至多 8 条，去重）：\n";
+    for (const auto& u : uris) {
+      dash += L"  · ";
+      dash += Utf8JsonToWide(u);
+      dash += L"\n";
+    }
+  }
+  dash += L"\n根目录/内容根：\n  ";
+  dash += contentDir.wstring();
+  dash += L"\n";
+  return dash;
+}
+
+/// 自 tileset.json 粗提取首个 region（弧度）并换算为度 + 粗计 children 出现次数（BVH 层级提示）。
+static std::wstring RoughTilesetBvHintForFile(const std::wstring& tilesetJsonPathW) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(std::filesystem::path(tilesetJsonPathW), ec)) {
+    return {};
+  }
+  std::string raw;
+  if (!ReadWholeFileAscii(tilesetJsonPathW, &raw)) {
+    return L"(tileset.json 无法读取)";
+  }
+  size_t rpos = raw.find("\"region\"");
+  double west = 0, south = 0, east = 0, north = 0, zminM = 0, zmaxM = 0;
+  bool haveReg = false;
+  if (rpos != std::string::npos) {
+    size_t lb = raw.find('[', rpos);
+    if (lb != std::string::npos) {
+      const char* p = raw.c_str() + lb + 1;
+      double vals[6]{};
+      int got = 0;
+      for (; got < 6 && p && *p; ++got) {
+        while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ',')) {
+          ++p;
+        }
+        if (!*p) {
+          break;
+        }
+        char* endp = nullptr;
+        vals[got] = std::strtod(p, &endp);
+        if (endp == p) {
+          break;
+        }
+        p = endp;
+      }
+      if (got >= 4) {
+        constexpr double kRad2Deg = 180.0 / 3.14159265358979323846;
+        west = vals[0] * kRad2Deg;
+        south = vals[1] * kRad2Deg;
+        east = vals[2] * kRad2Deg;
+        north = vals[3] * kRad2Deg;
+        if (got >= 6) {
+          zminM = vals[4];
+          zmaxM = vals[5];
+        }
+        haveReg = true;
+      }
+    }
+  }
+  int childHits = 0;
+  for (size_t i = 0; i + 10 < raw.size(); ++i) {
+    if (raw.compare(i, 10, "\"children\"") == 0) {
+      ++childHits;
+    }
+  }
+  std::wostringstream wo;
+  wo << L"【BVH / 3D Tiles】Cesium 瓦片树为层次包围体；根节点常用 region/box。\n";
+  if (haveReg) {
+    wo << L"根 region→经纬度(°): W=" << west << L" S=" << south << L" E=" << east << L" N=" << north;
+    wo << L" ；高程约(m) zmin=" << zminM << L" zmax=" << zmaxM << L"\n";
+  } else {
+    wo << L"未解析到标准数字 region 数组（可能被压缩或格式非预期）。\n";
+  }
+  wo << L"子树提示: \"children\" 出现 " << childHits
+     << L" 次。\n【八叉树】对 3D box 体积的八分细分常见于嵌套子 tile；本预览不解析子网格、不渲染 glTF/b3dm，完整三维请用 "
+        L"Cesium/系统打开。";
+  return wo.str();
+}
+
+static size_t IndexSlippyQuadtree(const std::wstring& rootW, bool tmsYFilenamesOnDisk,
+                                  std::unordered_map<uint64_t, std::wstring>* paths, int* maxZOut) {
+  paths->clear();
+  if (maxZOut) {
+    *maxZOut = 0;
+  }
+  std::error_code ec;
+  const std::filesystem::path root(rootW);
+  if (!std::filesystem::is_directory(root, ec)) {
+    return 0;
+  }
+  size_t scanned = 0;
+  constexpr size_t kMaxScan = 12000;
+  int localMaxZ = 0;
+  for (std::filesystem::recursive_directory_iterator it(
+           root, std::filesystem::directory_options::skip_permission_denied, ec);
+       it != std::filesystem::recursive_directory_iterator{} && scanned < kMaxScan; ++it, ++scanned) {
+    if (!it->is_regular_file(ec)) {
+      continue;
+    }
+    const std::wstring ext = it->path().extension().wstring();
+    if (!IsRasterTileExtension(ext)) {
+      continue;
+    }
+    std::filesystem::path rel = std::filesystem::relative(it->path(), root, ec);
+    if (ec || rel.empty()) {
+      continue;
+    }
+    std::vector<std::wstring> comp;
+    for (auto& part : rel) {
+      comp.push_back(part.wstring());
+    }
+    if (comp.size() < 3) {
+      continue;
+    }
+    int z = 0, x = 0, yDisk = 0;
+    if (!TryParseNonNegIntW(comp[comp.size() - 3], &z) || !TryParseNonNegIntW(comp[comp.size() - 2], &x)) {
+      continue;
+    }
+    const std::wstring& fname = comp.back();
+    const size_t dot = fname.find_last_of(L'.');
+    const std::wstring ystem = dot == std::wstring::npos ? fname : fname.substr(0, dot);
+    if (!TryParseNonNegIntW(ystem, &yDisk)) {
+      continue;
+    }
+    if (z > 29) {
+      continue;
+    }
+    const int dim = 1 << z;
+    if (x >= dim || yDisk >= dim) {
+      continue;
+    }
+    const int yKey = tmsYFilenamesOnDisk ? (dim - 1 - yDisk) : yDisk;
+    (*paths)[PackTileKey(z, x, yKey)] = it->path().wstring();
+    localMaxZ = (std::max)(localMaxZ, z);
+  }
+  if (maxZOut) {
+    *maxZOut = localMaxZ;
+  }
+  return paths->size();
+}
+
+struct TilePreviewState {
+  enum class Mode { kSingleRaster, kSlippyQuadtree, kThreeDTilesMeta };
+  std::wstring rootPath;
+  std::wstring samplePath;
+  std::wstring hint;
+  std::wstring bvHint;
+  std::unique_ptr<Gdiplus::Bitmap> bmp;
+  Mode mode = Mode::kSingleRaster;
+  std::unordered_map<uint64_t, std::wstring> slippyPaths;
+  std::unordered_map<uint64_t, std::unique_ptr<Gdiplus::Bitmap>> texCache;
+  int indexMaxZ = 0;
+  size_t tileCount = 0;
+  int viewZ = 0;
+  double centerTx = 0.5;
+  double centerTy = 0.5;
+  float pixelsPerTile = 128.f;
+  bool dragging = false;
+  POINT lastDragPt{};
+};
+
+static std::wstring g_pendingTilePreviewRoot;
+
+static Gdiplus::Bitmap* TileCacheLookup(TilePreviewState* st, uint64_t key, const std::wstring& tilePath) {
+  if (!st) {
+    return nullptr;
+  }
+  auto it = st->texCache.find(key);
+  if (it != st->texCache.end() && it->second && it->second->GetLastStatus() == Gdiplus::Ok) {
+    return it->second.get();
+  }
+  auto loaded = std::make_unique<Gdiplus::Bitmap>(tilePath.c_str());
+  if (!loaded || loaded->GetLastStatus() != Gdiplus::Ok) {
+    return nullptr;
+  }
+  Gdiplus::Bitmap* raw = loaded.get();
+  st->texCache[key] = std::move(loaded);
+  while (st->texCache.size() > 72) {
+    st->texCache.erase(st->texCache.begin());
+  }
+  return raw;
+}
+
+static void TileAdjustViewZ(TilePreviewState* st, int delta) {
+  if (!st || st->indexMaxZ < 0) {
+    return;
+  }
+  int nz = st->viewZ + delta;
+  nz = (std::clamp)(nz, 0, (std::max)(0, st->indexMaxZ));
+  if (nz == st->viewZ) {
+    return;
+  }
+  const double inv = 1.0 / (std::max)(1.0, double(1u << st->viewZ));
+  double u = st->centerTx * inv;
+  double v = st->centerTy * inv;
+  u = (std::clamp)(u, 0.0, 1.0);
+  v = (std::clamp)(v, 0.0, 1.0);
+  st->viewZ = nz;
+  const double scale = double(1u << nz);
+  st->centerTx = u * scale;
+  st->centerTy = v * scale;
+}
+
+static void TilePaintSlippy(HDC hdc, RECT cr, TilePreviewState* st) {
+  if (!st || st->slippyPaths.empty()) {
+    return;
+  }
+  constexpr int kTopBar = 100;
+  const int margin = 10;
+  RECT imgArea{cr.left + margin, cr.top + kTopBar, cr.right - margin, cr.bottom - margin};
+  const int aw = (std::max)(1, static_cast<int>(imgArea.right - imgArea.left));
+  const int ah = (std::max)(1, static_cast<int>(imgArea.bottom - imgArea.top));
+  const double worldW = static_cast<double>(aw) / static_cast<double>(st->pixelsPerTile);
+  const double worldH = static_cast<double>(ah) / static_cast<double>(st->pixelsPerTile);
+  const double worldLeft = st->centerTx - worldW * 0.5;
+  const double worldTop = st->centerTy - worldH * 0.5;
+  const int dim = 1 << st->viewZ;
+  int tx0 = static_cast<int>(std::floor(worldLeft));
+  int ty0 = static_cast<int>(std::floor(worldTop));
+  int tx1 = static_cast<int>(std::ceil(worldLeft + worldW));
+  int ty1 = static_cast<int>(std::ceil(worldTop + worldH));
+  tx0 = (std::max)(0, tx0);
+  ty0 = (std::max)(0, ty0);
+  tx1 = (std::min)(dim - 1, tx1);
+  ty1 = (std::min)(dim - 1, ty1);
+  const int spanX = tx1 - tx0 + 1;
+  const int spanY = ty1 - ty0 + 1;
+  bool tooMany = spanX * spanY > 220;
+
+  {
+    Gdiplus::Graphics g(hdc);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeLowQuality);
+    Gdiplus::SolidBrush miss(Gdiplus::Color(255, 238, 240, 245));
+    if (!tooMany) {
+      for (int ty = ty0; ty <= ty1; ++ty) {
+        for (int tx = tx0; tx <= tx1; ++tx) {
+          const uint64_t key = PackTileKey(st->viewZ, tx, ty);
+          auto pit = st->slippyPaths.find(key);
+          const int sx =
+              imgArea.left + static_cast<int>(std::lround((static_cast<double>(tx) - worldLeft) * st->pixelsPerTile));
+          const int sy =
+              imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - worldTop) * st->pixelsPerTile));
+          const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
+          if (pit == st->slippyPaths.end()) {
+            g.FillRectangle(&miss, sx, sy, sw, sw);
+            continue;
+          }
+          Gdiplus::Bitmap* bm = TileCacheLookup(st, key, pit->second);
+          if (bm) {
+            g.DrawImage(bm, sx, sy, sw, sw);
+          } else {
+            g.FillRectangle(&miss, sx, sy, sw, sw);
+          }
+        }
+      }
+    }
+  }
+  if (HFONT f = UiGetAppFont()) {
+    SelectObject(hdc, f);
+  }
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, RGB(90, 60, 30));
+  wchar_t status[320]{};
+  if (tooMany) {
+    swprintf_s(status, L"可视块过多(%d×%d)；请滚轮缩小或 Shift+滚轮 降低 Z。", spanX, spanY);
+  } else {
+    swprintf_s(status, L"Z=%d 四叉树格网 可视 [%d..%d]×[%d..%d] 已索引 %zu 块 | 拖拽 | 滚轮缩放 | Shift+滚轮 换级",
+               st->viewZ, tx0, tx1, ty0, ty1, st->tileCount);
+  }
+  RECT sr{imgArea.left, imgArea.top - 26, imgArea.right, imgArea.top - 4};
+  DrawTextW(hdc, status, -1, &sr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  switch (msg) {
+    case WM_ERASEBKGND:
+      return 1;
+    case WM_CREATE: {
+      auto* st = new TilePreviewState();
+      st->rootPath = g_pendingTilePreviewRoot;
+      g_pendingTilePreviewRoot.clear();
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
+      std::error_code ecPath;
+      const std::filesystem::path rootFs(st->rootPath);
+#if GIS_DESKTOP_HAVE_GDAL
+      if (std::filesystem::is_regular_file(rootFs, ecPath)) {
+        const std::wstring ext = rootFs.extension().wstring();
+        if (_wcsicmp(ext.c_str(), L".mbtiles") == 0 || _wcsicmp(ext.c_str(), L".gpkg") == 0) {
+          std::wstring gdalDiag;
+          if (auto bm = TryLoadGdalRasterTileContainerPreview(st->rootPath, &gdalDiag)) {
+            st->bmp = std::move(bm);
+            st->mode = TilePreviewState::Mode::kSingleRaster;
+            std::wostringstream hs;
+            hs << L"【MBTiles / GeoPackage】GDAL 栅格缩略预览（全球拼图下采样至 ≤2048px，非 z/x/y 交互瓦片）。\n路径：\n"
+               << st->rootPath << L"\n\n纯矢量 GPKG 或无栅格层时会打开失败。";
+            if (!gdalDiag.empty()) {
+              hs << L"\n" << gdalDiag;
+            }
+            st->hint = hs.str();
+            return 0;
+          }
+          st->hint = L"【MBTiles / GeoPackage】GDAL 预览失败：\n" + gdalDiag +
+                     L"\n\n请检查：构建已启用 GDAL、MBTiles/GPKG 驱动、PROJ 与 gdal_data；或「系统默认打开」/ 导出 XYZ 目录再预览。";
+          return 0;
+        }
+      }
+#endif
+      const std::optional<std::wstring> tilesetPathOpt = FindTilesetJsonPath(st->rootPath);
+      std::wstring bvForTileset;
+      if (tilesetPathOpt.has_value()) {
+        bvForTileset = RoughTilesetBvHintForFile(*tilesetPathOpt);
+      }
+      st->bvHint = bvForTileset;
+      bool tmsFlip = false;
+      if (std::filesystem::is_directory(rootFs, ecPath)) {
+        tmsFlip = DetectTmsTileLayoutOnDisk(rootFs);
+      }
+      st->tileCount = IndexSlippyQuadtree(st->rootPath, tmsFlip, &st->slippyPaths, &st->indexMaxZ);
+      if (st->tileCount >= 1) {
+        st->mode = TilePreviewState::Mode::kSlippyQuadtree;
+        st->viewZ = (std::min)(st->indexMaxZ, 6);
+        if (st->viewZ < st->indexMaxZ && st->tileCount < 4) {
+          st->viewZ = st->indexMaxZ;
+        }
+        const double sz = double(1u << st->viewZ);
+        st->centerTx = sz * 0.5;
+        st->centerTy = sz * 0.5;
+        std::wostringstream hs;
+        hs << L"【平面四叉树 / XYZ 显示】已索引 " << st->tileCount << L" 个 z/x/y 图块（最多扫描 12000 文件）。\n";
+        if (tmsFlip) {
+          hs << L"已识别 TMS（存在 tms.xml 或 README 中 protocol=tms）：磁盘行号文件已按 XYZ（北在上）映射。\n";
+        } else {
+          hs << L"坐标系：与常见 XYZ 目录一致（行号 y 向南递增）。若仍颠倒，可能是非标准导出，可对照外部地图。\n";
+        }
+        if (!st->bvHint.empty()) {
+          hs << st->bvHint << L"\n";
+        }
+        st->hint = hs.str();
+      } else if (tilesetPathOpt.has_value()) {
+        st->mode = TilePreviewState::Mode::kThreeDTilesMeta;
+        st->hint = BuildThreeDTilesDashboard(st->rootPath, *tilesetPathOpt, bvForTileset);
+      } else {
+        const TileFindResult found = FindSampleTileRaster(st->rootPath);
+        if (found.code == TileSampleResult::kContainerUnsupported) {
+          st->hint = L"单文件 MBTiles / GeoPackage 无法用此窗口直接解码栅格图块。\n请使用「系统默认打开」，或先导出为含 "
+                     L"PNG/JPG 的 XYZ/TMS 目录后再预览。";
+        } else if (found.code == TileSampleResult::kOk && !found.path.empty()) {
+          st->samplePath = found.path;
+          auto loaded = std::make_unique<Gdiplus::Bitmap>(st->samplePath.c_str());
+          if (loaded && loaded->GetLastStatus() == Gdiplus::Ok) {
+            st->bmp = std::move(loaded);
+            std::wostringstream hs;
+            hs << L"单图采样（目录未识别 z/x/y 四叉结构）：\n" << st->samplePath;
+            if (!st->bvHint.empty()) {
+              hs << L"\n\n" << st->bvHint;
+            }
+            st->hint = hs.str();
+          } else {
+            st->hint = L"无法加载栅格文件：\n" + st->samplePath;
+          }
+        } else {
+          std::wostringstream hs;
+          hs << L"未在目录内找到 PNG/JPG 栅格（或未识别 z/x/y 路径）。\n";
+          if (!st->bvHint.empty()) {
+            hs << L"\n" << st->bvHint;
+          } else {
+            hs << L"\n3DTiles 请用 Cesium 或「系统默认打开」。";
+          }
+          st->hint = hs.str();
+        }
+      }
+      return 0;
+    }
+    case WM_LBUTTONDOWN: {
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+          st->dragging = true;
+          st->lastDragPt.x = GET_X_LPARAM(lParam);
+          st->lastDragPt.y = GET_Y_LPARAM(lParam);
+          SetCapture(hwnd);
+        }
+      }
+      return 0;
+    }
+    case WM_LBUTTONUP: {
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        if (st->dragging) {
+          st->dragging = false;
+          ReleaseCapture();
+          InvalidateRect(hwnd, nullptr, FALSE);
+        }
+      }
+      return 0;
+    }
+    case WM_MOUSEMOVE: {
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        if (st->mode == TilePreviewState::Mode::kSlippyQuadtree && st->dragging) {
+          const int x = GET_X_LPARAM(lParam);
+          const int y = GET_Y_LPARAM(lParam);
+          const double dx = static_cast<double>(x - st->lastDragPt.x);
+          const double dy = static_cast<double>(y - st->lastDragPt.y);
+          st->centerTx -= dx / static_cast<double>(st->pixelsPerTile);
+          st->centerTy -= dy / static_cast<double>(st->pixelsPerTile);
+          st->lastDragPt.x = x;
+          st->lastDragPt.y = y;
+          const double lim = double(1 << st->viewZ) + 2.0;
+          st->centerTx = (std::clamp)(st->centerTx, -1.0, lim);
+          st->centerTy = (std::clamp)(st->centerTy, -1.0, lim);
+          InvalidateRect(hwnd, nullptr, FALSE);
+        }
+      }
+      return 0;
+    }
+    case WM_MOUSEWHEEL: {
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+          const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+          const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+          if (shift) {
+            TileAdjustViewZ(st, delta > 0 ? 1 : -1);
+          } else {
+            const float factor = delta > 0 ? 1.12f : 0.88f;
+            st->pixelsPerTile = (std::clamp)(st->pixelsPerTile * factor, 40.f, 560.f);
+          }
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
+      }
+      break;
+    }
+    case WM_PAINT: {
+      PAINTSTRUCT ps{};
+      HDC hdcWnd = BeginPaint(hwnd, &ps);
+      RECT cr{};
+      GetClientRect(hwnd, &cr);
+      const int cw = (std::max)(1, static_cast<int>(cr.right - cr.left));
+      const int ch = (std::max)(1, static_cast<int>(cr.bottom - cr.top));
+      HDC hdc = CreateCompatibleDC(hdcWnd);
+      HBITMAP memBmp = CreateCompatibleBitmap(hdcWnd, cw, ch);
+      HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(hdc, memBmp));
+      HBRUSH bg = CreateSolidBrush(RGB(252, 252, 252));
+      FillRect(hdc, &cr, bg);
+      DeleteObject(bg);
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        RECT textRc = cr;
+        textRc.left += 12;
+        textRc.right -= 12;
+        textRc.top += 10;
+        const int hintH = (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) ? 240 : 100;
+        textRc.bottom = textRc.top + hintH;
+        if (HFONT f = UiGetAppFont()) {
+          SelectObject(hdc, f);
+        }
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(32, 42, 64));
+        DrawTextW(hdc, st->hint.c_str(), -1, &textRc, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+        if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+          TilePaintSlippy(hdc, cr, st);
+        } else if (st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok) {
+          const int margin = 12;
+          RECT imgArea{cr.left + margin, cr.top + 110, cr.right - margin, cr.bottom - margin};
+          const int aw = (std::max)(1, static_cast<int>(imgArea.right - imgArea.left));
+          const int ah = (std::max)(1, static_cast<int>(imgArea.bottom - imgArea.top));
+          const int iw = st->bmp->GetWidth();
+          const int ih = st->bmp->GetHeight();
+          if (iw > 0 && ih > 0) {
+            Gdiplus::Graphics g(hdc);
+            const float scale = (std::min)(static_cast<float>(aw) / static_cast<float>(iw),
+                                           static_cast<float>(ah) / static_cast<float>(ih));
+            const int dw = static_cast<int>(static_cast<float>(iw) * scale);
+            const int dh = static_cast<int>(static_cast<float>(ih) * scale);
+            const int dx = imgArea.left + (aw - dw) / 2;
+            const int dy = imgArea.top + (ah - dh) / 2;
+            g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            g.DrawImage(st->bmp.get(), dx, dy, dw, dh);
+          }
+        }
+      }
+      BitBlt(hdcWnd, 0, 0, cw, ch, hdc, 0, 0, SRCCOPY);
+      SelectObject(hdc, oldBmp);
+      DeleteObject(memBmp);
+      DeleteDC(hdc);
+      EndPaint(hwnd, &ps);
+      return 0;
+    }
+    case WM_CLOSE:
+      DestroyWindow(hwnd);
+      return 0;
+    case WM_DESTROY:
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        delete st;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+      }
+      return 0;
+    default:
+      break;
+  }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path) {
+  g_pendingTilePreviewRoot = path;
+  CreateWindowExW(WS_EX_TOOLWINDOW, kTilePreviewClass, L"瓦片预览 · 四叉树 / BVH 元数据",
+                  WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner, nullptr,
+                  GetModuleHandleW(nullptr), nullptr);
+}
+

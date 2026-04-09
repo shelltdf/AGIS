@@ -13,18 +13,22 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
   return false;
 }
 void PrintHelp() {
-  if (IsChineseOsUi()) {
+  const bool zh = IsChineseOsUi();
+  if (zh) {
     std::wcout << L"用法:\n"
                << L"  agis_convert_model_to_model --input <path> --output <path> [options]\n\n"
                << L"必填参数:\n"
                << L"  --input <path>               输入模型路径（OBJ/LAS）\n"
                << L"  --output <path>              输出模型路径（OBJ/LAS）\n\n"
-               << L"可选参数:\n"
-               << L"  --help, -h, /?               显示帮助\n"
-               << L"  --input-type <text>          输入主类型（默认自动）\n"
-               << L"  --input-subtype <text>       输入子类型（示例: 3dmesh/pointcloud）\n"
-               << L"  --output-type <text>         输出主类型（默认自动）\n"
-               << L"  --output-subtype <text>      输出子类型（示例: pointcloud/3dmesh）\n"
+               << L"通用选项:\n"
+               << L"  --help, -h, /?               显示帮助\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, true,
+        L"  模型→模型；主类型一般为 model。\n",
+        L"  tin | dem | 3dmesh | pointcloud（常用：3dmesh ↔ pointcloud）。\n",
+        L"  仍为模型输出；主类型一般为 model。\n",
+        L"  tin | dem | 3dmesh | pointcloud（与输入子类型组合对应 UI）。\n");
+    std::wcout << L"【其它选项】\n"
                << L"  --coord-system <v>           projected | cecf（默认 projected）\n"
                << L"  --vector-mode <v>            geometry | bake_texture（默认 geometry）\n"
                << L"  --elev-horiz-ratio <num>     高程/水平比，>0（默认 1）\n"
@@ -32,7 +36,7 @@ void PrintHelp() {
                << L"  --output-unit <v>            m | km | 1000km（默认 m）\n"
                << L"  --mesh-spacing <int>         网格步长 1..1000000（默认 1）\n"
                << L"  --texture-format <v>         png | tif | tga | bmp（默认 png）\n"
-               << L"  --raster-max-dim <int>       栅格最大边 64..16384（默认 4096）\n\n"
+               << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n\n"
                << L"示例:\n"
                << L"  agis_convert_model_to_model --input in.obj --output out.las --input-subtype 3dmesh --output-subtype pointcloud\n";
   } else {
@@ -41,12 +45,15 @@ void PrintHelp() {
                << L"Required:\n"
                << L"  --input <path>               Input model path (OBJ/LAS)\n"
                << L"  --output <path>              Output model path (OBJ/LAS)\n\n"
-               << L"Options:\n"
-               << L"  --help, -h, /?               Show help\n"
-               << L"  --input-type <text>          Input major type (auto by default)\n"
-               << L"  --input-subtype <text>       Input subtype (e.g. 3dmesh/pointcloud)\n"
-               << L"  --output-type <text>         Output major type (auto by default)\n"
-               << L"  --output-subtype <text>      Output subtype (e.g. pointcloud/3dmesh)\n"
+               << L"General:\n"
+               << L"  --help, -h, /?               Show help\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, false,
+        L"  Model → model; major type is usually model.\n",
+        L"  tin | dem | 3dmesh | pointcloud (common: 3dmesh ↔ pointcloud).\n",
+        L"  Model output; major type is usually model.\n",
+        L"  tin | dem | 3dmesh | pointcloud (pair with input subtype per UI).\n");
+    std::wcout << L"Other options:\n"
                << L"  --coord-system <v>           projected | cecf (default: projected)\n"
                << L"  --vector-mode <v>            geometry | bake_texture (default: geometry)\n"
                << L"  --elev-horiz-ratio <num>     Elevation/horizontal ratio, >0 (default: 1)\n"
@@ -54,7 +61,7 @@ void PrintHelp() {
                << L"  --output-unit <v>            m | km | 1000km (default: m)\n"
                << L"  --mesh-spacing <int>         1..1000000 (default: 1)\n"
                << L"  --texture-format <v>         png | tif | tga | bmp (default: png)\n"
-               << L"  --raster-max-dim <int>       64..16384 (default: 4096)\n\n"
+               << L"  --raster-max-dim <int>       0=native (default); 64..16384=cap\n\n"
                << L"Example:\n"
                << L"  agis_convert_model_to_model --input in.obj --output out.las --input-subtype 3dmesh --output-subtype pointcloud\n";
   }

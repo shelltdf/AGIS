@@ -61,6 +61,11 @@ if(SQLite3_INCLUDE_DIR AND SQLite3_LIBRARY AND EXISTS "${SQLite3_LIBRARY}")
     set(ACCEPT_MISSING_SQLITE3_RTREE ON CACHE BOOL "AGIS: bundled sqlite RTREE check" FORCE)
   endif()
   message(STATUS "AGIS: GDAL_USE_SQLITE3 + OGR SQLite/OSM drivers forced ON (SQLite3 library present)")
+  # MBTiles raster driver (frmts/mbtiles) is gdal_dependent_format on SQLite3 + OGR GPKG + OGR MVT.
+  # Without explicit ON, first configure (no .lib yet) or stale CACHE can leave these OFF → GDALGetDriverByName("MBTiles") == nullptr at runtime.
+  set(OGR_ENABLE_DRIVER_GPKG ON CACHE BOOL "OGR GeoPackage (required for MBTiles driver, AGIS)" FORCE)
+  set(OGR_ENABLE_DRIVER_MVT ON CACHE BOOL "OGR MVT (required for MBTiles driver, AGIS)" FORCE)
+  set(GDAL_ENABLE_DRIVER_MBTILES ON CACHE BOOL "MBTiles raster container (AGIS GIS→Tile)" FORCE)
 endif()
 
 set(BUILD_PYTHON_BINDINGS OFF CACHE BOOL "GDAL: skip Python bindings" FORCE)

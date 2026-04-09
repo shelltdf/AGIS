@@ -14,7 +14,10 @@
 
 - 前置：**CMake 3.20+**、**C++17 编译器**（Visual Studio 2022 或 Clang/LLVM on Windows、或 MinGW）。  
 - **GDAL（`CMakeLists.txt` 与 `build.py` 均默认 `AGIS_USE_GDAL=ON`；未设置环境变量时脚本始终传入开启）**  
-  - CMake 优先 **`find_package(PROJ/GDAL)`**（如 **`3rdparty/proj-install`**、**`3rdparty/gdal-install`**）；否则对 **`3rdparty/proj-9.8.0`**、**`3rdparty/gdal-3.12.3`** 做 **`add_subdirectory`** 捆绑编译，见 **`3rdparty/README-GDAL-BUILD.md`**（含 SQLite3 / `sqlite3.exe` 前提）。  
+  - CMake 优先 **`find_package(PROJ/GDAL)`**（如 **`3rdparty/proj-install`**、**`3rdparty/gdal-install`**）；否则对 **`3rdparty/proj-9.8.0`**、**`3rdparty/gdal-3.12.3`** 做 **`add_subdirectory`** 捆绑编译，见 **`3rdparty/README-GDAL-BUILD.md`**（含 SQLite3 / `sqlite3.exe` 前提）。捆绑路径下 **`cmake/AGISBundledGDAL.cmake`** 在检测到 **`agis_sqlite3`** 时会强制 **`GDAL_ENABLE_DRIVER_MBTILES`** 及 OGR **GPKG/MVT**（MBTiles 驱动的 CMake 依赖链）；若曾无 SQLite 配置过 GDAL，需重新 **CMake 配置** 并 **整库重编 GDAL** 后，`agis_convert_*` 中 **`GDALGetDriverByName("MBTiles")`** 才可用。  
+  - **`GDAL_DATA`**：捆绑构建会将 **`gcore/data`**（含 **`tms_NZTM2000.json`** 等）阶段到 **`build/gdal_data`**，并在 **`POST_BUILD`** 复制到 **`AGIS.exe` / 各 `agis_convert_*.exe` 同级的 **`gdal_data/`**；`AgisEnsureGdalDataPath`（`agis_gdal_runtime_env.cpp`）在 **`GDALAllRegister` 之前** 自 exe 目录向上探测并 **`CPLSetConfigOption("GDAL_DATA", …)`**，避免出现 “**GDAL_DATA is not defined**” 类告警。若单独拷贝转换工具到其它机器，请连同 **`gdal_data`** 一并发布，或在外部设置 **`GDAL_DATA`** 环境变量。
+  - **LAZ 与 LASzip**：**推荐**将 LASzip **Release 源码包**解压到 **`3rdparty/LASzip`**（**勿用 git clone**；步骤见 **`3rdparty/README-LASZIP.md`**）。CMake 检测到后将 **静态链接** LASzip，`*.laz` 预览 **优先走 LASzip C API**。**回退**：若未放置源码或打开失败，且 **`AGIS_USE_GDAL=ON`**，则仍尝试 **`GDALOpenEx`** 矢量读 LAZ（此时依赖 GDAL 侧 LASzip/LAS 配置，失败见 CPL 提示）。两者皆不可用时预览会提示最小依赖说明。  
+  - **3D Tiles 三维预览（无 vcpkg）**：主程序使用 **`3rdparty/tinygltf`** + **`3rdparty/nlohmann/json.hpp`**，在 **`gis-desktop-win32/src/app/tiles_gltf_loader.cpp`** 解析 **本地** **`b3dm`/`i3dm`/`glb`/`cmpt`/`pnts`** 与 glTF。**Draco**：**勿 `git clone`**；按 **`3rdparty/README-DRACO.md`** 下载 **Release 归档**（推荐 **1.5.7** zip）解压并重命名为 **`3rdparty/draco`**；**`cmake/AGISBundledDraco.cmake`** 静态链入并定义 **`TINYGLTF_ENABLE_DRACO`** 以支持 **`KHR_draco_mesh_compression`**。**CMake** 须将 **`../3rdparty` 与 `../3rdparty/tinygltf` 置于 bgfx `examples/common` 之后**，否则会错误包含 **`3rdparty/imgui`** 导致 `imguiCreate` 未定义。可选 **Cesium cesium-native**（强依赖 vcpkg）仅供对照，见 **`3rdparty/README-CESIUM-NATIVE.md`**。
   - 显式 **`AGIS_USE_GDAL=off`** 可编无 GIS 壳程序；脚本会合并已有 `proj-install` / `gdal-install` 到 **`CMAKE_PREFIX_PATH`**。  
 - 无 GDAL 或暂不想链接时：
 
@@ -68,12 +71,13 @@ python publish.py
 ## 7. 数据转换后端维护
 
 - 转换公共逻辑：`gis-desktop-win32/src/tools/convert_backend_common.cpp/.h`。  
-- 六个后端入口：`gis-desktop-win32/src/tools/agis_convert_*.cpp`，分别对应 6 条互转路径。  
+- 七个后端入口：`gis-desktop-win32/src/tools/agis_convert_*.cpp`，覆盖 GIS/模型/瓦片的 7 条转换路径（含 模型↔模型）。  
 - 主程序调度：`gis-desktop-win32/src/app/main.cpp` 中根据输入/输出大类映射到具体 EXE，并构建命令行参数。  
 - `CMakeLists.txt` 中：
   - `agis_convert_backend_common` 为静态库；
-  - 6 个后端可执行通过 `add_executable` 构建；
+  - 7 个后端可执行通过 `add_executable` 构建；
   - `agis_desktop` 依赖这些后端，且在构建后复制到主程序输出目录。
+- `agis_convert_tile_to_model` 支持 `--tile-max-memory-mb`（64..131072，默认 512）控制瓦片合并内存上限，超限自动拆分多个 OBJ。
 
 ## 8. 模型预览维护
 

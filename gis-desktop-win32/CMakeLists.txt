@@ -119,6 +119,14 @@ if(AGIS_USE_GDAL)
   endif()
 endif()
 
+# --- LASzip（源码包解压到 ../3rdparty/LASzip，用于 LAZ 预览解压；非 git clone）---
+set(AGIS_HAVE_LASZIP FALSE)
+include(cmake/AGISBundledLASzip.cmake)
+
+# --- Draco（../3rdparty/draco，3D Tiles / glTF KHR_draco_mesh_compression；须先于 agis_desktop link）---
+set(AGIS_HAVE_DRACO FALSE)
+include(cmake/AGISBundledDraco.cmake)
+
 # --- ui_engine: 独立库（静态 / 动态由 AGIS_UI_ENGINE_SHARED 切换）---
 set(_agis_ui_engine_sources
   ${AGIS_UI_ENGINE_DIR}/src/app.cpp
@@ -259,6 +267,7 @@ add_executable(agis_desktop WIN32
   src/app/main_panels.cpp
   src/app/main_convert.cpp
   src/app/main_model_preview.cpp
+  src/app/tiles_gltf_loader.cpp
   src/app/ui_font.cpp
   src/app/ui_theme.cpp
   src/app/help_data_drivers.cpp
@@ -272,7 +281,11 @@ add_executable(agis_desktop WIN32
   src/core/app_log.cpp
 )
 
-target_include_directories(agis_desktop PRIVATE ${CMAKE_SOURCE_DIR}/src ${AGIS_UI_ENGINE_DIR}/include)
+set(AGIS_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/../3rdparty")
+target_include_directories(agis_desktop PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${AGIS_UI_ENGINE_DIR}/include
+)
 
 set_target_properties(agis_desktop PROPERTIES
   OUTPUT_NAME "AGIS"
@@ -311,15 +324,35 @@ target_include_directories(agis_desktop PRIVATE
   ${AGIS_BGFX_DIR}/examples/common
   ${AGIS_BGFX_DIR}/examples/common/imgui
   ${AGIS_BGFX_DIR}/examples/common/debugdraw
+  # 须置于 bgfx「examples/common」之后，否则会优先命中仓库根 3rdparty/imgui（无 imguiCreate 封装）
+  ${AGIS_THIRDPARTY_ROOT}
+  ${AGIS_THIRDPARTY_ROOT}/tinygltf
 )
+if(AGIS_HAVE_DRACO)
+  target_compile_definitions(agis_desktop PRIVATE TINYGLTF_ENABLE_DRACO=1)
+  target_link_libraries(agis_desktop PRIVATE draco::draco)
+  # Draco 源码 `#include "draco/..."`：`src/` + 配置时生成的 `build/draco/draco_features.h`（Draco 用顶层 CMAKE_BINARY_DIR）
+  target_include_directories(agis_desktop PRIVATE
+    "${AGIS_THIRDPARTY_ROOT}/draco/src"
+    "${CMAKE_BINARY_DIR}")
+endif()
 # bx/bgfx 头文件要求 C++20（与 agis_bgfx_vendor 一致）
 target_compile_features(agis_desktop PRIVATE cxx_std_20)
 
 if(AGIS_USE_GDAL AND GDAL_FOUND)
   target_link_libraries(agis_desktop PRIVATE GDAL::GDAL)
+  target_sources(agis_desktop PRIVATE src/app/agis_gdal_runtime_env.cpp)
   if(TARGET PROJ::proj)
     target_link_libraries(agis_desktop PRIVATE PROJ::proj)
   endif()
+endif()
+
+if(AGIS_HAVE_LASZIP)
+  target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_LASZIP=1)
+  target_include_directories(agis_desktop PRIVATE
+    "${AGIS_LASZIP_ROOT}/dll"
+    "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
+  target_link_libraries(agis_desktop PRIVATE "${AGIS_LASZIP_TARGET}")
 endif()
 
 if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
@@ -402,6 +435,7 @@ endif()
 # 7 个数据转换后端命令行工具（3 类型互转 6 过程 + 模型↔模型 1 过程）
 add_library(agis_convert_backend_common STATIC
   src/tools/convert_backend_common.cpp
+  src/app/agis_gdal_runtime_env.cpp
 )
 target_include_directories(agis_convert_backend_common PRIVATE ${CMAKE_SOURCE_DIR}/src)
 if(AGIS_USE_GDAL AND GDAL_FOUND)
@@ -432,6 +466,28 @@ foreach(_tool IN LISTS _agis_convert_tools)
     target_compile_options(${_tool} PRIVATE /utf-8)
   endif()
 endforeach()
+
+# 捆绑 GDAL 运行时所需 gcore/data（如 tms_*.json）；复制到 build/gdal_data，并由 AgisEnsureGdalDataPath 探测。
+set(_AGIS_GDAL_GCORE_DATA "${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/gdal-3.12.3/gcore/data")
+if(AGIS_USE_GDAL AND GDAL_FOUND AND EXISTS "${_AGIS_GDAL_GCORE_DATA}/tms_NZTM2000.json")
+  set(AGIS_GDAL_DATA_STAGE "${CMAKE_BINARY_DIR}/gdal_data")
+  add_custom_target(agis_gdal_runtime_data ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${AGIS_GDAL_DATA_STAGE}"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_AGIS_GDAL_GCORE_DATA}" "${AGIS_GDAL_DATA_STAGE}"
+    COMMENT "Stage GDAL_DATA (gcore/data) for AGIS")
+  add_dependencies(agis_desktop agis_gdal_runtime_data)
+  # 仅挂在 agis_desktop 上复制一份：各转换工具与主程序默认在同一 $(OutDir)/Configuration 目录下，
+  # 若对每个 exe 各自 POST_BUILD copy_directory，并行编译时会多进程同时写同一 gdal_data，易触发 MSB3073。
+  add_custom_command(
+    TARGET agis_desktop
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${AGIS_GDAL_DATA_STAGE}"
+            "$<TARGET_FILE_DIR:agis_desktop>/gdal_data"
+    COMMENT "Copy GDAL_DATA next to AGIS (shared by convert tools in same output dir)")
+  foreach(_t IN LISTS _agis_convert_tools)
+    add_dependencies(${_t} agis_gdal_runtime_data)
+  endforeach()
+endif()
 
 add_dependencies(agis_desktop ${_agis_convert_tools})
 if(WIN32)

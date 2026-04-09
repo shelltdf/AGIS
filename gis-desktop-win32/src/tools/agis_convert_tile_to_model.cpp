@@ -13,18 +13,24 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
   return false;
 }
 void PrintHelp() {
-  if (IsChineseOsUi()) {
+  const bool zh = IsChineseOsUi();
+  if (zh) {
     std::wcout << L"用法:\n"
-               << L"  agis_convert_tile_to_model --input <path|dir> --output <path> [options]\n\n"
+               << L"  agis_convert_tile_to_model --input <dir|file> --output <path> [options]\n\n"
+               << L"  --input：目录或单文件规则同 tile_to_gis。\n\n"
                << L"必填参数:\n"
-               << L"  --input <path|dir>           输入瓦片路径或目录\n"
-               << L"  --output <path>              输出模型路径\n\n"
-               << L"可选参数:\n"
-               << L"  --help, -h, /?               显示帮助\n"
-               << L"  --input-type <text>          输入主类型\n"
-               << L"  --input-subtype <text>       输入子类型\n"
-               << L"  --output-type <text>         输出主类型\n"
-               << L"  --output-subtype <text>      输出子类型\n"
+               << L"  --input <dir|file>           瓦片目录或容器文件\n"
+               << L"  --output <path>              输出模型路径（OBJ 等）\n\n"
+               << L"通用选项:\n"
+               << L"  --help, -h, /?               显示帮助\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, true,
+        L"  瓦片→模型；主类型一般为 tile。\n",
+        L"  xyz | tms | wmts | mbtiles | gpkg | 3dtiles（默认 xyz）。\n"
+        L"  目录型子类型选文件夹；mbtiles/gpkg 选文件。\n",
+        L"  输出模型；主类型一般为 model。\n",
+        L"  tin | dem | 3dmesh | pointcloud（默认 tin）。\n");
+    std::wcout << L"【其它选项】\n"
                << L"  --coord-system <v>           projected | cecf（默认 projected）\n"
                << L"  --vector-mode <v>            geometry | bake_texture（默认 geometry）\n"
                << L"  --elev-horiz-ratio <num>     高程/水平比，>0（默认 1）\n"
@@ -32,19 +38,25 @@ void PrintHelp() {
                << L"  --output-unit <v>            m | km | 1000km（默认 m）\n"
                << L"  --mesh-spacing <int>         1..1000000（默认 1）\n"
                << L"  --texture-format <v>         png | tif | tga | bmp（默认 png）\n"
-               << L"  --raster-max-dim <int>       64..16384（默认 4096）\n";
+               << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n"
+               << L"  --tile-max-memory-mb <int>   合并内存上限MB，64..131072（默认 512）\n";
   } else {
     std::wcout << L"Usage:\n"
-               << L"  agis_convert_tile_to_model --input <path|dir> --output <path> [options]\n\n"
+               << L"  agis_convert_tile_to_model --input <dir|file> --output <path> [options]\n\n"
+               << L"  --input: same directory vs file rules as tile_to_gis.\n\n"
                << L"Required:\n"
-               << L"  --input <path|dir>           Input tile path or directory\n"
+               << L"  --input <dir|file>           Tile root or container file\n"
                << L"  --output <path>              Output model path\n\n"
-               << L"Options:\n"
-               << L"  --help, -h, /?               Show help\n"
-               << L"  --input-type <text>          Input major type\n"
-               << L"  --input-subtype <text>       Input subtype\n"
-               << L"  --output-type <text>         Output major type\n"
-               << L"  --output-subtype <text>      Output subtype\n"
+               << L"General:\n"
+               << L"  --help, -h, /?               Show help\n";
+    PrintConvertCliHelpGrouped(
+        std::wcout, false,
+        L"  Tiles → model; major type is usually tile.\n",
+        L"  xyz | tms | wmts | mbtiles | gpkg | 3dtiles (default: xyz).\n"
+        L"  Directory subtypes: folder; mbtiles/gpkg: file.\n",
+        L"  Model output; major type is usually model.\n",
+        L"  tin | dem | 3dmesh | pointcloud (default: tin).\n");
+    std::wcout << L"Other options:\n"
                << L"  --coord-system <v>           projected | cecf (default: projected)\n"
                << L"  --vector-mode <v>            geometry | bake_texture (default: geometry)\n"
                << L"  --elev-horiz-ratio <num>     Elevation/horizontal ratio, >0 (default: 1)\n"
@@ -52,7 +64,8 @@ void PrintHelp() {
                << L"  --output-unit <v>            m | km | 1000km (default: m)\n"
                << L"  --mesh-spacing <int>         1..1000000 (default: 1)\n"
                << L"  --texture-format <v>         png | tif | tga | bmp (default: png)\n"
-               << L"  --raster-max-dim <int>       64..16384 (default: 4096)\n";
+               << L"  --raster-max-dim <int>       0=native (default); 64..16384=cap\n"
+               << L"  --tile-max-memory-mb <int>   merge memory cap in MB, 64..131072 (default: 512)\n";
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

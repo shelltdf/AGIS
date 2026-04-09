@@ -25,6 +25,7 @@ int g_toolbarHeight = 0;
 HIMAGELIST g_toolbarImageList = nullptr;
 HMENU g_hmenuProjSub = nullptr;
 std::wstring g_pendingPreviewModelPath;
+bool g_pendingPreviewLoadAs3DTiles = false;
 
 const wchar_t kMainClass[] = L"AGISMainFrame";
 const wchar_t kLayerClass[] = L"AGISLayerPane";
@@ -33,3 +34,4 @@ const wchar_t kPropsClass[] = L"AGISPropsPane";
 const wchar_t kLogClass[] = L"AGISLogWindow";
 const wchar_t kConvertClass[] = L"AGISDataConvertWindow";
 const wchar_t kModelPreviewClass[] = L"AGISModelPreviewWindow";
+const wchar_t kTilePreviewClass[] = L"AGISTileRasterPreviewWindow";

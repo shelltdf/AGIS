@@ -26,6 +26,7 @@
 #pragma comment(lib, "comdlg32.lib")
 
 #if GIS_DESKTOP_HAVE_GDAL
+#include "app/agis_gdal_runtime_env.h"
 #include "cpl_conv.h"
 #include "gdal_alg.h"
 #include "gdal_priv.h"
@@ -904,6 +905,7 @@ MapEngine& MapEngine::Instance() {
 void MapEngine::Init() {
   MapProj_SystemInit();
 #if GIS_DESKTOP_HAVE_GDAL
+  AgisEnsureGdalDataPath();
   GDALAllRegister();
 #endif
 }
@@ -1190,6 +1192,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
     return false;
   }
   std::wstring err;
+  AgisEnsureGdalDataPath();
   GDALAllRegister();
   if (kind == MapLayerDriverKind::kTmsXyz) {
     while (!urlExtra.empty() &&

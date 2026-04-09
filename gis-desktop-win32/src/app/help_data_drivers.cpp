@@ -16,6 +16,7 @@
 #endif
 
 #if GIS_DESKTOP_HAVE_GDAL
+#include "app/agis_gdal_runtime_env.h"
 #include "gdal_priv.h"
 #endif
 
@@ -70,6 +71,7 @@ std::wstring BuildDataDriversHelpText() {
 
 #if GIS_DESKTOP_HAVE_GDAL
   s += L"四、本构建已注册的 GDAL 驱动（运行时枚举，按短名排序）\r\n";
+  AgisEnsureGdalDataPath();
   GDALAllRegister();
   GDALDriverManager* dm = GetGDALDriverManager();
   const int n = dm ? dm->GetDriverCount() : 0;

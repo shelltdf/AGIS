@@ -41,3 +41,5 @@ bool agis_bgfx_preview_set_texture(AgisBgfxPreviewContext* ctx, const std::wstri
 bool agis_bgfx_preview_set_pbr_textures(AgisBgfxPreviewContext* ctx, const AgisBgfxPbrTexturePaths& paths);
 bool agis_bgfx_preview_set_pseudo_pbr(AgisBgfxPreviewContext* ctx, bool enabled);
 bool agis_bgfx_preview_set_pbr_view_mode(AgisBgfxPreviewContext* ctx, AgisBgfxPbrViewMode mode);
+/// 仅替换网格缓存并重建 VB/IB（纹理与 Program 不变）。用于 LAS 点大小等参数变更。
+bool agis_bgfx_preview_reload_model(AgisBgfxPreviewContext* ctx, const ObjPreviewModel& model);

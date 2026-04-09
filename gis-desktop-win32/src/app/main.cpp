@@ -550,6 +550,14 @@ bool RegisterClasses(HINSTANCE inst) {
   if (!RegisterClassW(&wc)) {
     return false;
   }
+  wc.lpfnWndProc = TilePreviewWndProc;
+  wc.lpszClassName = kTilePreviewClass;
+  wc.style = 0;
+  // 避免 WM_ERASEBKGND 先擦除再 WM_PAINT 导致的 XYZ/瓦片预览闪烁；擦除在 WM_PAINT 内与内容一并绘制
+  wc.hbrBackground = nullptr;
+  if (!RegisterClassW(&wc)) {
+    return false;
+  }
   return true;
 }
 

@@ -64,6 +64,8 @@ std::wstring PromptSaveOutputPath(HWND owner);
 std::wstring PromptSelectOutputFolder(HWND owner);
 const wchar_t* ConvertToolExeName(int inMajor, int outMajor);
 std::wstring QuoteArg(const std::wstring& s);
+void LayoutConvertMidColumn(HWND hwnd, int midColX, int colW, int m, int topH);
+std::wstring AssembleConvertProcessCommandLine(HWND hwnd);
 std::wstring BuildConvertCommandLine(HWND hwnd);
 void UpdateConvertCmdlinePreview(HWND hwnd);
 bool RunConvertBackend(HWND hwnd);
@@ -72,7 +74,11 @@ void ShowDataConvertWindow(HWND owner);
 LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 void OpenModelPreviewWindow(HWND owner, const std::wstring& path);
+void OpenModelPreviewWindow3DTiles(HWND owner, const std::wstring& tilesetRootOrFile);
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path);
+LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HMENU BuildMenu();

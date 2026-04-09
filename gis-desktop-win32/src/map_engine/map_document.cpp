@@ -14,6 +14,7 @@
 #include <string>
 
 #if GIS_DESKTOP_HAVE_GDAL
+#include "app/agis_gdal_runtime_env.h"
 #include "cpl_conv.h"
 #include "gdal_priv.h"
 #endif
@@ -531,6 +532,7 @@ bool MapDocument::AddLayerFromTmsUrl(const std::wstring& url, std::wstring& err)
   err = L"本程序未启用 GDAL，无法使用 TMS/XYZ。请用 AGIS_USE_GDAL=on 重新构建。";
   return false;
 #else
+  AgisEnsureGdalDataPath();
   GDALAllRegister();
   auto layer = agis_detail::CreateLayerFromTmsUrl(url, err);
   if (!layer) {
@@ -548,6 +550,7 @@ bool MapDocument::AddLayerFromWmtsUrl(const std::wstring& url, std::wstring& err
   err = L"本程序未启用 GDAL，无法使用 WMTS。请用 AGIS_USE_GDAL=on 重新构建。";
   return false;
 #else
+  AgisEnsureGdalDataPath();
   GDALAllRegister();
   auto layer = agis_detail::CreateLayerFromWmtsUrl(url, err);
   if (!layer) {
@@ -565,6 +568,7 @@ bool MapDocument::AddLayerFromArcGisRestJsonUrl(const std::wstring& url, std::ws
   err = L"本程序未启用 GDAL，无法使用 ArcGIS REST。请用 AGIS_USE_GDAL=on 重新构建。";
   return false;
 #else
+  AgisEnsureGdalDataPath();
   GDALAllRegister();
   auto layer = agis_detail::CreateLayerFromArcGisRestJsonUrl(url, err);
   if (!layer) {
@@ -847,6 +851,7 @@ bool PathLooksLikeOsm(const std::string& u8) {
 
 GDALDataset* OpenGdalDatasetForLocalFile(const std::wstring& pathWide, const std::string& utf8Path,
                                          std::wstring& err) {
+  AgisEnsureGdalDataPath();
   GDALAllRegister();
   const unsigned kV = GDAL_OF_VERBOSE_ERROR;
   /** 每次重试前会 `CPLErrorReset()`，须在当次失败后立刻记下 CPL 信息，否则最终被清空。 */

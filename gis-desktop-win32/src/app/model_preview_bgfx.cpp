@@ -953,3 +953,12 @@ bool agis_bgfx_preview_set_pbr_view_mode(AgisBgfxPreviewContext* ctx, AgisBgfxPb
   impl->pbrViewMode = mode;
   return RebuildMeshBuffers(impl);
 }
+
+bool agis_bgfx_preview_reload_model(AgisBgfxPreviewContext* ctx, const ObjPreviewModel& model) {
+  if (!ctx) {
+    return false;
+  }
+  AgisBgfxPreviewContextImpl* impl = AsImpl(ctx);
+  impl->cachedModel = model;
+  return RebuildMeshBuffers(impl);
+}

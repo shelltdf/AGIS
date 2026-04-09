@@ -42,6 +42,8 @@ extern int g_toolbarHeight;
 extern HIMAGELIST g_toolbarImageList;
 extern HMENU g_hmenuProjSub;
 extern std::wstring g_pendingPreviewModelPath;
+/// 为 true 时 `g_pendingPreviewModelPath` 视为 tileset 目录或 tileset.json，走 3D Tiles→glTF 加载。
+extern bool g_pendingPreviewLoadAs3DTiles;
 
 extern const wchar_t kMainClass[];
 extern const wchar_t kLayerClass[];
@@ -50,3 +52,4 @@ extern const wchar_t kPropsClass[];
 extern const wchar_t kLogClass[];
 extern const wchar_t kConvertClass[];
 extern const wchar_t kModelPreviewClass[];
+extern const wchar_t kTilePreviewClass[];
