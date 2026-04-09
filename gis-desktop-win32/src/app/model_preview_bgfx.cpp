@@ -66,10 +66,19 @@ struct AgisBgfxPreviewContextImpl {
   uint32_t lastResetW = 0;
   uint32_t lastResetH = 0;
   bgfx::RendererType::Enum renderer = bgfx::RendererType::Count;
+  uint32_t resetFlags = BGFX_RESET_VSYNC;
+  AgisBgfxRuntimeStats runtime{};
 };
 
 static bgfx::RendererType::Enum ToBgfxType(AgisBgfxRendererKind k) {
   return (k == AgisBgfxRendererKind::kOpenGL) ? bgfx::RendererType::OpenGL : bgfx::RendererType::Direct3D11;
+}
+
+static float TicksToMs(int64_t ticks, int64_t freq) {
+  if (ticks <= 0 || freq <= 0) {
+    return 0.0f;
+  }
+  return static_cast<float>((static_cast<double>(ticks) * 1000.0) / static_cast<double>(freq));
 }
 
 static void ImageReleaseCb(void* /*_ptr*/, void* _userData) {
@@ -229,6 +238,8 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
 
   auto* c = new AgisBgfxPreviewContextImpl();
   c->renderer = ToBgfxType(renderer);
+  // 部分驱动下 OpenGL + VSync 可能出现交互停滞，默认关闭 OpenGL 的 VSync。
+  c->resetFlags = (c->renderer == bgfx::RendererType::OpenGL) ? BGFX_RESET_NONE : BGFX_RESET_VSYNC;
 
   bgfx::Init init;
   init.type = c->renderer;
@@ -241,13 +252,14 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
   init.platformData.type = bgfx::NativeWindowHandleType::Default;
   init.resolution.width = cw;
   init.resolution.height = ch;
-  init.resolution.reset = BGFX_RESET_VSYNC;
+  init.resolution.reset = c->resetFlags;
   if (!bgfx::init(init)) {
     delete c;
     return false;
   }
 
-  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1a1e28ff, 1.0f, 0);
+  // 默认浅灰背景（ABGR）。
+  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0xffe8e8e8, 1.0f, 0);
 
   bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(kEmbeddedShaders, c->renderer, "vs_debugdraw_fill_texture");
   bgfx::ShaderHandle fsh = bgfx::createEmbeddedShader(kEmbeddedShaders, c->renderer, "fs_debugdraw_fill_texture");
@@ -331,7 +343,7 @@ void agis_bgfx_preview_shutdown(HWND hwnd, AgisBgfxPreviewContext* ctx) {
 }
 
 void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& viewportPx, float rotX, float rotY, float zoom,
-                            bool solid) {
+                            bool solid, bool showGrid) {
   if (!ctx || !hwnd) return;
   AgisBgfxPreviewContextImpl* impl = AsImpl(ctx);
   if (!bgfx::isValid(impl->program)) return;
@@ -341,7 +353,7 @@ void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& 
   const uint32_t cw = (std::max)(1L, cr.right - cr.left);
   const uint32_t ch = (std::max)(1L, cr.bottom - cr.top);
   if (cw != impl->lastResetW || ch != impl->lastResetH) {
-    bgfx::reset(cw, ch, BGFX_RESET_VSYNC);
+    bgfx::reset(cw, ch, impl->resetFlags);
     impl->lastResetW = cw;
     impl->lastResetH = ch;
   }
@@ -352,7 +364,7 @@ void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& 
   const int vh = static_cast<int>((std::max)(1L, viewportPx.bottom - viewportPx.top));
   const float aspect = static_cast<float>(vw) / static_cast<float>(vh);
 
-  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1a1e28ff, 1.0f, 0);
+  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0xffe8e8e8, 1.0f, 0);
 
   const bgfx::Caps* caps = bgfx::getCaps();
   float view[16];
@@ -388,5 +400,76 @@ void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& 
     bgfx::setIndexBuffer(impl->ibhLine, 0, impl->lineCount);
     bgfx::submit(0, impl->program);
   }
+  if (showGrid) {
+    constexpr int kHalf = 10;
+    constexpr float kStep = 0.1f;
+    std::vector<PosTexColorVertex> gv;
+    std::vector<uint16_t> gi;
+    gv.reserve((kHalf * 2 + 1) * 4);
+    gi.reserve((kHalf * 2 + 1) * 4);
+    const uint32_t abgr = 0xffb8b8b8;
+    for (int i = -kHalf; i <= kHalf; ++i) {
+      const float p = static_cast<float>(i) * kStep;
+      const uint16_t b = static_cast<uint16_t>(gv.size());
+      gv.push_back({-kHalf * kStep, 0.0f, p, 0.0f, 0.0f, abgr});
+      gv.push_back({kHalf * kStep, 0.0f, p, 0.0f, 0.0f, abgr});
+      gv.push_back({p, 0.0f, -kHalf * kStep, 0.0f, 0.0f, abgr});
+      gv.push_back({p, 0.0f, kHalf * kStep, 0.0f, 0.0f, abgr});
+      gi.push_back(b);
+      gi.push_back(static_cast<uint16_t>(b + 1));
+      gi.push_back(static_cast<uint16_t>(b + 2));
+      gi.push_back(static_cast<uint16_t>(b + 3));
+    }
+    bgfx::TransientVertexBuffer tvb;
+    bgfx::TransientIndexBuffer tib;
+    if (bgfx::allocTransientBuffers(&tvb, PosTexColorVertex::Layout(), static_cast<uint32_t>(gv.size()), &tib,
+                                    static_cast<uint32_t>(gi.size()))) {
+      memcpy(tvb.data, gv.data(), gv.size() * sizeof(PosTexColorVertex));
+      memcpy(tib.data, gi.data(), gi.size() * sizeof(uint16_t));
+      bgfx::setTransform(mod);
+      bgfx::setVertexBuffer(0, &tvb);
+      bgfx::setIndexBuffer(&tib);
+      bgfx::setState(kWrite | BGFX_STATE_PT_LINES | BGFX_STATE_MSAA);
+      bgfx::submit(0, impl->program);
+    }
+  }
   bgfx::frame();
+  if (const bgfx::Stats* stats = bgfx::getStats()) {
+    impl->runtime.cpuFrameMs = TicksToMs(stats->cpuTimeEnd - stats->cpuTimeBegin, stats->cpuTimerFreq);
+    impl->runtime.gpuFrameMs = TicksToMs(stats->gpuTimeEnd - stats->gpuTimeBegin, stats->gpuTimerFreq);
+    impl->runtime.waitSubmitMs = TicksToMs(stats->waitSubmit, stats->cpuTimerFreq);
+    impl->runtime.waitRenderMs = TicksToMs(stats->waitRender, stats->cpuTimerFreq);
+    impl->runtime.drawCalls = static_cast<uint32_t>(stats->numDraw);
+  }
+}
+
+bool agis_bgfx_preview_get_runtime_stats(AgisBgfxPreviewContext* ctx, AgisBgfxRuntimeStats* out) {
+  if (!ctx || !out) {
+    return false;
+  }
+  AgisBgfxPreviewContextImpl* impl = AsImpl(ctx);
+  *out = impl->runtime;
+  return true;
+}
+
+bool agis_bgfx_preview_set_texture(AgisBgfxPreviewContext* ctx, const std::wstring& texturePath) {
+  if (!ctx) {
+    return false;
+  }
+  AgisBgfxPreviewContextImpl* impl = AsImpl(ctx);
+  bgfx::TextureHandle nextTex = BGFX_INVALID_HANDLE;
+  if (!texturePath.empty()) {
+    nextTex = LoadMapKdTexture(texturePath);
+  }
+  if (!bgfx::isValid(nextTex)) {
+    nextTex = CreateWhiteTexture2D();
+  }
+  if (!bgfx::isValid(nextTex)) {
+    return false;
+  }
+  if (bgfx::isValid(impl->texture)) {
+    bgfx::destroy(impl->texture);
+  }
+  impl->texture = nextTex;
+  return true;
 }

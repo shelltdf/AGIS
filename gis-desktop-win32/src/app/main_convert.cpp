@@ -36,6 +36,12 @@
 #include "map_engine/map_engine.h"
 #include "map_engine/map_projection.h"
 
+namespace {
+PROCESS_INFORMATION g_convertPi{};
+bool g_convertRunning = false;
+constexpr UINT_PTR kConvertPollTimerId = 2;
+}  // namespace
+
 void WriteConvertLog(HWND hwnd, const wchar_t* line) {
   HWND hLog = GetDlgItem(hwnd, IDC_CONV_LOG);
   if (!hLog || !line) {
@@ -60,21 +66,27 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE_HELP), m + colW - 24, m + 20, 24, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE), m, m + 48, colW - 28, 220, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE_HELP), m + colW - 24, m + 48, 24, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), m, m + 76, colW - 140, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_BROWSE), m + colW - 136, m + 76, 66, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PREVIEW), m + colW - 66, m + 76, 66, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), m, m + 76, colW - 146, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_BROWSE), m + colW - 142, m + 76, 68, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PREVIEW), m + colW - 70, m + 76, 70, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_INFO), m, m + 106, colW, topH - 110, TRUE);
 
   const int midColX = m * 2 + colW;
   const int midStackBottom = 324;
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_SETTING), midColX, m + 20, colW, topH - m - 20 - midStackBottom, TRUE);
+  const int settingTotalH = (std::max)(88, topH - m - 20 - midStackBottom);
+  const int inSettingH = (std::max)(36, settingTotalH / 2 - 12);
+  const int outSettingH = (std::max)(36, settingTotalH - inSettingH - 28);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SETTING_LBL), midColX, m + 8, colW, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SETTING), midColX, m + 24, colW, inSettingH, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SETTING_LBL), midColX, m + 28 + inSettingH, colW, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SETTING), midColX, m + 44 + inSettingH, colW, outSettingH, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_ELEV_HORIZ_LBL), midColX, topH - 258, 168, 18, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_ELEV_HORIZ_RATIO), midColX + 172, topH - 260, (std::max)(72, colW - 178), 24,
              TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_TARGET_CRS_LBL), midColX, topH - 228, colW, 16, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_TARGET_CRS), midColX, topH - 210, colW, 22, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_UNIT_LBL), midColX, topH - 180, 120, 18, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_UNIT), midColX + 124, topH - 182, (std::max)(100, colW - 128), 120, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_UNIT_LBL), midColX, topH - 180, 132, 18, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_UNIT), midColX + 136, topH - 182, (std::max)(88, colW - 140), 120, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_MESH_SPACING_LBL), midColX, topH - 152, 168, 18, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_MESH_SPACING), midColX + 172, topH - 154, (std::max)(72, colW - 178), 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_RASTER_MAX_LBL), midColX, topH - 124, 168, 18, TRUE);
@@ -88,13 +100,13 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE_HELP), m * 3 + colW * 2 + colW - 24, m + 20, 24, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE), m * 3 + colW * 2, m + 48, colW - 28, 220, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE_HELP), m * 3 + colW * 2 + colW - 24, m + 48, 24, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), m * 3 + colW * 2, m + 76, colW - 140, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_BROWSE), m * 3 + colW * 2 + colW - 136, m + 76, 66, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PREVIEW), m * 3 + colW * 2 + colW - 66, m + 76, 66, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), m * 3 + colW * 2, m + 76, colW - 146, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_BROWSE), m * 3 + colW * 2 + colW - 142, m + 76, 68, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PREVIEW), m * 3 + colW * 2 + colW - 70, m + 76, 70, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_INFO), m * 3 + colW * 2, m + 106, colW, topH - 110, TRUE);
 
   const int y1 = m + topH + 8;
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2 - 110, 92, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2 - 110, 88, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_CMD), w - m - 100, y1, 100, 26, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 + 32, 100, 26, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m, y1 + 96, w - m * 2, 22, TRUE);
@@ -307,6 +319,58 @@ std::wstring GetComboSelectedText(HWND combo) {
   return buf;
 }
 
+std::wstring GetConvertMajorTypeArg(HWND hwnd, bool inputSide) {
+  const int id = inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE;
+  const int sel = static_cast<int>(SendMessageW(GetDlgItem(hwnd, id), CB_GETCURSEL, 0, 0));
+  switch (sel) {
+    case 1:
+      return L"model";
+    case 2:
+      return L"tile";
+    default:
+      return L"gis";
+  }
+}
+
+std::wstring GetConvertSubtypeArg(HWND hwnd, bool inputSide) {
+  const int majorId = inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE;
+  const int subId = inputSide ? IDC_CONV_INPUT_SUBTYPE : IDC_CONV_OUTPUT_SUBTYPE;
+  const int major = static_cast<int>(SendMessageW(GetDlgItem(hwnd, majorId), CB_GETCURSEL, 0, 0));
+  const int sub = static_cast<int>(SendMessageW(GetDlgItem(hwnd, subId), CB_GETCURSEL, 0, 0));
+  if (major == 0) {
+    switch (sub) {
+      case 1:
+        return L"vector";
+      case 2:
+        return L"raster";
+      case 3:
+        return L"gpkg";
+      default:
+        return L"auto";
+    }
+  }
+  if (major == 1) {
+    switch (sub) {
+      case 1:
+        return L"dem";
+      case 2:
+        return L"3dmesh";
+      case 3:
+        return L"pointcloud";
+      default:
+        return L"tin";
+    }
+  }
+  switch (sub) {
+    case 1:
+      return L"tms";
+    case 2:
+      return L"wmts";
+    default:
+      return L"xyz";
+  }
+}
+
 std::wstring GetModelCoordArg(HWND hwnd) {
   const std::wstring raw = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD));
   if (raw.find(L"cecf") != std::wstring::npos || raw.find(L"CECF") != std::wstring::npos) {
@@ -360,6 +424,42 @@ std::wstring GetOutputUnitArg(HWND hwnd) {
     return L"1000km";
   }
   return L"m";
+}
+
+int GetMeshSpacingArg(HWND hwnd);
+std::wstring GetTextureFormatArg(HWND hwnd);
+int GetRasterReadMaxDimArg(HWND hwnd);
+
+void RefreshConvertSettingPanels(HWND hwnd) {
+  const std::wstring inType = GetConvertMajorTypeArg(hwnd, true);
+  const std::wstring inSub = GetConvertSubtypeArg(hwnd, true);
+  const std::wstring outType = GetConvertMajorTypeArg(hwnd, false);
+  const std::wstring outSub = GetConvertSubtypeArg(hwnd, false);
+  wchar_t inPath[512]{};
+  wchar_t outPath[512]{};
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), inPath, 512);
+  GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), outPath, 512);
+
+  const std::wstring inputText =
+      L"input-type=" + inType + L"\r\n"
+      L"input-subtype=" + inSub + L"\r\n"
+      L"input-path=" + std::wstring(inPath) + L"\r\n";
+
+  const std::wstring outputText =
+      L"output-type=" + outType + L"\r\n"
+      L"output-subtype=" + outSub + L"\r\n"
+      L"coord-system=" + GetModelCoordArg(hwnd) + L"\r\n"
+      L"vector-mode=" + GetVectorModeArg(hwnd) + L"\r\n"
+      L"elev-horiz-ratio=" + std::to_wstring(GetElevHorizRatioArg(hwnd)) + L"\r\n"
+      L"target-crs=" + GetTargetCrsArg(hwnd) + L"\r\n"
+      L"output-unit=" + GetOutputUnitArg(hwnd) + L"\r\n"
+      L"mesh-spacing=" + std::to_wstring(GetMeshSpacingArg(hwnd)) + L"\r\n"
+      L"texture-format=" + GetTextureFormatArg(hwnd) + L"\r\n"
+      L"raster-max-dim=" + std::to_wstring(GetRasterReadMaxDimArg(hwnd)) + L"\r\n"
+      L"output-path=" + std::wstring(outPath) + L"\r\n";
+
+  SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_SETTING), inputText.c_str());
+  SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SETTING), outputText.c_str());
 }
 
 #if GIS_DESKTOP_HAVE_GDAL
@@ -712,10 +812,10 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
   wchar_t outPath[1024]{};
   GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), inPath, 1024);
   GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), outPath, 1024);
-  const std::wstring inType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE));
-  const std::wstring inSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
-  const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
-  const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
+  const std::wstring inType = GetConvertMajorTypeArg(hwnd, true);
+  const std::wstring inSub = GetConvertSubtypeArg(hwnd, true);
+  const std::wstring outType = GetConvertMajorTypeArg(hwnd, false);
+  const std::wstring outSub = GetConvertSubtypeArg(hwnd, false);
   const std::wstring coord = GetModelCoordArg(hwnd);
   const std::wstring vectorMode = GetVectorModeArg(hwnd);
   const double elevRatio = GetElevHorizRatioArg(hwnd);
@@ -753,7 +853,7 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
 void UpdateConvertCmdlinePreview(HWND hwnd) {
   SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_CMDLINE), BuildConvertCommandLine(hwnd).c_str());
 }
-bool RunConvertBackend(HWND hwnd) {
+bool RunConvertBackendAsync(HWND hwnd) {
   const int inMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE), CB_GETCURSEL, 0, 0));
   const int outMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
   if (inMajor < 0 || outMajor < 0) {
@@ -766,15 +866,10 @@ bool RunConvertBackend(HWND hwnd) {
                   MB_OK | MB_ICONWARNING);
       return false;
     }
-    const std::wstring inSu = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
-    const std::wstring outSu = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
-    const auto isPc = [](const std::wstring& s) {
-      return s.find(L"点云") != std::wstring::npos || s.find(L"LAS") != std::wstring::npos ||
-             s.find(L"LAZ") != std::wstring::npos || s.find(L"laz") != std::wstring::npos;
-    };
-    const auto isM3 = [](const std::wstring& s) {
-      return s.find(L"3DMesh") != std::wstring::npos || s.find(L"网格") != std::wstring::npos;
-    };
+    const std::wstring inSu = GetConvertSubtypeArg(hwnd, true);
+    const std::wstring outSu = GetConvertSubtypeArg(hwnd, false);
+    const auto isPc = [](const std::wstring& s) { return s == L"pointcloud" || s == L"las" || s == L"laz"; };
+    const auto isM3 = [](const std::wstring& s) { return s == L"3dmesh" || s == L"mesh"; };
     if (!((isM3(inSu) && isPc(outSu)) || (isPc(inSu) && isM3(outSu)))) {
       MessageBoxW(hwnd, L"请选择：一侧为「3DMesh（网格模型）」、另一侧为「点云（LAS…）」。", L"数据转换",
                   MB_OK | MB_ICONWARNING);
@@ -801,10 +896,10 @@ bool RunConvertBackend(HWND hwnd) {
     exeDir.resize(slash + 1);
   }
   const std::wstring exePath = exeDir + exeName;
-  const std::wstring inType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE));
-  const std::wstring inSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
-  const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
-  const std::wstring outSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
+  const std::wstring inType = GetConvertMajorTypeArg(hwnd, true);
+  const std::wstring inSub = GetConvertSubtypeArg(hwnd, true);
+  const std::wstring outType = GetConvertMajorTypeArg(hwnd, false);
+  const std::wstring outSub = GetConvertSubtypeArg(hwnd, false);
   const std::wstring coord = GetModelCoordArg(hwnd);
   const std::wstring vectorMode = GetVectorModeArg(hwnd);
   const double elevRatio = GetElevHorizRatioArg(hwnd);
@@ -840,13 +935,10 @@ bool RunConvertBackend(HWND hwnd) {
     WriteConvertLog(hwnd, (std::wstring(L"[错误] 无法启动：") + exeName).c_str());
     return false;
   }
-  WaitForSingleObject(pi.hProcess, INFINITE);
-  DWORD code = 1;
-  GetExitCodeProcess(pi.hProcess, &code);
-  CloseHandle(pi.hThread);
-  CloseHandle(pi.hProcess);
-  WriteConvertLog(hwnd, (std::wstring(L"[后端] 退出码：") + std::to_wstring(code)).c_str());
-  return code == 0;
+  g_convertPi = pi;
+  g_convertRunning = true;
+  SetTimer(hwnd, kConvertPollTimerId, 120, nullptr);
+  return true;
 }
 
 void PreviewPath(HWND hwnd, bool inputSide) {
@@ -908,13 +1000,16 @@ void PreviewPath(HWND hwnd, bool inputSide) {
 
 void ShowDataConvertWindow(HWND owner) {
   if (g_hwndConvertDlg && IsWindow(g_hwndConvertDlg)) {
-    ShowWindow(g_hwndConvertDlg, SW_SHOW);
+    ShowWindow(g_hwndConvertDlg, SW_MAXIMIZE);
     SetForegroundWindow(g_hwndConvertDlg);
     return;
   }
   g_hwndConvertDlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kConvertClass, L"数据转换",
                                      WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 920, 620, owner,
                                      nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (g_hwndConvertDlg) {
+    ShowWindow(g_hwndConvertDlg, SW_MAXIMIZE);
+  }
 }
 
 LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -926,7 +1021,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
   switch (msg) {
     case WM_CREATE: {
       SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
-      CreateWindowW(L"STATIC", L"输入类型与信息", WS_CHILD | WS_VISIBLE, 10, 8, 120, 16, hwnd, nullptr,
+      CreateWindowW(L"STATIC", L"输入数据", WS_CHILD | WS_VISIBLE, 10, 8, 120, 16, hwnd, nullptr,
                     GetModuleHandleW(nullptr), nullptr);
       HWND inType = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 10, 30, 240,
                                   240, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_TYPE)),
@@ -943,53 +1038,60 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 10, 86, 172, 24, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_PATH)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 186, 86, 64, 24, hwnd,
+      CreateWindowW(L"BUTTON", L"浏览", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 186, 86, 68, 24, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_BROWSE)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"BUTTON", L"预览", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 186, 86, 64, 24, hwnd,
+      CreateWindowW(L"BUTTON", L"预览", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 258, 86, 70, 24, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_PREVIEW)), GetModuleHandleW(nullptr),
                     nullptr);
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 10,
                     116, 240, 200, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_INFO)),
                     GetModuleHandleW(nullptr), nullptr);
 
-      CreateWindowW(L"STATIC", L"转换设置", WS_CHILD | WS_VISIBLE, 280, 8, 90, 16, hwnd, nullptr,
+      CreateWindowW(L"STATIC", L"输入参数（来源）", WS_CHILD | WS_VISIBLE, 280, 8, 140, 16, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_SETTING_LBL)),
                     GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"EDIT",
-                    L"统一坐标系=WebMercator\r\n重采样=双线性\r\n精度=中\r\n（不同类型可扩展子类型参数）",
-                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 280, 30, 240, 200,
-                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_SETTING)), GetModuleHandleW(nullptr),
-                    nullptr);
-      CreateWindowW(L"STATIC", L"高程/水平比(1=1:1)：", WS_CHILD | WS_VISIBLE, 280, 238, 200, 18, hwnd,
+      CreateWindowW(L"EDIT", L"",
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 280,
+                    30, 240, 90, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_SETTING)),
+                    GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"STATIC", L"输出参数（目标）", WS_CHILD | WS_VISIBLE, 280, 126, 140, 16, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_SETTING_LBL)),
+                    GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"EDIT", L"",
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 280,
+                    146, 240, 90, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_SETTING)),
+                    GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"STATIC", L"高程/水平比（1 = 1:1）：", WS_CHILD | WS_VISIBLE, 280, 238, 200, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_ELEV_HORIZ_LBL)), GetModuleHandleW(nullptr),
                     nullptr);
       CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 420, 236, 98, 22, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_ELEV_HORIZ_RATIO)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"STATIC", L"目标投影（空=自动）：", WS_CHILD | WS_VISIBLE, 280, 264, 240, 16, hwnd,
+      CreateWindowW(L"STATIC", L"目标坐标系（留空=自动）：", WS_CHILD | WS_VISIBLE, 280, 264, 240, 16, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TARGET_CRS_LBL)), GetModuleHandleW(nullptr),
                     nullptr);
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 280, 282, 240, 22, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TARGET_CRS)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"STATIC", L"模型单位：", WS_CHILD | WS_VISIBLE, 280, 310, 72, 18, hwnd,
+      CreateWindowW(L"STATIC", L"输出模型单位：", WS_CHILD | WS_VISIBLE, 280, 310, 88, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_UNIT_LBL)), GetModuleHandleW(nullptr),
                     nullptr);
       HWND outUnitCombo =
-          CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 352, 308, 168, 120,
+          CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 368, 308, 152, 120,
                         hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_UNIT)),
                         GetModuleHandleW(nullptr), nullptr);
       SendMessageW(outUnitCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"米（m）"));
       SendMessageW(outUnitCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"千米（km）"));
       SendMessageW(outUnitCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"千千米（1000 km）"));
       SendMessageW(outUnitCombo, CB_SETCURSEL, 0, 0);
-      CreateWindowW(L"STATIC", L"Mesh间距(模型单位)：", WS_CHILD | WS_VISIBLE, 280, 338, 200, 18, hwnd,
+      CreateWindowW(L"STATIC", L"Mesh 间距（模型单位）：", WS_CHILD | WS_VISIBLE, 280, 338, 200, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MESH_SPACING_LBL)), GetModuleHandleW(nullptr),
                     nullptr);
       CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER, 420, 336, 98, 22,
                     hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MESH_SPACING)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"STATIC", L"栅格读入最大边(px)：", WS_CHILD | WS_VISIBLE, 280, 364, 168, 18, hwnd,
+      CreateWindowW(L"STATIC", L"栅格读取最大边（px）：", WS_CHILD | WS_VISIBLE, 280, 364, 178, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RASTER_MAX_LBL)), GetModuleHandleW(nullptr),
                     nullptr);
       CreateWindowW(L"EDIT", L"4096", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER, 420, 362, 98, 22,
@@ -1006,17 +1108,17 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       HWND coord = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 420, 240,
                                  120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MODEL_COORD)),
                                  GetModuleHandleW(nullptr), nullptr);
-      SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"projected（投影直角: x经度 y纬度 z高度）"));
-      SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"cecf（地心地固 xyz）"));
+      SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"projected（投影坐标，单位随 CRS）"));
+      SendMessageW(coord, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"cecf（地心地固 XYZ）"));
       SendMessageW(coord, CB_SETCURSEL, 0, 0);
       HWND vmode = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 280, 448, 240,
                                  120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_VECTOR_MODE)),
                                  GetModuleHandleW(nullptr), nullptr);
-      SendMessageW(vmode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"geometry（矢量转几何对象）"));
-      SendMessageW(vmode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bake_texture（矢量融合到贴图）"));
+      SendMessageW(vmode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"geometry（矢量转几何）"));
+      SendMessageW(vmode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bake_texture（矢量烘焙到贴图）"));
       SendMessageW(vmode, CB_SETCURSEL, 0, 0);
 
-      CreateWindowW(L"STATIC", L"输出类型与信息", WS_CHILD | WS_VISIBLE, 550, 8, 120, 16, hwnd, nullptr,
+      CreateWindowW(L"STATIC", L"输出数据", WS_CHILD | WS_VISIBLE, 550, 8, 120, 16, hwnd, nullptr,
                     GetModuleHandleW(nullptr), nullptr);
       HWND outType =
           CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 550, 30, 240, 240,
@@ -1034,10 +1136,10 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 550, 86, 172, 24, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_PATH)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 726, 86, 64, 24, hwnd,
+      CreateWindowW(L"BUTTON", L"浏览", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 726, 86, 68, 24, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_BROWSE)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"BUTTON", L"预览", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 726, 86, 64, 24, hwnd,
+      CreateWindowW(L"BUTTON", L"预览", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 798, 86, 70, 24, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_PREVIEW)),
                     GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 550,
@@ -1047,15 +1149,15 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       CreateWindowW(PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 10, 280, 740, 22, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PROGRESS)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"BUTTON", L"执行转换", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 278, 100, 26, hwnd,
+      CreateWindowW(L"BUTTON", L"开始转换", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 278, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RUN)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"复制命令行", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 248, 100, 26, hwnd,
+      CreateWindowW(L"BUTTON", L"复制命令", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 248, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_CMD)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"EDIT", L"命令行:\r\n(未执行)", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
+      CreateWindowW(L"EDIT", L"命令预览：\r\n（尚未执行）", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
                                               WS_VSCROLL | ES_READONLY,
                     10, 280, 760, 92, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_CMDLINE)),
                     GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"STATIC", L"准备就绪。", WS_CHILD | WS_VISIBLE, 10, 308, 860, 20, hwnd,
+      CreateWindowW(L"STATIC", L"就绪：请先选择输入与输出数据。", WS_CHILD | WS_VISIBLE, 10, 308, 860, 20, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MSG)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 10,
                     336, 860, 220, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_LOG)),
@@ -1066,7 +1168,9 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       SyncConvertInfoByType(hwnd, true);
       SyncConvertInfoByType(hwnd, false);
       for (int cid : {IDC_CONV_INPUT_TYPE, IDC_CONV_INPUT_TYPE_HELP, IDC_CONV_INPUT_SUBTYPE, IDC_CONV_INPUT_SUBTYPE_HELP,
-                      IDC_CONV_INPUT_PATH, IDC_CONV_INPUT_BROWSE, IDC_CONV_INPUT_PREVIEW, IDC_CONV_INPUT_INFO, IDC_CONV_SETTING,
+                      IDC_CONV_INPUT_PATH, IDC_CONV_INPUT_BROWSE, IDC_CONV_INPUT_PREVIEW, IDC_CONV_INPUT_INFO,
+                      IDC_CONV_INPUT_SETTING_LBL, IDC_CONV_INPUT_SETTING, IDC_CONV_OUTPUT_SETTING_LBL,
+                      IDC_CONV_OUTPUT_SETTING,
                       IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO, IDC_CONV_TARGET_CRS_LBL, IDC_CONV_TARGET_CRS,
                       IDC_CONV_OUTPUT_UNIT_LBL, IDC_CONV_OUTPUT_UNIT, IDC_CONV_MESH_SPACING_LBL, IDC_CONV_MESH_SPACING,
                       IDC_CONV_RASTER_MAX_LBL, IDC_CONV_RASTER_MAX, IDC_CONV_TEXTURE_FMT_LBL, IDC_CONV_TEXTURE_FORMAT,
@@ -1100,6 +1204,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       }
       WriteConvertLog(hwnd, L"[转换] 窗口已打开。");
       WriteConvertLog(hwnd, L"[转换] 支持：GIS数据 / 模型数据 / 瓦片数据（含子类型）。");
+      RefreshConvertSettingPanels(hwnd);
       UpdateConvertCmdlinePreview(hwnd);
       LayoutConvertWindow(hwnd);
       return 0;
@@ -1171,35 +1276,42 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_COMMAND:
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_INPUT_TYPE) {
         SyncConvertInfoByType(hwnd, true);
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_OUTPUT_TYPE) {
         SyncConvertInfoByType(hwnd, false);
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && (LOWORD(wParam) == IDC_CONV_INPUT_SUBTYPE || LOWORD(wParam) == IDC_CONV_OUTPUT_SUBTYPE)) {
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_MODEL_COORD) {
         SyncConvertInfoByType(hwnd, false);
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_VECTOR_MODE) {
         SyncConvertInfoByType(hwnd, false);
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_TEXTURE_FORMAT) {
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         SyncConvertInfoByType(hwnd, false);
         break;
       }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_OUTPUT_UNIT) {
         SyncConvertInfoByType(hwnd, false);
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
@@ -1214,6 +1326,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         } else {
           SyncConvertInfoByType(hwnd, false);
         }
+        RefreshConvertSettingPanels(hwnd);
         UpdateConvertCmdlinePreview(hwnd);
         return 0;
       }
@@ -1223,6 +1336,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
           SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), p.c_str());
           WriteConvertLog(hwnd, (std::wstring(L"[路径] 输入：") + p).c_str());
           SyncConvertInfoByType(hwnd, true);
+          RefreshConvertSettingPanels(hwnd);
           UpdateConvertCmdlinePreview(hwnd);
         }
         return 0;
@@ -1243,6 +1357,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
           SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), p.c_str());
           WriteConvertLog(hwnd, (std::wstring(L"[路径] 输出：") + p).c_str());
           SyncConvertInfoByType(hwnd, false);
+          RefreshConvertSettingPanels(hwnd);
           UpdateConvertCmdlinePreview(hwnd);
         }
         return 0;
@@ -1289,6 +1404,10 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
       }
       if (LOWORD(wParam) == IDC_CONV_RUN) {
+        if (g_convertRunning) {
+          MessageBoxW(hwnd, L"已有转换任务在运行，请等待完成。", L"数据转换", MB_OK | MB_ICONINFORMATION);
+          return 0;
+        }
         const std::wstring inType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE));
         const std::wstring inSub = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE));
         const std::wstring outType = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE));
@@ -1298,10 +1417,34 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         WriteConvertLog(hwnd, inLine.c_str());
         WriteConvertLog(hwnd, outLine.c_str());
         SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 15, 0);
-        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"处理中：正在启动后端命令行工具...");
-        const bool ok = RunConvertBackend(hwnd);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"处理中：正在启动后端命令行程序...");
+        if (!RunConvertBackendAsync(hwnd)) {
+          SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 0, 0);
+          SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"失败：后端未能启动。");
+        } else {
+          SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 35, 0);
+          SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"处理中：转换任务后台运行中...");
+        }
+        return 0;
+      }
+      break;
+    case WM_TIMER:
+      if (wParam == kConvertPollTimerId && g_convertRunning && g_convertPi.hProcess) {
+        const DWORD wait = WaitForSingleObject(g_convertPi.hProcess, 0);
+        if (wait == WAIT_TIMEOUT) {
+          return 0;
+        }
+        KillTimer(hwnd, kConvertPollTimerId);
+        DWORD code = 1;
+        GetExitCodeProcess(g_convertPi.hProcess, &code);
+        CloseHandle(g_convertPi.hThread);
+        CloseHandle(g_convertPi.hProcess);
+        ZeroMemory(&g_convertPi, sizeof(g_convertPi));
+        g_convertRunning = false;
+        WriteConvertLog(hwnd, (std::wstring(L"[后端] 退出码：") + std::to_wstring(code)).c_str());
+        const bool ok = (code == 0);
         SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, ok ? 100 : 0, 0);
-        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), ok ? L"完成：转换成功。" : L"失败：后端返回错误。");
+        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), ok ? L"完成：转换成功。" : L"失败：后端执行出错。");
         return 0;
       }
       break;
@@ -1309,6 +1452,13 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       DestroyWindow(hwnd);
       return 0;
     case WM_DESTROY:
+      if (g_convertRunning) {
+        KillTimer(hwnd, kConvertPollTimerId);
+        if (g_convertPi.hThread) CloseHandle(g_convertPi.hThread);
+        if (g_convertPi.hProcess) CloseHandle(g_convertPi.hProcess);
+        ZeroMemory(&g_convertPi, sizeof(g_convertPi));
+        g_convertRunning = false;
+      }
       g_hwndConvertDlg = nullptr;
       s_tip = nullptr;
       if (s_bgLight) {

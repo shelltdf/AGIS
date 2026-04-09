@@ -28,16 +28,13 @@ struct ConvertArgs {
   int raster_read_max_dim = 4096;
 };
 
-enum class ConvertMode {
-  kGisToModel,
-  kGisToTile,
-  kModelToGis,
-  kModelToTile,
-  kTileToGis,
-  kTileToModel,
-  kModelToModel,
-};
-
 bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out);
 void PrintConvertBanner(const wchar_t* title, const ConvertArgs& args);
-int RunConversion(ConvertMode mode, const wchar_t* title, const ConvertArgs& args);
+bool IsChineseOsUi();
+int ConvertGisToModel(const ConvertArgs& args);
+int ConvertGisToTile(const ConvertArgs& args);
+int ConvertModelToGis(const ConvertArgs& args);
+int ConvertModelToModel(const ConvertArgs& args);
+int ConvertModelToTile(const ConvertArgs& args);
+int ConvertTileToGis(const ConvertArgs& args);
+int ConvertTileToModel(const ConvertArgs& args);

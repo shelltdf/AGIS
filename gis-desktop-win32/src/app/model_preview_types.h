@@ -43,7 +43,8 @@ struct ObjPreviewModel {
   std::wstring primaryMapKdPath;
 };
 
-constexpr size_t kModelPreviewMaxFaces = 120000;
+// 预览默认优先完整性，避免抽稀导致“破碎小三角”观感。
+constexpr size_t kModelPreviewMaxFaces = 2000000;
 
 inline size_t ModelPreviewFaceStride(size_t faceCount) {
   if (faceCount <= kModelPreviewMaxFaces) return 1;

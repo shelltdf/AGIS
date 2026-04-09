@@ -40,6 +40,44 @@ std::wstring ArgValue(int argc, wchar_t** argv, const wchar_t* name) {
   return L"";
 }
 
+bool HasCjkChars(const std::wstring& s) {
+  for (wchar_t c : s) {
+    if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF) || (c >= 0xF900 && c <= 0xFAFF)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsKnownFlag(const wchar_t* s) {
+  if (!s) {
+    return false;
+  }
+  static const wchar_t* kFlags[] = {
+      L"--help",           L"-h",               L"/?",
+      L"--input",          L"--output",         L"--input-type",
+      L"--input-subtype",  L"--output-type",    L"--output-subtype",
+      L"--coord-system",   L"--vector-mode",    L"--elev-horiz-ratio",
+      L"--target-crs",     L"--output-unit",    L"--mesh-spacing",
+      L"--texture-format", L"--raster-max-dim",
+  };
+  for (const wchar_t* f : kFlags) {
+    if (_wcsicmp(s, f) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ValidateAsciiField(const std::wstring& v) {
+  for (wchar_t c : v) {
+    if (c > 0x7F) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::wstring NormalizeOutputUnitW(const std::wstring& s) {
   if (s.find(L"1000") != std::wstring::npos) {
     return L"1000km";
@@ -69,9 +107,25 @@ double OutputUnitToScale(const std::wstring& u) {
 
 }  // namespace
 
+bool IsChineseOsUi() {
+  const LANGID ui = GetUserDefaultUILanguage();
+  const WORD primary = PRIMARYLANGID(ui);
+  return primary == LANG_CHINESE;
+}
+
 bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out) {
   if (!out) {
     return false;
+  }
+  for (int i = 1; i < argc; ++i) {
+    const wchar_t* a = argv[i];
+    if (!a || !*a) {
+      continue;
+    }
+    if ((wcsncmp(a, L"--", 2) == 0 || a[0] == L'-' || (a[0] == L'/' && a[1] != L'\\')) && !IsKnownFlag(a)) {
+      std::wcerr << L"[ERROR] unsupported option: " << a << L"\n";
+      return false;
+    }
   }
   out->input = ArgValue(argc, argv, L"--input");
   out->output = ArgValue(argc, argv, L"--output");
@@ -118,6 +172,17 @@ bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out) {
     const long v = wcstol(rmax.c_str(), nullptr, 10);
     if (v >= 64 && v <= 16384) {
       out->raster_read_max_dim = static_cast<int>(v);
+    }
+  }
+  const std::wstring fields[] = {
+      out->input_type,      out->input_subtype, out->output_type, out->output_subtype,
+      out->coord_system,    out->vector_mode,   out->target_crs,  out->output_unit,
+      out->texture_format,
+  };
+  for (const auto& f : fields) {
+    if (!ValidateAsciiField(f) || HasCjkChars(f)) {
+      std::wcerr << L"[ERROR] non-path option values must be English/ASCII only.\n";
+      return false;
     }
   }
   return !out->input.empty() && !out->output.empty();
@@ -949,7 +1014,7 @@ void TargetHorizDeltaToApproxMeters(double refLonDeg, double refLatDeg, double p
 
 }  // namespace
 
-int ConvertGisToModel(const ConvertArgs& args) {
+int ConvertGisToModelImpl(const ConvertArgs& args) {
   std::filesystem::path outPath(args.output);
   std::error_code ec;
   if (std::filesystem::is_directory(outPath, ec) || outPath.extension().empty()) {
@@ -1661,12 +1726,20 @@ int ConvertGisToModel(const ConvertArgs& args) {
 }
 
 bool ModelSubtypeIsPointCloudW(const std::wstring& s) {
-  return s.find(L"点云") != std::wstring::npos || s.find(L"LAS") != std::wstring::npos ||
-         s.find(L"laz") != std::wstring::npos || s.find(L"LAZ") != std::wstring::npos;
+  std::wstring t = s;
+  for (auto& c : t) {
+    c = static_cast<wchar_t>(std::towlower(c));
+  }
+  return t.find(L"pointcloud") != std::wstring::npos || t.find(L"las") != std::wstring::npos ||
+         t.find(L"laz") != std::wstring::npos;
 }
 
 bool ModelSubtypeIsMeshW(const std::wstring& s) {
-  return s.find(L"3DMesh") != std::wstring::npos || s.find(L"网格") != std::wstring::npos;
+  std::wstring t = s;
+  for (auto& c : t) {
+    c = static_cast<wchar_t>(std::towlower(c));
+  }
+  return t.find(L"3dmesh") != std::wstring::npos || t.find(L"mesh") != std::wstring::npos;
 }
 
 struct LasPointFlt {
@@ -2324,7 +2397,7 @@ static int ConvertLasToMeshObjJob(const ConvertArgs& args) {
   return WriteTextFile(outObj.parent_path() / mtlName, mtlText);
 }
 
-int ConvertModelToModel(const ConvertArgs& args) {
+int ConvertModelToModelImpl(const ConvertArgs& args) {
   const bool inPc = ModelSubtypeIsPointCloudW(args.input_subtype);
   const bool outPc = ModelSubtypeIsPointCloudW(args.output_subtype);
   const bool inMesh = ModelSubtypeIsMeshW(args.input_subtype);
@@ -2339,7 +2412,7 @@ int ConvertModelToModel(const ConvertArgs& args) {
   return 9;
 }
 
-int ConvertGisToTile(const ConvertArgs& args) {
+int ConvertGisToTileImpl(const ConvertArgs& args) {
   const std::filesystem::path outDir(args.output);
   int rc = EnsureDir(outDir);
   if (rc != 0) return rc;
@@ -2349,7 +2422,7 @@ int ConvertGisToTile(const ConvertArgs& args) {
                        L"AGIS mock tile\nsource=" + args.input + L"\nsubtype=" + args.output_subtype + L"\n");
 }
 
-int ConvertModelToGis(const ConvertArgs& args) {
+int ConvertModelToGisImpl(const ConvertArgs& args) {
   const std::wstring geojson =
       L"{\n"
       L"  \"type\": \"FeatureCollection\",\n"
@@ -2360,17 +2433,17 @@ int ConvertModelToGis(const ConvertArgs& args) {
   return WriteTextFile(args.output, geojson);
 }
 
-int ConvertModelToTile(const ConvertArgs& args) {
-  return ConvertGisToTile(args);
+int ConvertModelToTileImpl(const ConvertArgs& args) {
+  return ConvertGisToTileImpl(args);
 }
 
-int ConvertTileToGis(const ConvertArgs& args) {
+int ConvertTileToGisImpl(const ConvertArgs& args) {
   const std::wstring gpkgMock =
       L"AGIS mock GIS dataset\nfrom tile source: " + args.input + L"\noutput subtype: " + args.output_subtype + L"\n";
   return WriteTextFile(args.output, gpkgMock);
 }
 
-int ConvertTileToModel(const ConvertArgs& args) {
+int ConvertTileToModelImpl(const ConvertArgs& args) {
   std::filesystem::path outPath(args.output);
   std::error_code ec;
   if (std::filesystem::is_directory(outPath, ec) || outPath.extension().empty()) {
@@ -2385,46 +2458,10 @@ int ConvertTileToModel(const ConvertArgs& args) {
 
 }  // namespace
 
-int RunConversion(ConvertMode mode, const wchar_t* title, const ConvertArgs& args) {
-  PrintConvertBanner(title, args);
-  if (!std::filesystem::exists(args.input)) {
-    std::wcerr << L"[ERROR] input not found: " << args.input << L"\n";
-    return 2;
-  }
-  std::wcout << L"[1/3] validating input ...\n";
-  std::this_thread::sleep_for(std::chrono::milliseconds(80));
-  std::wcout << L"[2/3] converting ...\n";
-  std::this_thread::sleep_for(std::chrono::milliseconds(120));
-  int rc = 5;
-  switch (mode) {
-    case ConvertMode::kGisToModel:
-      rc = ConvertGisToModel(args);
-      break;
-    case ConvertMode::kGisToTile:
-      rc = ConvertGisToTile(args);
-      break;
-    case ConvertMode::kModelToGis:
-      rc = ConvertModelToGis(args);
-      break;
-    case ConvertMode::kModelToTile:
-      rc = ConvertModelToTile(args);
-      break;
-    case ConvertMode::kTileToGis:
-      rc = ConvertTileToGis(args);
-      break;
-    case ConvertMode::kTileToModel:
-      rc = ConvertTileToModel(args);
-      break;
-    case ConvertMode::kModelToModel:
-      rc = ConvertModelToModel(args);
-      break;
-  }
-  std::wcout << L"[3/3] write output ...\n";
-  std::this_thread::sleep_for(std::chrono::milliseconds(60));
-  if (rc == 0) {
-    std::wcout << L"[DONE] success\n";
-  } else {
-    std::wcerr << L"[ERROR] conversion failed, code=" << rc << L"\n";
-  }
-  return rc;
-}
+int ConvertGisToModel(const ConvertArgs& args) { return ConvertGisToModelImpl(args); }
+int ConvertGisToTile(const ConvertArgs& args) { return ConvertGisToTileImpl(args); }
+int ConvertModelToGis(const ConvertArgs& args) { return ConvertModelToGisImpl(args); }
+int ConvertModelToModel(const ConvertArgs& args) { return ConvertModelToModelImpl(args); }
+int ConvertModelToTile(const ConvertArgs& args) { return ConvertModelToTileImpl(args); }
+int ConvertTileToGis(const ConvertArgs& args) { return ConvertTileToGisImpl(args); }
+int ConvertTileToModel(const ConvertArgs& args) { return ConvertTileToModelImpl(args); }

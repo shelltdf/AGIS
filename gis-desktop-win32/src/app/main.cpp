@@ -456,22 +456,22 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         const int totalW = client.right;
         if (g_splitterDrag == 1) {
           int nw = pt.x - kSplitterW / 2;
-          nw = std::max(kDockStripW + kLayerMin, std::min(nw, kDockStripW + kLayerMax));
+          nw = (std::max)(kDockStripW + kLayerMin, (std::min)(nw, kDockStripW + kLayerMax));
           const int rightBlock =
               (g_showPropsDock && g_propsDockExpanded)
                   ? (g_propsContentW + kDockStripW + kSplitterW)
                   : (g_showPropsDock ? kDockStripW : 0);
           const int maxLayer = totalW - kSplitterW - kMapMin - rightBlock;
-          nw = std::min(nw, std::max(kDockStripW + kLayerMin, maxLayer));
+          nw = (std::min)(nw, (std::max)(kDockStripW + kLayerMin, maxLayer));
           g_layerContentW = nw - kDockStripW;
         } else if (g_splitterDrag == 2) {
           int np = totalW - pt.x - kSplitterW / 2;
-          np = std::max(kDockStripW + kPropsMin, std::min(np, kDockStripW + kPropsMax));
+          np = (std::max)(kDockStripW + kPropsMin, (std::min)(np, kDockStripW + kPropsMax));
           const int leftBlock = (g_showLayerDock && g_layerDockExpanded)
                                     ? (g_layerContentW + kDockStripW + kSplitterW)
                                     : (g_showLayerDock ? kDockStripW : 0);
           const int maxProps = totalW - leftBlock - kMapMin - kSplitterW;
-          np = std::min(np, std::max(kDockStripW + kPropsMin, maxProps));
+          np = (std::min)(np, (std::max)(kDockStripW + kPropsMin, maxProps));
           g_propsContentW = np - kDockStripW;
         }
         LayoutChildren();
@@ -569,7 +569,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
     UiGdiplusShutdown();
     return 1;
   }
-  ShowWindow(hwnd, cmdShow);
+  (void)cmdShow;
+  ShowWindow(hwnd, SW_MAXIMIZE);
   UpdateWindow(hwnd);
   MSG msg{};
   while (GetMessageW(&msg, nullptr, 0, 0)) {
