@@ -297,9 +297,19 @@ target_link_libraries(agis_desktop PRIVATE
 
 target_compile_definitions(agis_desktop PRIVATE AGIS_USE_BGFX=1 BX_CONFIG_DEBUG=0)
 target_link_libraries(agis_desktop PRIVATE agis_bgfx_vendor)
-target_sources(agis_desktop PRIVATE src/app/model_preview_bgfx.cpp)
+target_sources(agis_desktop PRIVATE
+  src/app/model_preview_bgfx.cpp
+  ${AGIS_BGFX_DIR}/examples/common/imgui/imgui.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_draw.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_tables.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_widgets.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
+)
 target_include_directories(agis_desktop PRIVATE
   ${AGIS_BGFX_DIR}/examples/17-drawstress
+  ${AGIS_BGFX_DIR}/examples/common
+  ${AGIS_BGFX_DIR}/examples/common/imgui
   ${AGIS_BGFX_DIR}/examples/common/debugdraw
 )
 # bx/bgfx 头文件要求 C++20（与 agis_bgfx_vendor 一致）

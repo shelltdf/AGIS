@@ -31,6 +31,7 @@ struct ConvertArgs {
 bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out);
 void PrintConvertBanner(const wchar_t* title, const ConvertArgs& args);
 bool IsChineseOsUi();
+void EnableRealtimeConsoleFlush();
 int ConvertGisToModel(const ConvertArgs& args);
 int ConvertGisToTile(const ConvertArgs& args);
 int ConvertModelToGis(const ConvertArgs& args);

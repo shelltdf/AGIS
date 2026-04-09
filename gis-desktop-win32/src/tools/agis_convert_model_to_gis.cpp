@@ -55,6 +55,7 @@ int RunDirect(const wchar_t* title, const ConvertArgs& args) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  EnableRealtimeConsoleFlush();
   if (IsHelpRequestedLocal(argc, argv)) {
     PrintHelp();
     return 0;

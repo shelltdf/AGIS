@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
@@ -111,6 +112,13 @@ bool IsChineseOsUi() {
   const LANGID ui = GetUserDefaultUILanguage();
   const WORD primary = PRIMARYLANGID(ui);
   return primary == LANG_CHINESE;
+}
+
+void EnableRealtimeConsoleFlush() {
+  std::wcout.setf(std::ios::unitbuf);
+  std::wcerr.setf(std::ios::unitbuf);
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
 }
 
 bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out) {
@@ -1015,6 +1023,11 @@ void TargetHorizDeltaToApproxMeters(double refLonDeg, double refLatDeg, double p
 }  // namespace
 
 int ConvertGisToModelImpl(const ConvertArgs& args) {
+  auto reportProgress = [](int pct, const wchar_t* text) {
+    const int p = (std::clamp)(pct, 0, 100);
+    std::wcout << L"[PROGRESS " << p << L"] " << (text ? text : L"") << L"\n";
+  };
+  reportProgress(3, L"初始化输出路径");
   std::filesystem::path outPath(args.output);
   std::error_code ec;
   if (std::filesystem::is_directory(outPath, ec) || outPath.extension().empty()) {
@@ -1037,11 +1050,15 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   OGRCoordinateTransformationH rasterToTarget = nullptr;
   /** 目标 CRS → 栅格 CRS：用于规则网格顶点在贴图上的 UV（与高分辨率栅格一致）。 */
   OGRCoordinateTransformationH targetToRasterUv = nullptr;
+  OGRSpatialReferenceH cecfGeoSr = nullptr;
+  OGRCoordinateTransformationH cecfFromRasterToGeo = nullptr;
+  OGRCoordinateTransformationH cecfFromTargetToGeo = nullptr;
   /** 已为顶点写出「栅格像元」UV；为 false 时 _albedo 仍用网格 ni×nj 与 vt 一致（如 cecf）。 */
   bool meshAlbedoUseFullRasterUv = false;
 #endif
   const std::filesystem::path inPath(args.input);
   const bool isGis = _wcsicmp(inPath.extension().wstring().c_str(), L".gis") == 0;
+  reportProgress(8, L"解析输入源");
   if (isGis) {
     doc = ParseGisDocInfo(inPath);
     sources = ParseGisLayerSources(inPath);
@@ -1050,6 +1067,7 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   }
 #if GIS_DESKTOP_HAVE_GDAL
   GDALAllRegister();
+  reportProgress(15, L"加载栅格/矢量数据");
   if (isGis) {
     for (const auto& s : sources) {
       if (TryReadRaster(s, &raster, args.raster_read_max_dim)) {
@@ -1118,6 +1136,18 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   const int rh = raster.ok ? raster.h : 25;
   int mw = rw;
   int mh = rh;
+  if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0) {
+    // cecf 全局球面场景限制面数，防止超大 OBJ 导致预览抽稀后看起来“缺块”。
+    constexpr int64_t kMaxFacesBudget = 1800000;
+    constexpr int64_t kMaxCells = kMaxFacesBudget / 2;
+    int64_t cells = static_cast<int64_t>(mw - 1) * static_cast<int64_t>(mh - 1);
+    if (cells > kMaxCells) {
+      const double s = std::sqrt(static_cast<double>(kMaxCells) / static_cast<double>(cells));
+      mw = (std::max)(2, 1 + static_cast<int>(std::floor((mw - 1) * s)));
+      mh = (std::max)(2, 1 + static_cast<int>(std::floor((mh - 1) * s)));
+      std::wcout << L"[MESH] cecf face budget clamp: " << mw << L"x" << mh << L"\n";
+    }
+  }
   std::vector<float> meshElevBuf;
   std::vector<unsigned char> meshRgbBuf;
   double meshTminX = 0.0;
@@ -1144,6 +1174,7 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   }
   if (raster.ok && rasterToTarget && rasterSr && targetSr && _wcsicmp(args.coord_system.c_str(), L"cecf") != 0 &&
       meshSpIn >= 1 && rw >= 2 && rh >= 2) {
+    reportProgress(28, L"构建目标规则网格");
     auto pixWorld = [&](int ix, int iy) {
       const double pxw = raster.gt[0] + ix * raster.gt[1] + iy * raster.gt[2];
       const double pyw = raster.gt[3] + ix * raster.gt[4] + iy * raster.gt[5];
@@ -1214,6 +1245,18 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     int nj = kcell + 1;
     ni = (std::clamp)(ni, 2, 4096);
     nj = (std::clamp)(nj, 2, 4096);
+    {
+      const int64_t maxFacesBudget = (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0) ? 1800000LL : 3000000LL;
+      const int64_t maxCells = (std::max)(1LL, maxFacesBudget / 2);
+      int64_t cells = static_cast<int64_t>(ni - 1) * static_cast<int64_t>(nj - 1);
+      if (cells > maxCells) {
+        const double s = std::sqrt(static_cast<double>(maxCells) / static_cast<double>(cells));
+        ni = (std::max)(2, 1 + static_cast<int>(std::floor((ni - 1) * s)));
+        nj = (std::max)(2, 1 + static_cast<int>(std::floor((nj - 1) * s)));
+        cells = static_cast<int64_t>(ni - 1) * static_cast<int64_t>(nj - 1);
+        std::wcout << L"[MESH] face budget clamp: cells -> " << cells << L", maxCells=" << maxCells << L"\n";
+      }
+    }
     std::wcout << L"[MESH] grid (ni x nj) " << ni << L" x " << nj << L" interior cells ~ 2:1, stepK ~ " << stepK
                << L"\n";
     OGRCoordinateTransformationH targetToRasterMesh = OCTNewCoordinateTransformation(targetSr, rasterSr);
@@ -1257,6 +1300,7 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     }
   }
 #endif
+  reportProgress(62, L"写出几何与纹理坐标");
   const int w = mw;
   const int h = mh;
   const int gridW = w - 1;
@@ -1417,6 +1461,55 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     ss << L"# raster_bbox_native (GeoTransform axis-aligned hull in raster source CRS; for global EPSG:4326 "
           L"expect ~lon [-180,180], lat [-90,90]): ["
        << rbMinX << L"," << rbMinY << L"] - [" << rbMaxX << L"," << rbMaxY << L"]\n";
+    if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0) {
+      std::wcout << L"[CECF-DEBUG] source CRS bbox: [" << rbMinX << L"," << rbMinY << L"] - [" << rbMaxX << L"," << rbMaxY
+                 << L"]\n";
+#if GIS_DESKTOP_HAVE_GDAL
+      if (cecfFromRasterToGeo) {
+        double lonMin = 1e300, lonMax = -1e300, latMin = 1e300, latMax = -1e300;
+        for (int ix : {0, rw - 1}) {
+          for (int iy : {0, rh - 1}) {
+            double px = raster.gt[0] + ix * raster.gt[1] + iy * raster.gt[2];
+            double py = raster.gt[3] + ix * raster.gt[4] + iy * raster.gt[5];
+            double pz = 0.0;
+            if (!OCTTransform(cecfFromRasterToGeo, 1, &px, &py, &pz)) {
+              continue;
+            }
+            lonMin = (std::min)(lonMin, px);
+            lonMax = (std::max)(lonMax, px);
+            latMin = (std::min)(latMin, py);
+            latMax = (std::max)(latMax, py);
+          }
+        }
+        if (lonMin <= lonMax && latMin <= latMax) {
+          const double lonSpan = lonMax - lonMin;
+          const double latSpan = latMax - latMin;
+          const bool nearGlobalLon = lonSpan >= 340.0;
+          const bool nearGlobalLat = latSpan >= 150.0;
+          const wchar_t* coverage = (nearGlobalLon && nearGlobalLat) ? L"GLOBAL_LIKE" : L"REGIONAL_LIKE";
+          std::wcout << L"[CECF-DEBUG] WGS84 bbox: [" << lonMin << L"," << latMin << L"] - [" << lonMax << L"," << latMax
+                     << L"], span(lon,lat)=(" << lonSpan << L"," << latSpan << L"), coverage=" << coverage << L"\n";
+          ss << L"# cecf_wgs84_bbox: [" << lonMin << L"," << latMin << L"] - [" << lonMax << L"," << latMax << L"]\n";
+          ss << L"# cecf_wgs84_span: lon=" << lonSpan << L", lat=" << latSpan << L", coverage=" << coverage << L"\n";
+        } else {
+          std::wcout << L"[CECF-DEBUG] WGS84 bbox: <transform failed>\n";
+          ss << L"# cecf_wgs84_bbox: <transform failed>\n";
+        }
+      } else
+#endif
+      {
+        const double lonSpan = rbMaxX - rbMinX;
+        const double latSpan = rbMaxY - rbMinY;
+        const bool nearGlobalLon = lonSpan >= 340.0;
+        const bool nearGlobalLat = latSpan >= 150.0;
+        const wchar_t* coverage = (nearGlobalLon && nearGlobalLat) ? L"GLOBAL_LIKE" : L"REGIONAL_LIKE";
+        std::wcout << L"[CECF-DEBUG] WGS84 bbox (fallback=native): [" << rbMinX << L"," << rbMinY << L"] - [" << rbMaxX << L","
+                   << rbMaxY << L"], span(lon,lat)=(" << lonSpan << L"," << latSpan << L"), coverage=" << coverage << L"\n";
+        ss << L"# cecf_wgs84_bbox (fallback=native): [" << rbMinX << L"," << rbMinY << L"] - [" << rbMaxX << L"," << rbMaxY
+           << L"]\n";
+        ss << L"# cecf_wgs84_span: lon=" << lonSpan << L", lat=" << latSpan << L", coverage=" << coverage << L"\n";
+      }
+    }
   }
   ss << L"# layers: " << doc.layerCount << L"\n"
      << L"# coord_system: " << args.coord_system << L"\n"
@@ -1444,11 +1537,48 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
                  << L" with geographic UV (not mesh vertex count)\n";
     }
   }
+  if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0) {
+    cecfGeoSr = OSRNewSpatialReference(nullptr);
+    if (cecfGeoSr) {
+      OSRSetWellKnownGeogCS(cecfGeoSr, "WGS84");
+      if (rasterSr) {
+        cecfFromRasterToGeo = OCTNewCoordinateTransformation(rasterSr, cecfGeoSr);
+      }
+      if (targetSr) {
+        cecfFromTargetToGeo = OCTNewCoordinateTransformation(targetSr, cecfGeoSr);
+      }
+    }
+  }
 #endif
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
       const float fx = (gridW > 0) ? static_cast<float>(x) / static_cast<float>(gridW) : 0.0f;
       const float fy = (gridH > 0) ? static_cast<float>(y) / static_cast<float>(gridH) : 0.0f;
+#if GIS_DESKTOP_HAVE_GDAL
+      if (haveTargetMesh && _wcsicmp(args.coord_system.c_str(), L"cecf") == 0) {
+        const double txv = meshTminX + static_cast<double>(fx) * (meshTmaxX - meshTminX);
+        const double tyv = meshTminY + static_cast<double>(fy) * (meshTmaxY - meshTminY);
+        const float pzf = meshElevBuf[static_cast<size_t>(y) * w + x];
+        double lonDeg = txv;
+        double latDeg = tyv;
+        if (cecfFromTargetToGeo) {
+          double tz = 0.0;
+          if (OCTTransform(cecfFromTargetToGeo, 1, &lonDeg, &latDeg, &tz)) {
+            // lonDeg/latDeg already converted to WGS84.
+          }
+        }
+        latDeg = (std::clamp)(latDeg, -89.999999, 89.999999);
+        const double lon = lonDeg * kPi / 180.0;
+        const double lat = latDeg * kPi / 180.0;
+        const double R = 6378137.0 + static_cast<double>(pzf) * elevRatio;
+        const double xEcef = R * std::cos(lat) * std::cos(lon) * unitS;
+        const double yEcef = R * std::cos(lat) * std::sin(lon) * unitS;
+        const double zEcef = R * std::sin(lat) * unitS;
+        ss << L"v " << xEcef << L" " << yEcef << L" " << zEcef << L"\n";
+        ss << L"vt " << fx << L" " << (1.0f - fy) << L"\n";
+        continue;
+      }
+#endif
       if (haveTargetMesh && _wcsicmp(args.coord_system.c_str(), L"cecf") != 0) {
         const double txv = meshTminX + static_cast<double>(fx) * (meshTmaxX - meshTminX);
         const double tyv = meshTminY + static_cast<double>(fy) * (meshTmaxY - meshTminY);
@@ -1491,14 +1621,25 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
       double py = miny + spanY * static_cast<double>(fy);
       double pz = 0.0;
       if (raster.ok) {
-        px = raster.gt[0] + x * raster.gt[1] + y * raster.gt[2];
-        py = raster.gt[3] + x * raster.gt[4] + y * raster.gt[5];
-        pz = raster.elev[static_cast<size_t>(y) * w + x];
+        const double col = static_cast<double>(fx) * static_cast<double>((std::max)(1, rw - 1));
+        const double row = static_cast<double>(fy) * static_cast<double>((std::max)(1, rh - 1));
+        px = raster.gt[0] + col * raster.gt[1] + row * raster.gt[2];
+        py = raster.gt[3] + col * raster.gt[4] + row * raster.gt[5];
+        pz = SampleBilinearF(raster.elev, rw, rh, col, row);
       }
       if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0) {
-        const double lon = px * kPi / 180.0;
-        const double lat = py * kPi / 180.0;
-        const double R = 6378137.0 + pz * 1000.0 * elevRatio;
+        double lonDeg = px;
+        double latDeg = py;
+#if GIS_DESKTOP_HAVE_GDAL
+        if (raster.ok && cecfFromRasterToGeo) {
+          double tz = 0.0;
+          OCTTransform(cecfFromRasterToGeo, 1, &lonDeg, &latDeg, &tz);
+        }
+#endif
+        latDeg = (std::clamp)(latDeg, -89.999999, 89.999999);
+        const double lon = lonDeg * kPi / 180.0;
+        const double lat = latDeg * kPi / 180.0;
+        const double R = 6378137.0 + pz * elevRatio;
         const double xEcef = R * std::cos(lat) * std::cos(lon) * unitS;
         const double yEcef = R * std::cos(lat) * std::sin(lon) * unitS;
         const double zEcef = R * std::sin(lat) * unitS;
@@ -1613,6 +1754,18 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     }
   }
 #if GIS_DESKTOP_HAVE_GDAL
+  if (cecfFromRasterToGeo) {
+    OCTDestroyCoordinateTransformation(cecfFromRasterToGeo);
+    cecfFromRasterToGeo = nullptr;
+  }
+  if (cecfFromTargetToGeo) {
+    OCTDestroyCoordinateTransformation(cecfFromTargetToGeo);
+    cecfFromTargetToGeo = nullptr;
+  }
+  if (cecfGeoSr) {
+    OSRDestroySpatialReference(cecfGeoSr);
+    cecfGeoSr = nullptr;
+  }
   if (targetToRasterUv) {
     OCTDestroyCoordinateTransformation(targetToRasterUv);
     targetToRasterUv = nullptr;
@@ -1634,6 +1787,7 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   if (rc != 0) {
     return rc;
   }
+  reportProgress(85, L"生成 PBR 贴图");
   const std::wstring texName = outPath.stem().wstring() + L"_albedo.png";
   const std::wstring normalName = outPath.stem().wstring() + L"_normal.png";
   const std::wstring roughName = outPath.stem().wstring() + L"_roughness.png";
@@ -1722,7 +1876,11 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
       L"map_Pr " + roughName + L"\n"
       L"map_Pm " + metalName + L"\n"
       L"map_AO " + aoName + L"\n";
-  return WriteTextFile(outPath.parent_path() / mtlName, mtlText);
+  const int mtlRc = WriteTextFile(outPath.parent_path() / mtlName, mtlText);
+  if (mtlRc == 0) {
+    reportProgress(100, L"转换完成");
+  }
+  return mtlRc;
 }
 
 bool ModelSubtypeIsPointCloudW(const std::wstring& s) {

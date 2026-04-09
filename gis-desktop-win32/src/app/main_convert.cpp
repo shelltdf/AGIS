@@ -40,6 +40,9 @@ namespace {
 PROCESS_INFORMATION g_convertPi{};
 bool g_convertRunning = false;
 constexpr UINT_PTR kConvertPollTimerId = 2;
+HANDLE g_convertPipeRead = nullptr;
+HANDLE g_convertPipeWrite = nullptr;
+int g_convertProgressFloor = 0;
 }  // namespace
 
 void WriteConvertLog(HWND hwnd, const wchar_t* line) {
@@ -52,6 +55,93 @@ void WriteConvertLog(HWND hwnd, const wchar_t* line) {
   std::wstring s = line;
   s += L"\r\n";
   SendMessageW(hLog, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(s.c_str()));
+}
+
+void SetConvertProgress(HWND hwnd, int pct, const std::wstring& statusPrefix) {
+  const int p = (std::clamp)((std::max)(pct, g_convertProgressFloor), 0, 100);
+  g_convertProgressFloor = p;
+  SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, p, 0);
+  wchar_t msg[256]{};
+  swprintf_s(msg, L"%s（%d%%）", statusPrefix.c_str(), p);
+  SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), msg);
+}
+
+bool TryParseBackendProgress(const std::wstring& line, int* outPct, std::wstring* outMsg) {
+  if (!outPct) return false;
+  const std::wstring tag = L"[PROGRESS";
+  const size_t p = line.find(tag);
+  if (p == std::wstring::npos) return false;
+  const size_t lsp = line.find(L' ', p);
+  const size_t rb = line.find(L']', p);
+  if (lsp == std::wstring::npos || rb == std::wstring::npos || lsp >= rb) return false;
+  const std::wstring num = line.substr(lsp + 1, rb - lsp - 1);
+  try {
+    const int v = std::stoi(num);
+    *outPct = (std::clamp)(v, 0, 100);
+  } catch (...) {
+    return false;
+  }
+  if (outMsg) {
+    if (rb + 1 < line.size()) {
+      *outMsg = line.substr(rb + 1);
+      while (!outMsg->empty() && (outMsg->front() == L' ' || outMsg->front() == L'\t')) {
+        outMsg->erase(outMsg->begin());
+      }
+    } else {
+      outMsg->clear();
+    }
+  }
+  return true;
+}
+
+void PollConvertPipeToLog(HWND hwnd) {
+  if (!g_convertPipeRead) return;
+  constexpr DWORD kMaxReadChunk = 32 * 1024;
+  constexpr DWORD kMaxDrainPerTick = 256 * 1024;
+  DWORD drained = 0;
+  for (;;) {
+    if (drained >= kMaxDrainPerTick) {
+      break;
+    }
+    DWORD avail = 0;
+    if (!PeekNamedPipe(g_convertPipeRead, nullptr, 0, nullptr, &avail, nullptr) || avail == 0) {
+      break;
+    }
+    const DWORD toRead = (std::min)(avail, kMaxReadChunk);
+    std::string chunk;
+    chunk.resize(toRead);
+    DWORD readBytes = 0;
+    if (!ReadFile(g_convertPipeRead, chunk.data(), toRead, &readBytes, nullptr) || readBytes == 0) {
+      break;
+    }
+    drained += readBytes;
+    int wn = MultiByteToWideChar(CP_UTF8, 0, chunk.data(), static_cast<int>(readBytes), nullptr, 0);
+    if (wn <= 0) {
+      wn = MultiByteToWideChar(CP_ACP, 0, chunk.data(), static_cast<int>(readBytes), nullptr, 0);
+      if (wn <= 0) continue;
+      std::wstring ws(static_cast<size_t>(wn), L'\0');
+      MultiByteToWideChar(CP_ACP, 0, chunk.data(), static_cast<int>(readBytes), ws.data(), wn);
+      if (!ws.empty()) {
+        WriteConvertLog(hwnd, ws.c_str());
+        int pct = 0;
+        std::wstring msg;
+        if (TryParseBackendProgress(ws, &pct, &msg)) {
+          SetConvertProgress(hwnd, pct, msg.empty() ? L"处理中：后端上报进度" : msg);
+        }
+      }
+      continue;
+    }
+    std::wstring ws(static_cast<size_t>(wn), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, chunk.data(), static_cast<int>(readBytes), ws.data(), wn);
+    if (!ws.empty()) {
+      WriteConvertLog(hwnd, ws.c_str());
+      int pct = 0;
+      std::wstring msg;
+      if (TryParseBackendProgress(ws, &pct, &msg)) {
+        SetConvertProgress(hwnd, pct, msg.empty() ? L"处理中：后端上报进度" : msg);
+      }
+    }
+  }
 }
 void LayoutConvertWindow(HWND hwnd) {
   RECT rc{};
@@ -440,26 +530,8 @@ void RefreshConvertSettingPanels(HWND hwnd) {
   GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), inPath, 512);
   GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), outPath, 512);
 
-  const std::wstring inputText =
-      L"input-type=" + inType + L"\r\n"
-      L"input-subtype=" + inSub + L"\r\n"
-      L"input-path=" + std::wstring(inPath) + L"\r\n";
-
-  const std::wstring outputText =
-      L"output-type=" + outType + L"\r\n"
-      L"output-subtype=" + outSub + L"\r\n"
-      L"coord-system=" + GetModelCoordArg(hwnd) + L"\r\n"
-      L"vector-mode=" + GetVectorModeArg(hwnd) + L"\r\n"
-      L"elev-horiz-ratio=" + std::to_wstring(GetElevHorizRatioArg(hwnd)) + L"\r\n"
-      L"target-crs=" + GetTargetCrsArg(hwnd) + L"\r\n"
-      L"output-unit=" + GetOutputUnitArg(hwnd) + L"\r\n"
-      L"mesh-spacing=" + std::to_wstring(GetMeshSpacingArg(hwnd)) + L"\r\n"
-      L"texture-format=" + GetTextureFormatArg(hwnd) + L"\r\n"
-      L"raster-max-dim=" + std::to_wstring(GetRasterReadMaxDimArg(hwnd)) + L"\r\n"
-      L"output-path=" + std::wstring(outPath) + L"\r\n";
-
-  SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_SETTING), inputText.c_str());
-  SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SETTING), outputText.c_str());
+  const std::wstring hint = L"输入: " + inType + L"/" + inSub + L" | 输出: " + outType + L"/" + outSub;
+  SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), hint.c_str());
 }
 
 #if GIS_DESKTOP_HAVE_GDAL
@@ -930,11 +1002,38 @@ bool RunConvertBackendAsync(HWND hwnd) {
   cmdBuf.push_back(L'\0');
   STARTUPINFOW si{};
   si.cb = sizeof(si);
-  PROCESS_INFORMATION pi{};
-  if (!CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-    WriteConvertLog(hwnd, (std::wstring(L"[错误] 无法启动：") + exeName).c_str());
+  SECURITY_ATTRIBUTES sa{};
+  sa.nLength = sizeof(sa);
+  sa.lpSecurityDescriptor = nullptr;
+  sa.bInheritHandle = TRUE;
+  if (g_convertPipeRead) {
+    CloseHandle(g_convertPipeRead);
+    g_convertPipeRead = nullptr;
+  }
+  if (g_convertPipeWrite) {
+    CloseHandle(g_convertPipeWrite);
+    g_convertPipeWrite = nullptr;
+  }
+  if (!CreatePipe(&g_convertPipeRead, &g_convertPipeWrite, &sa, 0)) {
+    WriteConvertLog(hwnd, L"[错误] 无法创建输出管道。");
     return false;
   }
+  SetHandleInformation(g_convertPipeRead, HANDLE_FLAG_INHERIT, 0);
+  si.dwFlags |= STARTF_USESTDHANDLES;
+  si.hStdOutput = g_convertPipeWrite;
+  si.hStdError = g_convertPipeWrite;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+    WriteConvertLog(hwnd, (std::wstring(L"[错误] 无法启动：") + exeName).c_str());
+    CloseHandle(g_convertPipeRead);
+    CloseHandle(g_convertPipeWrite);
+    g_convertPipeRead = nullptr;
+    g_convertPipeWrite = nullptr;
+    return false;
+  }
+  CloseHandle(g_convertPipeWrite);
+  g_convertPipeWrite = nullptr;
   g_convertPi = pi;
   g_convertRunning = true;
   SetTimer(hwnd, kConvertPollTimerId, 120, nullptr);
@@ -1048,19 +1147,17 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     116, 240, 200, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_INFO)),
                     GetModuleHandleW(nullptr), nullptr);
 
-      CreateWindowW(L"STATIC", L"输入参数（来源）", WS_CHILD | WS_VISIBLE, 280, 8, 140, 16, hwnd,
+      CreateWindowW(L"BUTTON", L"输入设置", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 280, 8, 240, 112, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_SETTING_LBL)),
                     GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"EDIT", L"",
-                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 280,
-                    30, 240, 90, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_SETTING)),
+      CreateWindowW(L"STATIC", L"输入侧参数由左侧类型/子类型驱动", WS_CHILD | WS_VISIBLE, 292, 34, 220, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_SETTING)),
                     GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"STATIC", L"输出参数（目标）", WS_CHILD | WS_VISIBLE, 280, 126, 140, 16, hwnd,
+      CreateWindowW(L"BUTTON", L"输出设置", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 280, 126, 240, 176, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_SETTING_LBL)),
                     GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"EDIT", L"",
-                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 280,
-                    146, 240, 90, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_SETTING)),
+      CreateWindowW(L"STATIC", L"输出侧参数请在本列直接编辑", WS_CHILD | WS_VISIBLE, 292, 152, 220, 18, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_SETTING)),
                     GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"STATIC", L"高程/水平比（1 = 1:1）：", WS_CHILD | WS_VISIBLE, 280, 238, 200, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_ELEV_HORIZ_LBL)), GetModuleHandleW(nullptr),
@@ -1416,35 +1513,40 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         const std::wstring outLine = std::wstring(L"[任务] 输出：") + outType + L" / " + outSub;
         WriteConvertLog(hwnd, inLine.c_str());
         WriteConvertLog(hwnd, outLine.c_str());
-        SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 15, 0);
-        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"处理中：正在启动后端命令行程序...");
+        g_convertProgressFloor = 0;
+        SetConvertProgress(hwnd, 15, L"处理中：正在启动后端命令行程序");
         if (!RunConvertBackendAsync(hwnd)) {
-          SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 0, 0);
-          SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"失败：后端未能启动。");
+          SetConvertProgress(hwnd, 0, L"失败：后端未能启动");
         } else {
-          SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 35, 0);
-          SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), L"处理中：转换任务后台运行中...");
+          SetConvertProgress(hwnd, 35, L"处理中：转换任务后台运行中");
         }
         return 0;
       }
       break;
     case WM_TIMER:
       if (wParam == kConvertPollTimerId && g_convertRunning && g_convertPi.hProcess) {
+        PollConvertPipeToLog(hwnd);
         const DWORD wait = WaitForSingleObject(g_convertPi.hProcess, 0);
         if (wait == WAIT_TIMEOUT) {
+          const int next = (std::min)(95, g_convertProgressFloor + 1);
+          SetConvertProgress(hwnd, next, L"处理中：后端执行中");
           return 0;
         }
         KillTimer(hwnd, kConvertPollTimerId);
+        PollConvertPipeToLog(hwnd);
         DWORD code = 1;
         GetExitCodeProcess(g_convertPi.hProcess, &code);
         CloseHandle(g_convertPi.hThread);
         CloseHandle(g_convertPi.hProcess);
+        if (g_convertPipeRead) {
+          CloseHandle(g_convertPipeRead);
+          g_convertPipeRead = nullptr;
+        }
         ZeroMemory(&g_convertPi, sizeof(g_convertPi));
         g_convertRunning = false;
         WriteConvertLog(hwnd, (std::wstring(L"[后端] 退出码：") + std::to_wstring(code)).c_str());
         const bool ok = (code == 0);
-        SendMessageW(GetDlgItem(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, ok ? 100 : 0, 0);
-        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), ok ? L"完成：转换成功。" : L"失败：后端执行出错。");
+        SetConvertProgress(hwnd, ok ? 100 : 0, ok ? L"完成：转换成功" : L"失败：后端执行出错");
         return 0;
       }
       break;
@@ -1456,6 +1558,10 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, kConvertPollTimerId);
         if (g_convertPi.hThread) CloseHandle(g_convertPi.hThread);
         if (g_convertPi.hProcess) CloseHandle(g_convertPi.hProcess);
+        if (g_convertPipeRead) CloseHandle(g_convertPipeRead);
+        if (g_convertPipeWrite) CloseHandle(g_convertPipeWrite);
+        g_convertPipeRead = nullptr;
+        g_convertPipeWrite = nullptr;
         ZeroMemory(&g_convertPi, sizeof(g_convertPi));
         g_convertRunning = false;
       }
