@@ -35,7 +35,7 @@ void PrintHelp() {
                << L"  --target-crs <EPSG:xxxx|WKT>\n"
                << L"  --output-unit <m|km|1000km>\n"
                << L"  --mesh-spacing <1..1000000>\n"
-               << L"  --texture-format <png|tif|tga|bmp>\n"
+               << L"  --texture-format <png|tif|tga|bmp|ktx2|ktx2-etc1s>\n"
                << L"  --raster-max-dim <0|64..16384>  (0=默认不降采样)\n";
   } else {
     std::wcout << L"Usage:\n"
@@ -58,7 +58,7 @@ void PrintHelp() {
                << L"  --target-crs <EPSG:xxxx|WKT>\n"
                << L"  --output-unit <m|km|1000km>\n"
                << L"  --mesh-spacing <1..1000000>\n"
-               << L"  --texture-format <png|tif|tga|bmp>\n"
+               << L"  --texture-format <png|tif|tga|bmp|ktx2|ktx2-etc1s>\n"
                << L"  --raster-max-dim <0|64..16384>  (0=native default)\n";
   }
 }

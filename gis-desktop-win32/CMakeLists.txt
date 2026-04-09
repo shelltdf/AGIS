@@ -31,6 +31,9 @@ option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatfor
 option(AGIS_USE_LASZIP
   "Bundle LASzip from ../3rdparty/LASzip for LAZ in model preview (AGIS_HAVE_LASZIP=1 when sources are present). Default ON; set OFF to skip."
   ON)
+option(AGIS_USE_BASISU
+  "Bundle basis_universal from ../3rdparty/basis_universal for KTX2 tile textures (AGIS_HAVE_BASISU=1 when sources are present). Default ON; set OFF to skip."
+  ON)
 # 模型预览与其它 bgfx 路径依赖 bx/bimg；关闭 unsupported（勿传 -DAGIS_USE_BGFX=OFF）。
 option(AGIS_USE_BGFX "强制：须为 ON。模型预览使用 bgfx/bx/bimg，关闭不受支持。" ON)
 if(NOT AGIS_USE_BGFX)
@@ -128,6 +131,16 @@ if(AGIS_USE_LASZIP)
   include(cmake/AGISBundledLASzip.cmake)
 else()
   message(STATUS "AGIS: AGIS_USE_LASZIP=OFF — bundled LASzip skipped (LAZ relies on GDAL if available)")
+endif()
+
+# --- basis_universal（../3rdparty/basis_universal，KTX2 + Basis + mip；勿 git clone，见 README-BASIS-KTX2.md）---
+set(AGIS_HAVE_BASISU FALSE)
+set(AGIS_BASISU_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/basis_universal" CACHE PATH
+  "basis_universal source root (extracted zip; see ../3rdparty/README-BASIS-KTX2.md)")
+if(AGIS_USE_BASISU)
+  include(cmake/AGISBundledBasisUniversal.cmake)
+else()
+  message(STATUS "AGIS: AGIS_USE_BASISU=OFF — KTX2 texture output skipped")
 endif()
 
 # --- Draco（../3rdparty/draco，3D Tiles / glTF KHR_draco_mesh_compression；须先于 agis_desktop link）---
@@ -268,13 +281,13 @@ endif()
 add_executable(agis_desktop WIN32
   src/app/main.cpp
   src/app/main_globals.cpp
-  src/app/main_gis_xml.cpp
-  src/app/main_gis_document.cpp
+  src/app/gis_document/main_gis_xml.cpp
+  src/app/gis_document/main_gis_document.cpp
   src/app/main_chrome.cpp
   src/app/main_panels.cpp
   src/app/main_convert.cpp
-  src/app/main_model_preview.cpp
-  src/app/tiles_gltf_loader.cpp
+  src/app/preview/main_model_preview.cpp
+  src/app/preview/tiles_gltf_loader.cpp
   src/app/ui_font.cpp
   src/app/ui_theme.cpp
   src/app/help_data_drivers.cpp
@@ -318,7 +331,7 @@ target_link_libraries(agis_desktop PRIVATE
 target_compile_definitions(agis_desktop PRIVATE AGIS_USE_BGFX=1 BX_CONFIG_DEBUG=0)
 target_link_libraries(agis_desktop PRIVATE agis_bgfx_vendor)
 target_sources(agis_desktop PRIVATE
-  src/app/model_preview_bgfx.cpp
+  src/app/preview/model_preview_bgfx.cpp
   ${AGIS_BGFX_DIR}/examples/common/imgui/imgui.cpp
   ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui.cpp
   ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_draw.cpp
@@ -360,6 +373,11 @@ if(AGIS_HAVE_LASZIP)
     "${AGIS_LASZIP_ROOT}/dll"
     "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
   target_link_libraries(agis_desktop PRIVATE "${AGIS_LASZIP_TARGET}")
+endif()
+if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=1)
+else()
+  target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=0)
 endif()
 
 if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
@@ -440,10 +458,14 @@ if(MSVC)
 endif()
 
 # 7 个数据转换后端命令行工具（3 类型互转 6 过程 + 模型↔模型 1 过程）
-add_library(agis_convert_backend_common STATIC
+set(_agis_convert_backend_sources
   src/tools/convert_backend_common.cpp
   src/app/agis_gdal_runtime_env.cpp
 )
+if(AGIS_HAVE_BASISU)
+  list(APPEND _agis_convert_backend_sources src/tools/ktx2_basis_encode.cpp)
+endif()
+add_library(agis_convert_backend_common STATIC ${_agis_convert_backend_sources})
 target_include_directories(agis_convert_backend_common PRIVATE ${CMAKE_SOURCE_DIR}/src)
 if(AGIS_USE_GDAL AND GDAL_FOUND)
   target_link_libraries(agis_convert_backend_common PRIVATE GDAL::GDAL)
@@ -460,6 +482,21 @@ if(AGIS_HAVE_LASZIP)
     "${AGIS_LASZIP_ROOT}/dll"
     "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
   target_link_libraries(agis_convert_backend_common PRIVATE "${AGIS_LASZIP_TARGET}")
+endif()
+if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_convert_backend_common PRIVATE
+    AGIS_HAVE_BASISU=1
+    BASISD_SUPPORT_KTX2=1
+  )
+  if(BASISU_ZSTD)
+    target_compile_definitions(agis_convert_backend_common PRIVATE BASISD_SUPPORT_KTX2_ZSTD=1)
+  else()
+    target_compile_definitions(agis_convert_backend_common PRIVATE BASISD_SUPPORT_KTX2_ZSTD=0)
+  endif()
+  target_include_directories(agis_convert_backend_common PRIVATE "${AGIS_BASISU_ROOT}")
+  target_link_libraries(agis_convert_backend_common PRIVATE basisu_encoder)
+else()
+  target_compile_definitions(agis_convert_backend_common PRIVATE AGIS_HAVE_BASISU=0)
 endif()
 
 set(_agis_convert_tools

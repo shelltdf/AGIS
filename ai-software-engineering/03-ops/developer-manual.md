@@ -17,7 +17,7 @@
   - CMake 优先 **`find_package(PROJ/GDAL)`**（如 **`3rdparty/proj-install`**、**`3rdparty/gdal-install`**）；否则对 **`3rdparty/proj-9.8.0`**、**`3rdparty/gdal-3.12.3`** 做 **`add_subdirectory`** 捆绑编译，见 **`3rdparty/README-GDAL-BUILD.md`**（含 SQLite3 / `sqlite3.exe` 前提）。捆绑路径下 **`cmake/AGISBundledGDAL.cmake`** 在检测到 **`agis_sqlite3`** 时会强制 **`GDAL_ENABLE_DRIVER_MBTILES`** 及 OGR **GPKG/MVT**（MBTiles 驱动的 CMake 依赖链）；若曾无 SQLite 配置过 GDAL，需重新 **CMake 配置** 并 **整库重编 GDAL** 后，`agis_convert_*` 中 **`GDALGetDriverByName("MBTiles")`** 才可用。  
   - **`GDAL_DATA`**：捆绑构建会将 **`gcore/data`**（含 **`tms_NZTM2000.json`** 等）阶段到 **`build/gdal_data`**，并在 **`POST_BUILD`** 复制到 **`AGIS.exe` / 各 `agis_convert_*.exe` 同级的 **`gdal_data/`**；`AgisEnsureGdalDataPath`（`agis_gdal_runtime_env.cpp`）在 **`GDALAllRegister` 之前** 自 exe 目录向上探测并 **`CPLSetConfigOption("GDAL_DATA", …)`**，避免出现 “**GDAL_DATA is not defined**” 类告警。若单独拷贝转换工具到其它机器，请连同 **`gdal_data`** 一并发布，或在外部设置 **`GDAL_DATA`** 环境变量。
   - **LAZ 与 LASzip**：**推荐**将 LASzip **Release 源码包**解压到 **`3rdparty/LASzip`**（**勿用 git clone**；步骤见 **`3rdparty/README-LASZIP.md`**）。CMake 检测到后将 **静态链接** LASzip，`*.laz` 预览 **优先走 LASzip C API**。**回退**：若未放置源码或打开失败，且 **`AGIS_USE_GDAL=ON`**，则仍尝试 **`GDALOpenEx`** 矢量读 LAZ（此时依赖 GDAL 侧 LASzip/LAS 配置，失败见 CPL 提示）。两者皆不可用时预览会提示最小依赖说明。  
-  - **3D Tiles 三维预览（无 vcpkg）**：主程序使用 **`3rdparty/tinygltf`** + **`3rdparty/nlohmann/json.hpp`**，在 **`gis-desktop-win32/src/app/tiles_gltf_loader.cpp`** 解析 **本地** **`b3dm`/`i3dm`/`glb`/`cmpt`/`pnts`** 与 glTF。**Draco**：**勿 `git clone`**；按 **`3rdparty/README-DRACO.md`** 下载 **Release 归档**（推荐 **1.5.7** zip）解压并重命名为 **`3rdparty/draco`**；**`cmake/AGISBundledDraco.cmake`** 静态链入并定义 **`TINYGLTF_ENABLE_DRACO`** 以支持 **`KHR_draco_mesh_compression`**。**CMake** 须将 **`../3rdparty` 与 `../3rdparty/tinygltf` 置于 bgfx `examples/common` 之后**，否则会错误包含 **`3rdparty/imgui`** 导致 `imguiCreate` 未定义。可选 **Cesium cesium-native**（强依赖 vcpkg）仅供对照，见 **`3rdparty/README-CESIUM-NATIVE.md`**。
+  - **3D Tiles 三维预览（无 vcpkg）**：主程序使用 **`3rdparty/tinygltf`** + **`3rdparty/nlohmann/json.hpp`**，在 **`gis-desktop-win32/src/app/preview/tiles_gltf_loader.cpp`** 解析 **本地** **`b3dm`/`i3dm`/`glb`/`cmpt`/`pnts`** 与 glTF。**Draco**：**勿 `git clone`**；按 **`3rdparty/README-DRACO.md`** 下载 **Release 归档**（推荐 **1.5.7** zip）解压并重命名为 **`3rdparty/draco`**；**`cmake/AGISBundledDraco.cmake`** 静态链入并定义 **`TINYGLTF_ENABLE_DRACO`** 以支持 **`KHR_draco_mesh_compression`**。**CMake** 须将 **`../3rdparty` 与 `../3rdparty/tinygltf` 置于 bgfx `examples/common` 之后**，否则会错误包含 **`3rdparty/imgui`** 导致 `imguiCreate` 未定义。可选 **Cesium cesium-native**（强依赖 vcpkg）仅供对照，见 **`3rdparty/README-CESIUM-NATIVE.md`**。
   - 显式 **`AGIS_USE_GDAL=off`** 可编无 GIS 壳程序；脚本会合并已有 `proj-install` / `gdal-install` 到 **`CMAKE_PREFIX_PATH`**。  
 - 无 GDAL 或暂不想链接时：
 
@@ -81,14 +81,7 @@ python publish.py
 
 ## 8. 模型预览维护
 
-- 当前实现位于 `gis-desktop-win32/src/app/main.cpp`，包含：
-  - OBJ/MTL 解析（`ParseObjModel` / `ParseMtlMaterials`）；
-  - OpenGL 预览后端；
-  - DirectX11 预览后端；
-  - 预览窗口消息处理与 UI 交互逻辑。
-- **性能**：不对空闲视口做固定帧率刷新；当面片数极大时对绘制列表按步长抽稀（上限约 12 万面），减轻立即模式 GL 压力。
-- **适配**：`FitPreviewCamera` 使用的 `zoom` 与渲染中的 `1/extent` 归一化一致，避免重复按包围盒缩放。
-- 若后续做结构化重构，建议拆分为：
-  - `src/app/model_preview.h/.cpp`（窗口与渲染）
-  - `src/app/model_preview_parser.h/.cpp`（OBJ/MTL 解析）
-  并在 `CMakeLists.txt` 给 `agis_desktop` 追加源文件。
+- **源码目录**：`gis-desktop-win32/src/app/preview/`（`main_model_preview.cpp`、`model_preview_bgfx.*`、`model_preview_types.h`、`tiles_gltf_loader.*`）。**窗口类注册**仍在 `src/app/main.cpp`（`ModelPreviewWndProc` / `TilePreviewWndProc`）。
+- **渲染**：正式构建为 **bgfx**（`AGIS_USE_BGFX=ON`）；`main_model_preview.cpp` 内 `#if !AGIS_USE_BGFX` 分支为历史参照。
+- **性能**：不对空闲视口做固定帧率滥用刷新；面片/点云有预算与抽稀（参见 `02-physical/gis-desktop-win32/spec.md` 2.8）。
+- **适配**：`FitPreviewCamera` 等与包围盒/zoom 一致，避免重复缩放。

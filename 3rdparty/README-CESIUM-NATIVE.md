@@ -9,7 +9,7 @@
 ## 与 AGIS 主程序的关系
 
 - **当前 AGIS 工程**未默认链接 cesium-native：主工程已捆绑 **GDAL/PROJ/curl** 等；cesium-native 官方构建强依赖 **vcpkg**，若你希望 **完全不用 vcpkg**，请勿在 AGIS 主 CMake 内衔接 cesium-native。
-- **内置「3D Tiles 三维预览」**（数据转换侧子类型为 **3dtiles** 时）走 **`tinygltf` + `nlohmann/json`**（源码在 `3rdparty/tinygltf/`、`3rdparty/nlohmann/`），于 **`tiles_gltf_loader.cpp`** 中解析 **本地** **`b3dm` / `i3dm`(glb) / `glb` / `cmpt` / `pnts`**，再进入既有 **bgfx** 模型预览。**KHR_draco_mesh_compression** 需按 **`3rdparty/README-DRACO.md`** 放置 **`3rdparty/draco`**（Release 包，勿 git clone）。仍 **不**支持仅 **`http(s)`** 外链 `content.uri` 等（见错误提示）。
+- **内置「3D Tiles 三维预览」**（数据转换侧子类型为 **3dtiles** 时）走 **`tinygltf` + `nlohmann/json`**（源码在 `3rdparty/tinygltf/`、`3rdparty/nlohmann/`），于 **`gis-desktop-win32/src/app/preview/tiles_gltf_loader.cpp`** 中解析 **本地** **`b3dm` / `i3dm`(glb) / `glb` / `cmpt` / `pnts`**，再进入既有 **bgfx** 模型预览。**KHR_draco_mesh_compression** 需按 **`3rdparty/README-DRACO.md`** 放置 **`3rdparty/draco`**（Release 包，勿 git clone）。仍 **不**支持仅 **`http(s)`** 外链 `content.uri` 等（见错误提示）。
 - **「瓦片预览」窗口**（`TilePreviewWndProc`）仍为 **XYZ 栅格拼图 + 3D Tiles 文案/统计**；与上述 **模型预览窗**（`OpenModelPreviewWindow3DTiles`）分流。
 - 若要将 **cesium-native** 编进 AGIS：建议 **先在独立 build 目录** 按官方文档完成 **install**，再以 **`CMAKE_PREFIX_PATH`** 指向安装前缀做 `find_package`，而不是贸然 `add_subdirectory` 进 `agis_desktop`（除非你已全局改用 vcpkg 工具链并接受重配依赖）。
 

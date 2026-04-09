@@ -5,9 +5,9 @@
 #include <windows.h>
 
 #include "app/resource.h"
+#include "app/main_app.h"
+#include "app/main_globals.h"
 #include "core/app_log.h"
-#include "main_app.h"
-#include "main_globals.h"
 #include "main_gis_xml.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_projection.h"

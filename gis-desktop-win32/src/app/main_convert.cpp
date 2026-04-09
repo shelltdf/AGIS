@@ -21,6 +21,9 @@
 #ifndef GIS_DESKTOP_HAVE_GDAL
 #define GIS_DESKTOP_HAVE_GDAL 0
 #endif
+#ifndef AGIS_HAVE_BASISU
+#define AGIS_HAVE_BASISU 0
+#endif
 
 #if GIS_DESKTOP_HAVE_GDAL
 #include "app/agis_gdal_runtime_env.h"
@@ -35,7 +38,7 @@
 #include "app/ui_theme.h"
 #include "main_app.h"
 #include "main_globals.h"
-#include "main_gis_xml.h"
+#include "gis_document/main_gis_xml.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_projection.h"
 
@@ -486,10 +489,11 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_INFO), m * 3 + colW * 2, m + 106, colW, topH - 110, TRUE);
 
   const int y1 = m + topH + 8;
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2 - 110, 88, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_CMD), w - m - 100, y1, 100, 26, TRUE);
+  const int cmdBtnLane = 212;  // 两个 100px 按钮 + 间距，与「复制命令」「开始转换」同行
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2 - cmdBtnLane, 88, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_CMD), w - m - cmdBtnLane, y1, 100, 26, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1, 100, 26, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_LOG), w - m - 100, y1 + 30, 100, 26, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 + 60, 100, 26, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m, y1 + 96, w - m * 2, 22, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG), m, y1 + 122, w - m * 2, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_LOG), m, y1 + 150, w - m * 2, h - (y1 + 150) - m, TRUE);
@@ -1151,6 +1155,14 @@ int GetMeshSpacingArg(HWND hwnd) {
 
 std::wstring GetTextureFormatArg(HWND hwnd) {
   const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FORMAT));
+#if AGIS_HAVE_BASISU
+  if (t.find(L"KTX2") != std::wstring::npos && t.find(L"ETC1S") != std::wstring::npos) {
+    return L"ktx2-etc1s";
+  }
+  if (t.find(L"KTX2") != std::wstring::npos) {
+    return L"ktx2";
+  }
+#endif
   if (t.find(L"TIFF") != std::wstring::npos || t.find(L"tiff") != std::wstring::npos ||
       t.find(L"Tif") != std::wstring::npos) {
     return L"tif";
@@ -1181,6 +1193,10 @@ void FillConvertTextureFormatCombo(HWND combo) {
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TIFF / GeoTIFF"));
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TGA"));
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"BMP"));
+#if AGIS_HAVE_BASISU
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"KTX2（UASTC + mip + Basis 超压）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"KTX2 ETC1S（更小）"));
+#endif
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
@@ -1434,19 +1450,9 @@ std::wstring AssembleConvertProcessCommandLine(HWND hwnd) {
 }
 
 std::wstring BuildConvertCommandLine(HWND hwnd) {
+  const std::wstring oneLine = AssembleConvertProcessCommandLine(hwnd);
   ConvertUiVisibility v{};
   ComputeConvertUiVisibility(hwnd, &v);
-  const int inMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE), CB_GETCURSEL, 0, 0));
-  const int outMajor = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
-  const wchar_t* exeName = ConvertToolExeName(inMajor, outMajor);
-  wchar_t modulePath[MAX_PATH]{};
-  GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-  std::wstring exeDir = modulePath;
-  const size_t slash = exeDir.find_last_of(L"\\/");
-  if (slash != std::wstring::npos) {
-    exeDir.resize(slash + 1);
-  }
-  const std::wstring exePath = exeName ? (exeDir + exeName) : L"<请选择不同输入/输出类型>";
   wchar_t inPath[1024]{};
   wchar_t outPath[1024]{};
   GetWindowTextW(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), inPath, 1024);
@@ -1472,10 +1478,10 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
   swprintf_s(rmaxStr, L"%d", rmax);
   const std::wstring tileLevels = GetTileLevelsArg(hwnd);
 
-  std::wstring s =
-      L"命令行预览（①–④ 与中间列一致；「复制命令」/ 开始转换 为同行单行，适用开关与预览相同，其余由后端默认值）\r\n";
-  s += QuoteArg(exePath);
-  s += L"\r\n\r\n【路径】\r\n";
+  std::wstring s = oneLine;
+  s += L"\r\n\r\n";
+  s += L"（与「开始转换」一致；「复制命令」仅复制首行。下方为路径与【1】–【4】分项，与 `--help` 及中间列 ①–④ 对照；未写开关由后端默认。）\r\n";
+  s += L"\r\n──────── 分项 ────────\r\n\r\n【路径】\r\n";
   s += L"  --input " + QuoteArg(inPath) + L"\r\n";
   s += L"  --output " + QuoteArg(outPath) + L"\r\n";
   s += L"\r\n【1 输入类型】\r\n";
@@ -1717,7 +1723,7 @@ void PreviewPath(HWND hwnd, bool inputSide) {
       } else if (sub == L"xyz" || sub == L"tms") {
         WriteConvertLog(
             hwnd,
-            L"[预览] XYZ/TMS：内置已支持 z/x/y 四叉索引与多片拼接预览（拖拽/滚轮）；TMS Y .flip 若不符请对照外部地图。");
+            L"[预览] XYZ/TMS：四叉索引与拼图；滚轮按 Z 换级(光标中心)、Shift+中心换级、Ctrl+滚轮调片元尺度；拖拽平移。TMS 行号映射见 tms.xml/README。");
       } else if (sub == L"mbtiles" || sub == L"gpkg") {
         WriteConvertLog(hwnd,
                         L"[预览] MBTiles / GeoPackage：启用 GDAL 时内置窗体会做栅格缩略预览；失败则见窗内说明或用系统打开 / 导出 XYZ。");
@@ -1919,15 +1925,15 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       CreateWindowW(PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 10, 280, 740, 22, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PROGRESS)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"BUTTON", L"开始转换", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 278, 100, 26, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RUN)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"复制命令", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 248, 100, 26, hwnd,
+      CreateWindowW(L"BUTTON", L"复制命令", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 608, 280, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_CMD)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"复制输出", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 278, 100, 26, hwnd,
+      CreateWindowW(L"BUTTON", L"开始转换", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 718, 280, 100, 26, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RUN)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"BUTTON", L"复制输出", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 718, 310, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_LOG)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT", L"命令预览：\r\n（尚未执行）", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
                                               WS_VSCROLL | ES_READONLY,
-                    10, 280, 760, 92, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_CMDLINE)),
+                    10, 280, 592, 92, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_CMDLINE)),
                     GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"STATIC", L"就绪：请先选择输入与输出数据。", WS_CHILD | WS_VISIBLE, 10, 308, 860, 20, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MSG)), GetModuleHandleW(nullptr), nullptr);

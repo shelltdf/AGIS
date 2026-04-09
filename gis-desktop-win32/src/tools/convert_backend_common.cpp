@@ -31,6 +31,9 @@
 #include <ogr_api.h>
 #include <ogr_spatialref.h>
 #endif
+#if defined(AGIS_HAVE_BASISU) && AGIS_HAVE_BASISU
+#include "tools/ktx2_basis_encode.h"
+#endif
 
 namespace {
 
@@ -136,30 +139,30 @@ void PrintConvertCliHelpGrouped(std::wostream& os, bool chinese, const wchar_t* 
   const wchar_t* ot = output_type_lines ? output_type_lines : L"";
   const wchar_t* ost = output_subtype_lines ? output_subtype_lines : L"";
   if (chinese) {
-    os << L"\n【① 输入类型】\n"
+    os << L"\n【1 输入类型】（桌面数据转换窗口 ① / --input-type）\n"
        << L"  --input-type <token>\n"
        << L"      主类型标识（本工具语义见下）。\n"
-       << it << L"\n【② 输入子类型】\n"
+       << it << L"\n【2 输入子类型】（桌面 ② / --input-subtype）\n"
        << L"  --input-subtype <token>\n"
        << L"      与输入数据形态/格式相关的子分类。\n"
-       << ist << L"\n【③ 输出类型】\n"
+       << ist << L"\n【3 输出类型】（桌面 ③ / --output-type）\n"
        << L"  --output-type <token>\n"
        << L"      输出主类型标识。\n"
-       << ot << L"\n【④ 输出子类型】\n"
+       << ot << L"\n【4 输出子类型】（桌面 ④ / --output-subtype）\n"
        << L"  --output-subtype <token>\n"
        << L"      与输出形态/格式相关的子分类。\n"
        << ost << L"\n";
   } else {
-    os << L"\n[1] Input type\n"
+    os << L"\n[1] Input type (desktop group ① / --input-type)\n"
        << L"  --input-type <token>\n"
        << L"      Major input category (see below for this tool).\n"
-       << it << L"\n[2] Input subtype\n"
+       << it << L"\n[2] Input subtype (desktop ② / --input-subtype)\n"
        << L"  --input-subtype <token>\n"
        << L"      Input format/shape subtype.\n"
-       << ist << L"\n[3] Output type\n"
+       << ist << L"\n[3] Output type (desktop ③ / --output-type)\n"
        << L"  --output-type <token>\n"
        << L"      Major output category.\n"
-       << ot << L"\n[4] Output subtype\n"
+       << ot << L"\n[4] Output subtype (desktop ④ / --output-subtype)\n"
        << L"  --output-subtype <token>\n"
        << L"      Output format/shape subtype.\n"
        << ost << L"\n";
@@ -1133,6 +1136,16 @@ int WriteRgbTextureFile(const std::filesystem::path& path, int w, int h, const s
   }
   if (f.find(L"tga") != std::wstring::npos) {
     return WriteRgbTga24(path, w, h, rgb);
+  }
+  if (f.find(L"ktx2") != std::wstring::npos || f.find(L"basis") != std::wstring::npos ||
+      f.find(L"uastc") != std::wstring::npos) {
+#if defined(AGIS_HAVE_BASISU) && AGIS_HAVE_BASISU
+    const bool etc1s = (f.find(L"etc1s") != std::wstring::npos);
+    return AgisWriteRgbToKtx2Basis(path, w, h, rgb, etc1s);
+#else
+    std::wcerr << L"[ERROR] KTX2/Basis 需要 3rdparty/basis_universal（见 3rdparty/README-BASIS-KTX2.md）。\n";
+    return 7;
+#endif
   }
   return WriteRgbPng(path, w, h, rgb);
 }
@@ -3389,6 +3402,10 @@ static std::wstring NormalizeTextureFmtExt(const std::wstring& fmt) {
   }
   if (f.find(L"tga") != std::wstring::npos) {
     return L".tga";
+  }
+  if (f.find(L"ktx2") != std::wstring::npos || f.find(L"basis") != std::wstring::npos ||
+      f.find(L"uastc") != std::wstring::npos) {
+    return L".ktx2";
   }
   return L".png";
 }

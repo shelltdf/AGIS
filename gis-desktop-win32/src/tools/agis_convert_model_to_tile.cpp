@@ -37,7 +37,7 @@ void PrintHelp() {
                << L"  --target-crs <text>          目标 CRS（默认自动）\n"
                << L"  --output-unit <v>            m | km | 1000km（默认 m）\n"
                << L"  --mesh-spacing <int>         1..1000000（默认 1）\n"
-               << L"  --texture-format <v>         png | tif | tga | bmp（默认 png）\n"
+               << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s（默认 png；KTX2 需 basis_universal）\n"
                << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n"
                << L"  --tile-levels <auto|1..23>   瓦片层数（默认 auto）\n";
   } else {
@@ -63,7 +63,7 @@ void PrintHelp() {
                << L"  --target-crs <text>          Target CRS (default: auto)\n"
                << L"  --output-unit <v>            m | km | 1000km (default: m)\n"
                << L"  --mesh-spacing <int>         1..1000000 (default: 1)\n"
-               << L"  --texture-format <v>         png | tif | tga | bmp (default: png)\n"
+               << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s (default: png; KTX2 needs basis_universal)\n"
                << L"  --raster-max-dim <int>       0=native full read (default); 64..16384=cap\n"
                << L"  --tile-levels <auto|1..23>   tile levels (default: auto)\n";
   }

@@ -35,7 +35,7 @@ void PrintHelp() {
                << L"  --target-crs <text>          目标 CRS（默认自动）\n"
                << L"  --output-unit <v>            m | km | 1000km（默认 m）\n"
                << L"  --mesh-spacing <int>         网格步长 1..1000000（默认 1）\n"
-               << L"  --texture-format <v>         png | tif | tga | bmp（默认 png）\n"
+               << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s（默认 png；KTX2 需 basis_universal）\n"
                << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n\n"
                << L"示例:\n"
                << L"  agis_convert_model_to_model --input in.obj --output out.las --input-subtype 3dmesh --output-subtype pointcloud\n";
@@ -60,7 +60,7 @@ void PrintHelp() {
                << L"  --target-crs <text>          Target CRS (default: auto)\n"
                << L"  --output-unit <v>            m | km | 1000km (default: m)\n"
                << L"  --mesh-spacing <int>         1..1000000 (default: 1)\n"
-               << L"  --texture-format <v>         png | tif | tga | bmp (default: png)\n"
+               << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s (default: png; KTX2 needs basis_universal)\n"
                << L"  --raster-max-dim <int>       0=native (default); 64..16384=cap\n\n"
                << L"Example:\n"
                << L"  agis_convert_model_to_model --input in.obj --output out.las --input-subtype 3dmesh --output-subtype pointcloud\n";
