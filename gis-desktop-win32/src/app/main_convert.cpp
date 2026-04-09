@@ -57,6 +57,43 @@ void WriteConvertLog(HWND hwnd, const wchar_t* line) {
   SendMessageW(hLog, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(s.c_str()));
 }
 
+void CopyControlTextToClipboard(HWND hwnd, int ctrlId, const wchar_t* okMsg) {
+  HWND hCtrl = GetDlgItem(hwnd, ctrlId);
+  if (!hCtrl) {
+    return;
+  }
+  const int n = GetWindowTextLengthW(hCtrl);
+  if (n <= 0) {
+    WriteConvertLog(hwnd, L"[提示] 当前没有可复制内容。");
+    return;
+  }
+  std::wstring text(static_cast<size_t>(n), L'\0');
+  GetWindowTextW(hCtrl, text.data(), n + 1);
+  if (!OpenClipboard(hwnd)) {
+    WriteConvertLog(hwnd, L"[错误] 打开剪贴板失败。");
+    return;
+  }
+  EmptyClipboard();
+  const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (h) {
+    void* p = GlobalLock(h);
+    if (p) {
+      memcpy(p, text.c_str(), bytes);
+      GlobalUnlock(h);
+      SetClipboardData(CF_UNICODETEXT, h);
+      h = nullptr;
+      if (okMsg && okMsg[0]) {
+        WriteConvertLog(hwnd, okMsg);
+      }
+    }
+  }
+  if (h) {
+    GlobalFree(h);
+  }
+  CloseClipboard();
+}
+
 void SetConvertProgress(HWND hwnd, int pct, const std::wstring& statusPrefix) {
   const int p = (std::clamp)((std::max)(pct, g_convertProgressFloor), 0, 100);
   g_convertProgressFloor = p;
@@ -208,7 +245,8 @@ void LayoutConvertWindow(HWND hwnd) {
   const int y1 = m + topH + 8;
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2 - 110, 88, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_CMD), w - m - 100, y1, 100, 26, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 + 32, 100, 26, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_LOG), w - m - 100, y1 + 30, 100, 26, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 + 60, 100, 26, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m, y1 + 96, w - m * 2, 22, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG), m, y1 + 122, w - m * 2, 24, TRUE);
   MoveWindow(GetDlgItem(hwnd, IDC_CONV_LOG), m, y1 + 150, w - m * 2, h - (y1 + 150) - m, TRUE);
@@ -218,7 +256,7 @@ void FillConvertTypeCombo(HWND combo) {
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GIS数据（矢量/栅格）"));
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"模型数据（TIN/DEM/3DMesh）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"瓦片数据（XYZ/TMS/WMTS）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"瓦片数据（XYZ/TMS/WMTS/MBTiles/GPKG/3DTiles）"));
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
@@ -241,6 +279,9 @@ void FillConvertSubtypeCombo(HWND combo, int majorType) {
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ（金字塔瓦片）"));
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TMS（倒序行号）"));
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"WMTS（服务化瓦片）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"MBTiles（SQLite 单文件）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GPKG Tiles（GeoPackage）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3DTiles（tileset.json + b3dm）"));
       break;
   }
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
@@ -319,10 +360,22 @@ const wchar_t* ConvertSubtypeTooltipByMajorSubtype(int major, int sub) {
       return L"TMS（倒序行号）\n"
              L"组织：/{z}/{x}/{y}，但 Y 轴方向与 XYZ 相反\n"
              L"细节：与部分历史服务兼容时常用。";
-    default:
+    case 2:
       return L"WMTS（服务化瓦片）\n"
              L"协议：OGC WMTS（KVP/REST）\n"
              L"细节：可声明 TileMatrixSet、样式和能力文档。";
+    case 3:
+      return L"MBTiles（SQLite 单文件）\n"
+             L"组织：单文件 .mbtiles\n"
+             L"细节：便于离线分发与部署。";
+    case 4:
+      return L"GPKG Tiles（GeoPackage）\n"
+             L"组织：单文件 .gpkg\n"
+             L"细节：标准化地理容器，便于与 GIS 工具链互通。";
+    default:
+      return L"3DTiles（Cesium 3D Tiles）\n"
+             L"组织：tileset.json + b3dm\n"
+             L"细节：当前输出单节点最小可用占位，便于接入 3D Tiles 流程。";
   }
 }
 
@@ -466,6 +519,12 @@ std::wstring GetConvertSubtypeArg(HWND hwnd, bool inputSide) {
       return L"tms";
     case 2:
       return L"wmts";
+    case 3:
+      return L"mbtiles";
+    case 4:
+      return L"gpkg";
+    case 5:
+      return L"3dtiles";
     default:
       return L"xyz";
   }
@@ -1284,6 +1343,8 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RUN)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"BUTTON", L"复制命令", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 248, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_CMD)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"BUTTON", L"复制输出", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 760, 278, 100, 26, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_LOG)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT", L"命令预览：\r\n（尚未执行）", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
                                               WS_VSCROLL | ES_READONLY,
                     10, 280, 760, 92, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_CMDLINE)),
@@ -1310,6 +1371,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                       IDC_CONV_OUTPUT_SUBTYPE,
                       IDC_CONV_OUTPUT_SUBTYPE_HELP, IDC_CONV_OUTPUT_PATH, IDC_CONV_OUTPUT_BROWSE, IDC_CONV_OUTPUT_PREVIEW,
                       IDC_CONV_OUTPUT_INFO, IDC_CONV_MODEL_COORD, IDC_CONV_VECTOR_MODE, IDC_CONV_COPY_CMD,
+                      IDC_CONV_COPY_LOG,
                       IDC_CONV_PROGRESS,
                       IDC_CONV_RUN, IDC_CONV_MSG}) {
         if (HWND c = GetDlgItem(hwnd, cid)) {
@@ -1520,24 +1582,12 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
       }
       if (LOWORD(wParam) == IDC_CONV_COPY_CMD) {
-        std::wstring cmd = BuildConvertCommandLine(hwnd);
-        if (OpenClipboard(hwnd)) {
-          EmptyClipboard();
-          const size_t bytes = (cmd.size() + 1) * sizeof(wchar_t);
-          HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
-          if (h) {
-            void* p = GlobalLock(h);
-            if (p) {
-              memcpy(p, cmd.c_str(), bytes);
-              GlobalUnlock(h);
-              SetClipboardData(CF_UNICODETEXT, h);
-              h = nullptr;
-              WriteConvertLog(hwnd, L"[命令] 已复制到剪贴板。");
-            }
-          }
-          if (h) GlobalFree(h);
-          CloseClipboard();
-        }
+        SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_CMDLINE), BuildConvertCommandLine(hwnd).c_str());
+        CopyControlTextToClipboard(hwnd, IDC_CONV_CMDLINE, L"[命令] 已复制到剪贴板。");
+        return 0;
+      }
+      if (LOWORD(wParam) == IDC_CONV_COPY_LOG) {
+        CopyControlTextToClipboard(hwnd, IDC_CONV_LOG, L"[输出] 日志已复制到剪贴板。");
         return 0;
       }
       if (LOWORD(wParam) == IDC_CONV_RUN) {

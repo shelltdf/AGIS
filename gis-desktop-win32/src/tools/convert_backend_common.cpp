@@ -265,11 +265,75 @@ int WriteBinaryFile(const std::filesystem::path& p, const unsigned char* data, s
   return ofs.good() ? 0 : 6;
 }
 
+void AppendLe32(std::vector<unsigned char>* out, uint32_t v) {
+  out->push_back(static_cast<unsigned char>(v & 0xff));
+  out->push_back(static_cast<unsigned char>((v >> 8) & 0xff));
+  out->push_back(static_cast<unsigned char>((v >> 16) & 0xff));
+  out->push_back(static_cast<unsigned char>((v >> 24) & 0xff));
+}
+
+std::vector<unsigned char> BuildMinimalGlbV2() {
+  const std::string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[]}]}";
+  std::vector<unsigned char> jsonChunk(json.begin(), json.end());
+  while ((jsonChunk.size() % 4) != 0) {
+    jsonChunk.push_back(' ');
+  }
+  const uint32_t jsonLen = static_cast<uint32_t>(jsonChunk.size());
+  const uint32_t glbLen = 12u + 8u + jsonLen;
+  std::vector<unsigned char> out;
+  out.reserve(glbLen);
+  // GLB header: magic, version, length
+  AppendLe32(&out, 0x46546C67u);  // "glTF"
+  AppendLe32(&out, 2u);
+  AppendLe32(&out, glbLen);
+  // JSON chunk
+  AppendLe32(&out, jsonLen);
+  AppendLe32(&out, 0x4E4F534Au);  // "JSON"
+  out.insert(out.end(), jsonChunk.begin(), jsonChunk.end());
+  return out;
+}
+
+std::vector<unsigned char> BuildMinimalB3dmWithGlb() {
+  const std::vector<unsigned char> glb = BuildMinimalGlbV2();
+  std::string featureJson = "{\"BATCH_LENGTH\":0}";
+  while ((featureJson.size() % 8) != 0) {
+    featureJson.push_back(' ');
+  }
+  const uint32_t ftJsonLen = static_cast<uint32_t>(featureJson.size());
+  const uint32_t byteLength = 28u + ftJsonLen + static_cast<uint32_t>(glb.size());
+  std::vector<unsigned char> out;
+  out.reserve(byteLength);
+  // b3dm header
+  out.push_back('b');
+  out.push_back('3');
+  out.push_back('d');
+  out.push_back('m');
+  AppendLe32(&out, 1u);                      // version
+  AppendLe32(&out, byteLength);              // byteLength
+  AppendLe32(&out, ftJsonLen);               // featureTableJSONByteLength
+  AppendLe32(&out, 0u);                      // featureTableBinaryByteLength
+  AppendLe32(&out, 0u);                      // batchTableJSONByteLength
+  AppendLe32(&out, 0u);                      // batchTableBinaryByteLength
+  out.insert(out.end(), featureJson.begin(), featureJson.end());
+  out.insert(out.end(), glb.begin(), glb.end());
+  return out;
+}
+
 int EnsureDir(const std::filesystem::path& p) {
   std::error_code ec;
   std::filesystem::create_directories(p, ec);
   return ec ? 4 : 0;
 }
+
+#if GIS_DESKTOP_HAVE_GDAL
+void EnsureGdalRegisteredOnce() {
+  static bool s_registered = false;
+  if (!s_registered) {
+    GDALAllRegister();
+    s_registered = true;
+  }
+}
+#endif
 
 std::string ReadTextFileUtf8(const std::filesystem::path& p) {
   std::ifstream ifs(p, std::ios::binary);
@@ -279,6 +343,25 @@ std::string ReadTextFileUtf8(const std::filesystem::path& p) {
   std::ostringstream oss;
   oss << ifs.rdbuf();
   return oss.str();
+}
+
+std::vector<unsigned char> ReadBinaryFile(const std::filesystem::path& p) {
+  std::ifstream ifs(p, std::ios::binary);
+  if (!ifs.is_open()) {
+    return {};
+  }
+  ifs.seekg(0, std::ios::end);
+  const std::streamoff n = ifs.tellg();
+  if (n <= 0) {
+    return {};
+  }
+  ifs.seekg(0, std::ios::beg);
+  std::vector<unsigned char> out(static_cast<size_t>(n));
+  ifs.read(reinterpret_cast<char*>(out.data()), n);
+  if (!ifs.good() && !ifs.eof()) {
+    return {};
+  }
+  return out;
 }
 
 std::string XmlAttr(const std::string& line, const char* key) {
@@ -682,11 +765,20 @@ bool TryReadRaster(const std::wstring& path, RasterExtract* out, int maxReadDim)
 }
 
 int WriteRgbPng(const std::filesystem::path& path, int w, int h, const std::vector<unsigned char>& rgb) {
+#if GIS_DESKTOP_HAVE_GDAL
+  EnsureGdalRegisteredOnce();
+#endif
   GDALDriverH memDrv = GDALGetDriverByName("MEM");
   GDALDriverH pngDrv = GDALGetDriverByName("PNG");
-  if (!memDrv || !pngDrv) return 7;
+  if (!memDrv || !pngDrv) {
+    std::wcerr << L"[ERROR] PNG write driver missing (MEM/PNG).\n";
+    return 7;
+  }
   GDALDatasetH mem = GDALCreate(memDrv, "", w, h, 3, GDT_Byte, nullptr);
-  if (!mem) return 7;
+  if (!mem) {
+    std::wcerr << L"[ERROR] PNG write temp dataset create failed.\n";
+    return 7;
+  }
   const int px = w * h;
   std::vector<unsigned char> r(static_cast<size_t>(px));
   std::vector<unsigned char> g(static_cast<size_t>(px));
@@ -702,7 +794,10 @@ int WriteRgbPng(const std::filesystem::path& path, int w, int h, const std::vect
   const std::string u8 = WideToUtf8(path.wstring());
   GDALDatasetH outDs = GDALCreateCopy(pngDrv, u8.c_str(), mem, FALSE, nullptr, nullptr, nullptr);
   GDALClose(mem);
-  if (!outDs) return 7;
+  if (!outDs) {
+    std::wcerr << L"[ERROR] PNG write create-copy failed: " << path.wstring() << L"\n";
+    return 7;
+  }
   GDALClose(outDs);
   return 0;
 }
@@ -2797,13 +2892,432 @@ int ConvertModelToModelImpl(const ConvertArgs& args) {
 }
 
 int ConvertGisToTileImpl(const ConvertArgs& args) {
+#if GIS_DESKTOP_HAVE_GDAL
+  EnsureGdalRegisteredOnce();
+#endif
   const std::filesystem::path outDir(args.output);
   int rc = EnsureDir(outDir);
-  if (rc != 0) return rc;
-  rc = EnsureDir(outDir / L"0" / L"0");
-  if (rc != 0) return rc;
-  return WriteTextFile(outDir / L"0" / L"0" / L"0.tile.txt",
-                       L"AGIS mock tile\nsource=" + args.input + L"\nsubtype=" + args.output_subtype + L"\n");
+  if (rc != 0) {
+    return rc;
+  }
+  std::wstring subtype = args.output_subtype;
+  for (auto& c : subtype) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  if (subtype != L"xyz" && subtype != L"tms" && subtype != L"wmts" && subtype != L"mbtiles" && subtype != L"gpkg" &&
+      subtype != L"3dtiles") {
+    subtype = L"xyz";
+  }
+  std::wstring texFmt = args.texture_format;
+  for (auto& c : texFmt) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  std::wstring ext = L".png";
+  if (texFmt.find(L"tif") != std::wstring::npos) {
+    ext = L".tif";
+  } else if (texFmt.find(L"bmp") != std::wstring::npos) {
+    ext = L".bmp";
+  } else if (texFmt.find(L"tga") != std::wstring::npos) {
+    ext = L".tga";
+  } else {
+    texFmt = L"png";
+    ext = L".png";
+  }
+  std::wcout << L"[TILE] protocol: " << subtype << L", format: " << texFmt << L"\n";
+
+  RasterExtract raster;
+  bool haveRaster = false;
+  GisDocInfo doc;
+  const std::filesystem::path inPath(args.input);
+  const bool isGis = _wcsicmp(inPath.extension().wstring().c_str(), L".gis") == 0;
+  if (isGis) {
+    doc = ParseGisDocInfo(inPath);
+    const auto sources = ParseGisLayerSources(inPath);
+    for (const auto& s : sources) {
+      if (TryReadRaster(s, &raster, 4096)) {
+        haveRaster = true;
+        break;
+      }
+    }
+  } else {
+    haveRaster = TryReadRaster(args.input, &raster, 4096);
+  }
+  // 输出元数据范围：优先栅格真实范围 -> .gis 视口 -> 全球默认。
+  double bLonMin = -180.0, bLonMax = 180.0, bLatMin = -85.05112878, bLatMax = 85.05112878;
+  double bMxMin = -20037508.3427892, bMxMax = 20037508.3427892;
+  double bMyMin = -20037508.3427892, bMyMax = 20037508.3427892;
+  bool haveBounds = false;
+#if GIS_DESKTOP_HAVE_GDAL
+  if (haveRaster && !raster.wkt.empty()) {
+    OGRSpatialReferenceH srcSr = OSRNewSpatialReference(raster.wkt.c_str());
+    OGRSpatialReferenceH wgs84 = OSRNewSpatialReference(nullptr);
+    OGRSpatialReferenceH merc = OSRNewSpatialReference(nullptr);
+    if (srcSr && wgs84 && merc && OSRImportFromEPSG(wgs84, 4326) == OGRERR_NONE && OSRImportFromEPSG(merc, 3857) == OGRERR_NONE) {
+      OGRCoordinateTransformationH toWgs84 = OCTNewCoordinateTransformation(srcSr, wgs84);
+      OGRCoordinateTransformationH toMerc = OCTNewCoordinateTransformation(srcSr, merc);
+      if (toWgs84 && toMerc) {
+        const int rw = (std::max)(1, raster.srcW > 0 ? raster.srcW : raster.w);
+        const int rh = (std::max)(1, raster.srcH > 0 ? raster.srcH : raster.h);
+        double lonMin = 1e300, lonMax = -1e300, latMin = 1e300, latMax = -1e300;
+        double mxMin = 1e300, mxMax = -1e300, myMin = 1e300, myMax = -1e300;
+        for (int ix : {0, rw - 1}) {
+          for (int iy : {0, rh - 1}) {
+            const double px = raster.gt[0] + static_cast<double>(ix) * raster.gt[1] + static_cast<double>(iy) * raster.gt[2];
+            const double py = raster.gt[3] + static_cast<double>(ix) * raster.gt[4] + static_cast<double>(iy) * raster.gt[5];
+            double x1 = px, y1 = py, z1 = 0.0;
+            if (OCTTransform(toWgs84, 1, &x1, &y1, &z1)) {
+              lonMin = (std::min)(lonMin, x1);
+              lonMax = (std::max)(lonMax, x1);
+              latMin = (std::min)(latMin, y1);
+              latMax = (std::max)(latMax, y1);
+            }
+            double x2 = px, y2 = py, z2 = 0.0;
+            if (OCTTransform(toMerc, 1, &x2, &y2, &z2)) {
+              mxMin = (std::min)(mxMin, x2);
+              mxMax = (std::max)(mxMax, x2);
+              myMin = (std::min)(myMin, y2);
+              myMax = (std::max)(myMax, y2);
+            }
+          }
+        }
+        if (lonMin <= lonMax && latMin <= latMax && mxMin <= mxMax && myMin <= myMax) {
+          bLonMin = (std::clamp)(lonMin, -180.0, 180.0);
+          bLonMax = (std::clamp)(lonMax, -180.0, 180.0);
+          bLatMin = (std::clamp)(latMin, -85.05112878, 85.05112878);
+          bLatMax = (std::clamp)(latMax, -85.05112878, 85.05112878);
+          bMxMin = mxMin;
+          bMxMax = mxMax;
+          bMyMin = myMin;
+          bMyMax = myMax;
+          haveBounds = true;
+        }
+      }
+      if (toWgs84) OCTDestroyCoordinateTransformation(toWgs84);
+      if (toMerc) OCTDestroyCoordinateTransformation(toMerc);
+    }
+    if (srcSr) OSRDestroySpatialReference(srcSr);
+    if (wgs84) OSRDestroySpatialReference(wgs84);
+    if (merc) OSRDestroySpatialReference(merc);
+  }
+#endif
+  if (!haveBounds && doc.ok) {
+    bLonMin = (std::min)(doc.minx, doc.maxx);
+    bLonMax = (std::max)(doc.minx, doc.maxx);
+    bLatMin = (std::min)(doc.miny, doc.maxy);
+    bLatMax = (std::max)(doc.miny, doc.maxy);
+    bLonMin = (std::clamp)(bLonMin, -180.0, 180.0);
+    bLonMax = (std::clamp)(bLonMax, -180.0, 180.0);
+    bLatMin = (std::clamp)(bLatMin, -85.05112878, 85.05112878);
+    bLatMax = (std::clamp)(bLatMax, -85.05112878, 85.05112878);
+  }
+
+  constexpr int kTileSize = 256;
+  std::vector<unsigned char> tileRgb(static_cast<size_t>(kTileSize) * kTileSize * 3);
+  auto buildTileRgb = [&](int z, int x, int yXyz) {
+    if (haveRaster && raster.w > 1 && raster.h > 1 && raster.rgb.size() >= static_cast<size_t>(raster.w * raster.h * 3)) {
+      const int dim = 1 << z;
+      for (int py = 0; py < kTileSize; ++py) {
+        for (int px = 0; px < kTileSize; ++px) {
+          const double gx = (static_cast<double>(x) + (static_cast<double>(px) + 0.5) / static_cast<double>(kTileSize)) /
+                            static_cast<double>(dim);
+          const double gy = (static_cast<double>(yXyz) + (static_cast<double>(py) + 0.5) / static_cast<double>(kTileSize)) /
+                            static_cast<double>(dim);
+          const double sx = gx * static_cast<double>(raster.w - 1);
+          const double sy = gy * static_cast<double>(raster.h - 1);
+          const size_t di = (static_cast<size_t>(py) * kTileSize + px) * 3;
+          tileRgb[di + 0] = SampleBilinearRgb(raster.rgb, raster.w, raster.h, 0, sx, sy);
+          tileRgb[di + 1] = SampleBilinearRgb(raster.rgb, raster.w, raster.h, 1, sx, sy);
+          tileRgb[di + 2] = SampleBilinearRgb(raster.rgb, raster.w, raster.h, 2, sx, sy);
+        }
+      }
+      return;
+    }
+    // 无栅格时输出可辨识的占位图块（而不是 txt）。
+    for (int py = 0; py < kTileSize; ++py) {
+      for (int px = 0; px < kTileSize; ++px) {
+        const size_t di = (static_cast<size_t>(py) * kTileSize + px) * 3;
+        const unsigned char r = static_cast<unsigned char>((x * 53 + z * 41 + px) & 0xff);
+        const unsigned char g = static_cast<unsigned char>((yXyz * 67 + z * 19 + py) & 0xff);
+        const unsigned char b = static_cast<unsigned char>((z * 85 + (px ^ py)) & 0xff);
+        tileRgb[di + 0] = r;
+        tileRgb[di + 1] = g;
+        tileRgb[di + 2] = b;
+      }
+    }
+  };
+
+  // 先落一个轻量金字塔（z=0..2）。
+  constexpr int kMinZ = 0;
+  constexpr int kMaxZ = 2;
+  if (subtype == L"mbtiles" || subtype == L"gpkg") {
+#if GIS_DESKTOP_HAVE_GDAL
+    std::filesystem::path outPath = outDir;
+    if (std::filesystem::is_directory(outPath) || outPath.extension().empty()) {
+      outPath /= (subtype == L"mbtiles" ? L"tiles.mbtiles" : L"tiles.gpkg");
+    }
+    if (subtype == L"mbtiles" && _wcsicmp(outPath.extension().wstring().c_str(), L".mbtiles") != 0) {
+      outPath.replace_extension(L".mbtiles");
+    }
+    if (subtype == L"gpkg" && _wcsicmp(outPath.extension().wstring().c_str(), L".gpkg") != 0) {
+      outPath.replace_extension(L".gpkg");
+    }
+    EnsureParent(outPath);
+    GDALDriverH drv = GDALGetDriverByName(subtype == L"mbtiles" ? "MBTiles" : "GPKG");
+    if (!drv) {
+      std::wcerr << L"[ERROR] GDAL driver not available: " << subtype << L"\n";
+      return 7;
+    }
+    const int rasterW = kTileSize * (1 << kMaxZ);
+    const int rasterH = kTileSize * (1 << kMaxZ);
+    char** createOpts = nullptr;
+    if (subtype == L"mbtiles") {
+      createOpts = CSLSetNameValue(createOpts, "TILE_FORMAT", "PNG");
+      createOpts = CSLSetNameValue(createOpts, "MINZOOM", "0");
+      createOpts = CSLSetNameValue(createOpts, "MAXZOOM", "2");
+    }
+    GDALDatasetH ds = GDALCreate(drv, WideToUtf8(outPath.wstring()).c_str(), rasterW, rasterH, 3, GDT_Byte, createOpts);
+    if (createOpts) {
+      CSLDestroy(createOpts);
+    }
+    if (!ds) {
+      std::wcerr << L"[ERROR] cannot create output container: " << outPath.wstring() << L"\n";
+      return 7;
+    }
+    OGRSpatialReferenceH merc = OSRNewSpatialReference(nullptr);
+    if (merc && OSRImportFromEPSG(merc, 3857) == OGRERR_NONE) {
+      char* wkt = nullptr;
+      if (OSRExportToWkt(merc, &wkt) == OGRERR_NONE && wkt) {
+        GDALSetProjection(ds, wkt);
+        CPLFree(wkt);
+      }
+    }
+    if (merc) {
+      OSRDestroySpatialReference(merc);
+    }
+    const double gt[6] = {
+        bMxMin,
+        (bMxMax - bMxMin) / static_cast<double>(rasterW),
+        0.0,
+        bMyMax,
+        0.0,
+        -(bMyMax - bMyMin) / static_cast<double>(rasterH)};
+    GDALSetGeoTransform(ds, const_cast<double*>(gt));
+    std::vector<unsigned char> fullRgb(static_cast<size_t>(rasterW) * rasterH * 3);
+    for (int y = 0; y < rasterH; ++y) {
+      for (int x = 0; x < rasterW; ++x) {
+        const double gx = (static_cast<double>(x) + 0.5) / static_cast<double>(rasterW);
+        const double gy = (static_cast<double>(y) + 0.5) / static_cast<double>(rasterH);
+        const size_t di = (static_cast<size_t>(y) * rasterW + x) * 3;
+        if (haveRaster && raster.w > 1 && raster.h > 1 && raster.rgb.size() >= static_cast<size_t>(raster.w * raster.h * 3)) {
+          const double sx = gx * static_cast<double>(raster.w - 1);
+          const double sy = gy * static_cast<double>(raster.h - 1);
+          fullRgb[di + 0] = SampleBilinearRgb(raster.rgb, raster.w, raster.h, 0, sx, sy);
+          fullRgb[di + 1] = SampleBilinearRgb(raster.rgb, raster.w, raster.h, 1, sx, sy);
+          fullRgb[di + 2] = SampleBilinearRgb(raster.rgb, raster.w, raster.h, 2, sx, sy);
+        } else {
+          fullRgb[di + 0] = static_cast<unsigned char>((x + 31) & 0xff);
+          fullRgb[di + 1] = static_cast<unsigned char>((y + 67) & 0xff);
+          fullRgb[di + 2] = static_cast<unsigned char>(((x ^ y) + 13) & 0xff);
+        }
+      }
+    }
+    for (int b = 0; b < 3; ++b) {
+      std::vector<unsigned char> band(static_cast<size_t>(rasterW) * rasterH);
+      for (int i = 0; i < rasterW * rasterH; ++i) {
+        band[static_cast<size_t>(i)] = fullRgb[static_cast<size_t>(i) * 3 + b];
+      }
+      GDALRasterBandH rb = GDALGetRasterBand(ds, b + 1);
+      if (!rb || GDALRasterIO(rb, GF_Write, 0, 0, rasterW, rasterH, band.data(), rasterW, rasterH, GDT_Byte, 0, 0) != CE_None) {
+        GDALClose(ds);
+        return 7;
+      }
+    }
+    GDALClose(ds);
+    return 0;
+#else
+    std::wcerr << L"[ERROR] mbtiles/gpkg output requires GDAL build.\n";
+    return 7;
+#endif
+  }
+  if (subtype == L"3dtiles") {
+    const std::filesystem::path b3dmPath = outDir / L"root.b3dm";
+    const std::vector<unsigned char> b3dm = BuildMinimalB3dmWithGlb();
+    rc = WriteBinaryFile(b3dmPath, b3dm.data(), b3dm.size());
+    if (rc != 0) {
+      std::wcerr << L"[ERROR] 3dtiles b3dm write failed: " << b3dmPath.wstring() << L", rc=" << rc << L"\n";
+      return rc;
+    }
+    const double degToRad = 3.14159265358979323846 / 180.0;
+    const double west = bLonMin * degToRad;
+    const double south = bLatMin * degToRad;
+    const double east = bLonMax * degToRad;
+    const double north = bLatMax * degToRad;
+    std::wostringstream ts;
+    ts << L"{\n"
+       << L"  \"asset\": {\"version\": \"1.0\", \"generator\": \"AGIS\"},\n"
+       << L"  \"geometricError\": 500,\n"
+       << L"  \"root\": {\n"
+       << L"    \"boundingVolume\": {\n"
+       << L"      \"region\": [" << west << L", " << south << L", " << east << L", " << north << L", 0, 1000]\n"
+       << L"    },\n"
+       << L"    \"geometricError\": 0,\n"
+       << L"    \"refine\": \"ADD\",\n"
+       << L"    \"content\": {\"uri\": \"root.b3dm\"}\n"
+       << L"  }\n"
+       << L"}\n";
+    rc = WriteTextFile(outDir / L"tileset.json", ts.str());
+    if (rc != 0) {
+      return rc;
+    }
+    rc = WriteTextFile(outDir / L"README_3DTILES.txt",
+                       L"AGIS 3D Tiles output\n"
+                       L"files:\n"
+                       L"  tileset.json\n"
+                       L"  root.b3dm\n"
+                       L"note:\n"
+                       L"  current version outputs a minimal single-tile b3dm placeholder for pipeline integration.\n");
+    if (rc != 0) {
+      return rc;
+    }
+    return 0;
+  }
+  for (int z = kMinZ; z <= kMaxZ; ++z) {
+    const int dim = 1 << z;
+    for (int x = 0; x < dim; ++x) {
+      rc = EnsureDir(outDir / std::to_wstring(z) / std::to_wstring(x));
+      if (rc != 0) {
+        return rc;
+      }
+      for (int yXyz = 0; yXyz < dim; ++yXyz) {
+        const int yOut = (subtype == L"tms") ? (dim - 1 - yXyz) : yXyz;
+        buildTileRgb(z, x, yXyz);
+        const std::filesystem::path tilePath = outDir / std::to_wstring(z) / std::to_wstring(x) / (std::to_wstring(yOut) + ext);
+        rc = WriteRgbTextureFile(tilePath, kTileSize, kTileSize, tileRgb, texFmt);
+        if (rc != 0) {
+          std::wcerr << L"[ERROR] tile write failed: " << tilePath.wstring() << L", rc=" << rc << L"\n";
+          return rc;
+        }
+      }
+    }
+  }
+  const std::wstring readme = L"AGIS tile pyramid output\n"
+                              L"source=" +
+                              args.input + L"\n"
+                                           L"protocol=" +
+                              subtype + L"\n"
+                                        L"layout=/{z}/{x}/{y}" +
+                              ext +
+                              L"\n"
+                              L"tile_size=256\n"
+                                        L"note=tms uses flipped y from xyz: y_tms=(2^z-1-y_xyz)\n";
+  rc = WriteTextFile(outDir / L"README.txt", readme);
+  if (rc != 0) {
+    return rc;
+  }
+  if (subtype == L"wmts") {
+    const std::wstring formatMime = (ext == L".tif" ? L"image/tiff"
+                                  : (ext == L".tga" ? L"image/tga"
+                                  : (ext == L".bmp" ? L"image/bmp" : L"image/png")));
+    std::wostringstream wmts;
+    wmts << L"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         << L"<Capabilities xmlns=\"http://www.opengis.net/wmts/1.0\"\n"
+         << L"              xmlns:ows=\"http://www.opengis.net/ows/1.1\"\n"
+         << L"              xmlns:xlink=\"http://www.w3.org/1999/xlink\"\n"
+         << L"              version=\"1.0.0\">\n"
+         << L"  <ows:ServiceIdentification>\n"
+         << L"    <ows:Title>AGIS WMTS</ows:Title>\n"
+         << L"    <ows:Abstract>AGIS generated WMTS tile pyramid</ows:Abstract>\n"
+         << L"    <ows:ServiceType>OGC WMTS</ows:ServiceType>\n"
+         << L"    <ows:ServiceTypeVersion>1.0.0</ows:ServiceTypeVersion>\n"
+         << L"  </ows:ServiceIdentification>\n"
+         << L"  <Contents>\n"
+         << L"    <Layer>\n"
+         << L"      <ows:Identifier>agis</ows:Identifier>\n"
+         << L"      <ows:Title>AGIS Tiles</ows:Title>\n"
+         << L"      <Format>" << formatMime << L"</Format>\n"
+         << L"      <TileMatrixSetLink><TileMatrixSet>agis-global-3857</TileMatrixSet></TileMatrixSetLink>\n"
+         << L"      <ResourceURL format=\"" << formatMime << L"\" resourceType=\"tile\" template=\"./{TileMatrix}/{TileCol}/{TileRow}"
+         << ext << L"\"/>\n"
+         << L"    </Layer>\n"
+         << L"    <TileMatrixSet>\n"
+         << L"      <ows:Identifier>agis-global-3857</ows:Identifier>\n"
+         << L"      <ows:SupportedCRS>urn:ogc:def:crs:EPSG::3857</ows:SupportedCRS>\n";
+    for (int z = kMinZ; z <= kMaxZ; ++z) {
+      const int dim = 1 << z;
+      const double pixelSpan = 0.00028;
+      const double scaleDen = (156543.03392804097 / static_cast<double>(dim)) / pixelSpan;
+      wmts << L"      <TileMatrix>\n"
+           << L"        <ows:Identifier>" << z << L"</ows:Identifier>\n"
+           << L"        <ScaleDenominator>" << scaleDen << L"</ScaleDenominator>\n"
+           << L"        <TopLeftCorner>-20037508.3427892 20037508.3427892</TopLeftCorner>\n"
+           << L"        <TileWidth>256</TileWidth>\n"
+           << L"        <TileHeight>256</TileHeight>\n"
+           << L"        <MatrixWidth>" << dim << L"</MatrixWidth>\n"
+           << L"        <MatrixHeight>" << dim << L"</MatrixHeight>\n"
+           << L"      </TileMatrix>\n";
+    }
+    wmts << L"    </TileMatrixSet>\n"
+         << L"  </Contents>\n"
+         << L"</Capabilities>\n";
+    rc = WriteTextFile(outDir / L"wmts_capabilities.xml", wmts.str());
+    if (rc != 0) {
+      return rc;
+    }
+  }
+  if (subtype == L"xyz") {
+    const std::wstring extNoDot = ext.empty() ? L"png" : ext.substr(1);
+    std::wstring format = extNoDot;
+    if (format == L"tif") {
+      format = L"tiff";
+    }
+    std::wostringstream tj;
+    tj << L"{\n"
+       << L"  \"tilejson\": \"2.2.0\",\n"
+       << L"  \"name\": \"AGIS XYZ Tiles\",\n"
+       << L"  \"description\": \"AGIS generated XYZ tile pyramid\",\n"
+       << L"  \"scheme\": \"xyz\",\n"
+       << L"  \"format\": \"" << format << L"\",\n"
+       << L"  \"minzoom\": " << kMinZ << L",\n"
+       << L"  \"maxzoom\": " << kMaxZ << L",\n"
+       << L"  \"bounds\": [" << bLonMin << L", " << bLatMin << L", " << bLonMax << L", " << bLatMax << L"],\n"
+       << L"  \"tiles\": [\"./{z}/{x}/{y}" << ext << L"\"]\n"
+       << L"}\n";
+    rc = WriteTextFile(outDir / L"tilejson.json", tj.str());
+    if (rc != 0) {
+      return rc;
+    }
+  }
+  if (subtype == L"tms") {
+    const std::wstring profile = L"global-mercator";
+    const std::wstring extNoDot = ext.empty() ? L"png" : ext.substr(1);
+    std::wostringstream xml;
+    xml << L"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        << L"<TileMap version=\"1.0.0\" tilemapservice=\"http://tms.osgeo.org/1.0.0\">\n"
+        << L"  <Title>AGIS TMS TileMap</Title>\n"
+        << L"  <Abstract>AGIS generated TMS pyramid</Abstract>\n"
+        << L"  <SRS>EPSG:3857</SRS>\n"
+        << L"  <BoundingBox minx=\"" << bMxMin << L"\" miny=\"" << bMyMin << L"\" maxx=\"" << bMxMax << L"\" maxy=\"" << bMyMax
+        << L"\"/>\n"
+        << L"  <Origin x=\"" << bMxMin << L"\" y=\"" << bMyMin << L"\"/>\n"
+        << L"  <TileFormat width=\"256\" height=\"256\" mime-type=\"image/"
+        << (extNoDot == L"tif" ? L"tiff" : extNoDot) << L"\" extension=\"" << extNoDot << L"\"/>\n"
+        << L"  <TileSets profile=\"" << profile << L"\">\n";
+    for (int z = kMinZ; z <= kMaxZ; ++z) {
+      const double unitsPerPixel = 156543.03392804097 / static_cast<double>(1 << z);
+      xml << L"    <TileSet href=\"" << z << L"\" units-per-pixel=\"" << unitsPerPixel << L"\" order=\"" << z << L"\"/>\n";
+    }
+    xml << L"  </TileSets>\n"
+        << L"</TileMap>\n";
+    rc = WriteTextFile(outDir / L"tms.xml", xml.str());
+    if (rc != 0) {
+      return rc;
+    }
+  }
+  return 0;
 }
 
 int ConvertModelToGisImpl(const ConvertArgs& args) {
