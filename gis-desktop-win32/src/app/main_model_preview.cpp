@@ -293,9 +293,11 @@ static void AppendLazGdalDriverHint(std::wstring* d) {
     return;
   }
   *d += L"\n\n";
-  *d += L"【依赖】LAZ 为 LASzip 压缩。建议将 LASzip 源码置于 ../3rdparty/LASzip（见 README-LASZIP.md）；若未启用 bundled "
-        L"LASzip，则会尝试 GDAL 矢量驱动，此时 GDAL 侧可能报无法识别或缺解压依赖。\n";
-  *d += L"【可选】将 LAZ 转为 .las；或确保 CMake 已检测到 bundled LASzip / GDAL LAZ。";
+  *d += L"【依赖】LAZ 为 LASzip 压缩。若 bundled LASzip 未随工程编入，可放置源码到 ../3rdparty/LASzip（见 README-LASZIP.md）；"
+        L"否则仅能通过 GDAL 矢量路径打开 LAZ，依赖 GDAL 对 LAS/LAZ 的驱动与解压配置。\n";
+  *d += L"【可选】将 LAZ 转为 .las；并确认 CMake 已对 bundled LASzip / GDAL 正确检测。\n";
+  *d += L"【排查】若上方 bundled LASzip 已报 “wrong file_signature” / “not a LAS/LAZ file”，说明文件头不是 LASF，多为文件本体或扩展名问题，"
+        L"与「未装 LASzip」无关；此时 GDAL 回退通常同样失败，请先用外部工具或十六进制查看器核对文件格式。";
 }
 
 static bool ReadLazPointsPreviewGdal(const std::wstring& pathW, std::vector<LasPointFltRaw>* outPts, int* progressPct,
@@ -333,7 +335,7 @@ static bool ReadLazPointsPreviewGdal(const std::wstring& pathW, std::vector<LasP
   GDALDataset* ds = static_cast<GDALDataset*>(
       GDALOpenEx(utf8.c_str(), GDAL_OF_VECTOR | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
   if (!ds) {
-    setDiag(L"GDAL 未能打开该文件（可能不是 LAZ、驱动未注册，或缺 LASzip 导致无法解压）。");
+    setDiag(L"GDAL（矢量 Open）未能打开该 LAZ：驱动/格式未识别、缺少 LASzip 支持，或 CPL 详情如下。");
     return false;
   }
   OGRLayer* layer = ds->GetLayer(0);
@@ -455,6 +457,51 @@ static void AppendLaszipLastError(std::wstring* d, laszip_POINTER laszip) {
   d->append(LaszipUtf8ToWide(err));
 }
 
+/// LASzip 报非 LASF 魔数时，避免用户误认为是「未装 LASzip / 仅 GDAL 问题」。
+static void AppendLazWrongSignatureHintIfMatching(std::wstring* d) {
+  if (!d || d->empty()) {
+    return;
+  }
+  const auto lowerContains = [d](const wchar_t* asciiSub) -> bool {
+    const size_t m = std::wcslen(asciiSub);
+    if (m == 0 || d->size() < m) {
+      return false;
+    }
+    for (size_t i = 0; i + m <= d->size(); ++i) {
+      bool ok = true;
+      for (size_t j = 0; j < m; ++j) {
+        const wchar_t c = (*d)[i + j];
+        const wchar_t s = asciiSub[j];
+        if (c != s && std::towlower(static_cast<std::wint_t>(c)) != std::towlower(static_cast<std::wint_t>(s))) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (lowerContains(L"file_signature") || lowerContains(L"not a las")) {
+    d->append(
+        L"\n\n【文件头】正规 LAS/（LAZ 外层亦为）LAS 1.x 应以 ASCII “LASF” 开头（十六进制 4C 41 53 "
+        L"46）。出现本错误多表示：文件并非 LAS/LAZ、下载/拷贝损坏、扩展名与内容不符，或其它点云格式被误命名为 .laz。请先在外部工具或用十六进制查看器核对文件头，"
+        L"而非仅重装 GDAL/LASzip。");
+  }
+}
+
+/// `laszip_get_point_count` 反映的是读写游标 `p_count`，reader 刚打开时为 0；文件总点数须从公共头读取（与 LASzip `open_reader` 内对 `npoints` 的算法一致）。
+static laszip_I64 LazFileTotalPointCount(const laszip_header_struct* header) {
+  if (!header) {
+    return 0;
+  }
+  if (header->number_of_point_records != 0) {
+    return static_cast<laszip_I64>(header->number_of_point_records);
+  }
+  return static_cast<laszip_I64>(header->extended_number_of_point_records);
+}
+
 /// @return 0 成功；3 路径/创建失败；7 非有效 LAS/LAZ 或读头失败
 static int PeekLazPointCountLaszip(const std::wstring& pathW, std::uint64_t* nOut, std::wstring* diagOut) {
   if (!nOut) {
@@ -481,12 +528,23 @@ static int PeekLazPointCountLaszip(const std::wstring& pathW, std::uint64_t* nOu
     if (diagOut) {
       diagOut->assign(L"LASzip：无法打开读端（可能不是 LAZ/LAS 或文件损坏）。");
       AppendLaszipLastError(diagOut, laszip);
+      AppendLazWrongSignatureHintIfMatching(diagOut);
     }
     laszip_destroy(laszip);
     return 7;
   }
-  laszip_I64 cnt = 0;
-  if (laszip_get_point_count(laszip, &cnt) != 0 || cnt <= 0) {
+  laszip_header_struct* header = nullptr;
+  if (laszip_get_header_pointer(laszip, &header) != 0 || !header) {
+    if (diagOut) {
+      diagOut->assign(L"LASzip：无法取得文件头指针。");
+      AppendLaszipLastError(diagOut, laszip);
+    }
+    laszip_close_reader(laszip);
+    laszip_destroy(laszip);
+    return 7;
+  }
+  const laszip_I64 cnt = LazFileTotalPointCount(header);
+  if (cnt <= 0) {
     if (diagOut) {
       diagOut->assign(L"LASzip：无法读取有效点数。");
       AppendLaszipLastError(diagOut, laszip);
@@ -527,6 +585,7 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
     if (diagOut) {
       diagOut->assign(L"LASzip：无法打开读端。");
       AppendLaszipLastError(diagOut, laszip);
+      AppendLazWrongSignatureHintIfMatching(diagOut);
     }
     laszip_destroy(laszip);
     return false;
@@ -541,8 +600,8 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
     laszip_destroy(laszip);
     return false;
   }
-  laszip_I64 npoints = 0;
-  if (laszip_get_point_count(laszip, &npoints) != 0 || npoints <= 0) {
+  const laszip_I64 npoints = LazFileTotalPointCount(header);
+  if (npoints <= 0) {
     if (diagOut) {
       diagOut->assign(L"LASzip：点数无效。");
       AppendLaszipLastError(diagOut, laszip);
@@ -1961,8 +2020,13 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
 #endif
 #if GIS_DESKTOP_HAVE_GDAL
       if (!lazOk) {
+        // 勿丢弃 LASzip 阶段的报错：回退 GDAL 后若仍失败，应一并展示，避免只见 GDAL 笼统提示。
+        const std::wstring laszipDiagBeforeGdal = st->lazPreviewDiag;
         st->lazPreviewDiag.clear();
         lazOk = ReadLazPointsPreviewGdal(st->path, &pts, &st->loadProgress, &st->lazPreviewDiag);
+        if (!lazOk && !laszipDiagBeforeGdal.empty()) {
+          st->lazPreviewDiag = L"【bundled LASzip】\n" + laszipDiagBeforeGdal + L"\n\n【GDAL 回退】\n" + st->lazPreviewDiag;
+        }
       }
 #endif
       if (!lazOk) {
@@ -2035,6 +2099,154 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 1, 0);
   delete ctx;
   return 0;
+}
+
+struct AgisCopyableMsgParams {
+  HWND owner;
+  const wchar_t* title;
+  const wchar_t* body;
+};
+
+enum {
+  kAgisCopyMsgEditId = 100,
+  kAgisCopyMsgOkId = 101,
+};
+
+static LRESULT CALLBACK AgisCopyableMsgWndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_CREATE: {
+      auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+      auto* p = reinterpret_cast<AgisCopyableMsgParams*>(cs->lpCreateParams);
+      SetWindowTextW(w, p->title);
+      RECT rc{};
+      GetClientRect(w, &rc);
+      constexpr int kMargin = 10;
+      constexpr int kBtnH = 28;
+      constexpr int kBtnW = 88;
+      constexpr int kGap = 10;
+      const int editH = (std::max)(0, static_cast<int>(rc.bottom) - kMargin * 2 - kBtnH - kGap);
+      HWND ed = CreateWindowExW(
+          WS_EX_CLIENTEDGE, L"EDIT", p->body,
+          WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL,
+          kMargin, kMargin, (std::max)(40, static_cast<int>(rc.right) - kMargin * 2), editH, w,
+          reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kAgisCopyMsgEditId)), GetModuleHandleW(nullptr), nullptr);
+      if (HFONT f = UiGetAppFont()) {
+        SendMessageW(ed, WM_SETFONT, reinterpret_cast<WPARAM>(f), TRUE);
+      }
+      HWND ok = CreateWindowExW(
+          0, L"BUTTON", L"确定",
+          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+          (std::max)(kMargin, static_cast<int>(rc.right) - kMargin - kBtnW),
+          static_cast<int>(rc.bottom) - kMargin - kBtnH, kBtnW, kBtnH, w,
+          reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kAgisCopyMsgOkId)), GetModuleHandleW(nullptr), nullptr);
+      if (HFONT f = UiGetAppFont()) {
+        SendMessageW(ok, WM_SETFONT, reinterpret_cast<WPARAM>(f), TRUE);
+      }
+      return 0;
+    }
+    case WM_SIZE: {
+      const int cw = LOWORD(lp);
+      const int ch = HIWORD(lp);
+      constexpr int kMargin = 10;
+      constexpr int kBtnH = 28;
+      constexpr int kBtnW = 88;
+      constexpr int kGap = 10;
+      HWND ed = GetDlgItem(w, kAgisCopyMsgEditId);
+      HWND ok = GetDlgItem(w, kAgisCopyMsgOkId);
+      if (ed) {
+        MoveWindow(ed, kMargin, kMargin, (std::max)(40, cw - kMargin * 2),
+                   (std::max)(0, ch - kMargin * 2 - kBtnH - kGap), TRUE);
+      }
+      if (ok) {
+        MoveWindow(ok, (std::max)(kMargin, cw - kMargin - kBtnW), ch - kMargin - kBtnH, kBtnW, kBtnH, TRUE);
+      }
+      return 0;
+    }
+    case WM_COMMAND:
+      if (LOWORD(wp) == kAgisCopyMsgOkId && HIWORD(wp) == BN_CLICKED) {
+        DestroyWindow(w);
+        return 0;
+      }
+      break;
+    case WM_CLOSE:
+      DestroyWindow(w);
+      return 0;
+    default:
+      break;
+  }
+  return DefWindowProcW(w, msg, wp, lp);
+}
+
+static void ShowPreviewCopyableMessage(HWND owner, const wchar_t* title, const wchar_t* body) {
+  static const wchar_t kClassName[] = L"AgisPreviewCopyableMsgWnd";
+  static bool classRegistered = false;
+  if (!classRegistered) {
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = AgisCopyableMsgWndProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = kClassName;
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.style = CS_DBLCLKS;
+    if (RegisterClassExW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+      MessageBoxW(owner, body, title, MB_OK | MB_ICONWARNING);
+      return;
+    }
+    classRegistered = true;
+  }
+  RECT anchor{};
+  if (owner && IsWindow(owner)) {
+    GetWindowRect(owner, &anchor);
+  } else {
+    anchor.left = 0;
+    anchor.top = 0;
+    anchor.right = GetSystemMetrics(SM_CXSCREEN);
+    anchor.bottom = GetSystemMetrics(SM_CYSCREEN);
+  }
+  constexpr int ww = 580;
+  constexpr int wh = 400;
+  const int x = anchor.left + ((anchor.right - anchor.left) - ww) / 2;
+  const int y = anchor.top + ((anchor.bottom - anchor.top) - wh) / 2;
+
+  AgisCopyableMsgParams params{owner, title, body};
+  HWND dlg = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE, kClassName, title,
+                             WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VISIBLE | WS_CLIPCHILDREN, x, y, ww,
+                             wh, owner, nullptr, GetModuleHandleW(nullptr), &params);
+  if (!dlg) {
+    MessageBoxW(owner, body, title, MB_OK | MB_ICONWARNING);
+    return;
+  }
+  ShowWindow(dlg, SW_SHOW);
+  UpdateWindow(dlg);
+  if (HWND edFocus = GetDlgItem(dlg, kAgisCopyMsgEditId)) {
+    SetFocus(edFocus);
+  }
+  bool ownerWasDisabled = false;
+  if (owner && IsWindow(owner)) {
+    EnableWindow(owner, FALSE);
+    ownerWasDisabled = true;
+  }
+  MSG qmsg{};
+  while (IsWindow(dlg) && GetMessageW(&qmsg, nullptr, 0, 0) > 0) {
+    if (!IsWindow(dlg)) {
+      TranslateMessage(&qmsg);
+      DispatchMessageW(&qmsg);
+      continue;
+    }
+    if (qmsg.hwnd == dlg || IsChild(dlg, qmsg.hwnd)) {
+      if (!IsDialogMessageW(dlg, &qmsg)) {
+        TranslateMessage(&qmsg);
+        DispatchMessageW(&qmsg);
+      }
+    } else {
+      TranslateMessage(&qmsg);
+      DispatchMessageW(&qmsg);
+    }
+  }
+  if (ownerWasDisabled && owner && IsWindow(owner)) {
+    EnableWindow(owner, TRUE);
+    SetForegroundWindow(owner);
+  }
 }
 
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2120,13 +2332,13 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       SetTimer(hwnd, 1, 33, nullptr);
       auto* loadCtx = new (std::nothrow) PreviewLoadCtx{hwnd, st};
       if (!loadCtx) {
-        MessageBoxW(hwnd, L"内存不足：无法启动模型后台加载。", L"模型预览", MB_OK | MB_ICONERROR);
+        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法启动模型后台加载。");
         return -1;
       }
       st->loadThread = CreateThread(nullptr, 0, PreviewLoadThreadProc, loadCtx, 0, nullptr);
       if (!st->loadThread) {
         delete loadCtx;
-        MessageBoxW(hwnd, L"无法启动模型加载线程。", L"模型预览", MB_OK | MB_ICONERROR);
+        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法启动模型加载线程。");
         return -1;
       }
       return 0;
@@ -2286,7 +2498,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             st->bgfxCtx = nullptr;
           }
           if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, kind, st->model)) {
-            MessageBoxW(hwnd, L"切换渲染器后初始化失败。", L"模型预览", MB_OK | MB_ICONWARNING);
+            ShowPreviewCopyableMessage(hwnd, L"模型预览", L"切换渲染器后初始化失败。");
           }
           if (st->bgfxCtx && st->useTexture && st->currentTextureLayer < static_cast<int>(st->textureLayers.size())) {
             agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[st->currentTextureLayer].second);
@@ -2392,7 +2604,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           if (!st->model.primaryMapKdPath.empty()) {
             ShellExecuteW(hwnd, L"open", st->model.primaryMapKdPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
           } else {
-            MessageBoxW(hwnd, L"当前模型未检测到 map_Kd 贴图路径。", L"预览贴图", MB_OK | MB_ICONINFORMATION);
+            ShowPreviewCopyableMessage(hwnd, L"预览贴图", L"当前模型未检测到 map_Kd 贴图路径。");
           }
         }
         return 0;
@@ -2407,12 +2619,12 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           st->loadThread = nullptr;
         }
         st->loading = false;
-        MessageBoxW(hwnd,
-                    L"LAZ 预览需要下列之一：\n"
-                    L"（1）在 ../3rdparty/LASzip 放置 LASzip 源码包并重新 CMake 配置编译（推荐，见 3rdparty/README-LASZIP.md）；\n"
-                    L"（2）使用 AGIS_USE_GDAL=on 且 GDAL 能读 LAZ 的构建；\n"
-                    L"或先将 LAZ 解压/转为 .las。",
-                    L"模型预览", MB_OK | MB_ICONINFORMATION);
+        ShowPreviewCopyableMessage(
+            hwnd, L"模型预览",
+            L"LAZ 预览需要下列之一：\n"
+            L"（1）在 ../3rdparty/LASzip 放置 LASzip 源码包并重新 CMake 配置编译（推荐，见 3rdparty/README-LASZIP.md）；\n"
+            L"（2）使用 AGIS_USE_GDAL=on 且 GDAL 能读 LAZ 的构建；\n"
+            L"或先将 LAZ 解压/转为 .las。");
         DestroyWindow(hwnd);
         return 0;
       }
@@ -2422,9 +2634,9 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           st->loadThread = nullptr;
         }
         st->loading = false;
-        MessageBoxW(hwnd,
-                    L"LAS 点数超过内置预览上限（约 2500 万点），为防内存过高已中止。\n请先用外部工具抽稀或切分后再预览。",
-                    L"模型预览", MB_OK | MB_ICONWARNING);
+        ShowPreviewCopyableMessage(
+            hwnd, L"模型预览",
+            L"LAS 点数超过内置预览上限（约 2500 万点），为防内存过高已中止。\n请先用外部工具抽稀或切分后再预览。");
         DestroyWindow(hwnd);
         return 0;
       }
@@ -2439,7 +2651,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                    L"当前 OBJ 面片过大（%llu），直接预览可能导致卡死。\n请提高 mesh-spacing 或使用更粗网格后再试（建议 <= %llu 面）。",
                    static_cast<unsigned long long>(st->loadedStats.faces),
                    static_cast<unsigned long long>(kPreviewObjFaceHardLimit));
-        MessageBoxW(hwnd, msg, L"模型预览", MB_OK | MB_ICONWARNING);
+        ShowPreviewCopyableMessage(hwnd, L"模型预览", msg);
         DestroyWindow(hwnd);
         return 0;
       }
@@ -2468,7 +2680,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           box += L"\n\n—— 详情 ——\n";
           box += st->lazPreviewDiag;
         }
-        MessageBoxW(hwnd, box.c_str(), L"模型预览", MB_OK | MB_ICONWARNING);
+        ShowPreviewCopyableMessage(hwnd, L"模型预览", box.c_str());
         DestroyWindow(hwnd);
         return 0;
       }
@@ -2489,8 +2701,8 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       }
 #if AGIS_USE_BGFX
       if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model)) {
-        MessageBoxW(hwnd, L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ/点云网格有效）。", L"模型预览",
-                    MB_OK | MB_ICONWARNING);
+        ShowPreviewCopyableMessage(hwnd, L"模型预览",
+                                   L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ/点云网格有效）。");
         DestroyWindow(hwnd);
         return 0;
       }
@@ -3497,6 +3709,7 @@ struct TilePreviewState {
   std::wstring samplePath;
   std::wstring hint;
   std::wstring bvHint;
+  HWND hintEdit = nullptr;
   std::unique_ptr<Gdiplus::Bitmap> bmp;
   Mode mode = Mode::kSingleRaster;
   std::unordered_map<uint64_t, std::wstring> slippyPaths;
@@ -3512,6 +3725,30 @@ struct TilePreviewState {
 };
 
 static std::wstring g_pendingTilePreviewRoot;
+
+static void TilePreviewLayoutHintEdit(HWND hwnd, TilePreviewState* st) {
+  if (!st || !st->hintEdit || !IsWindow(st->hintEdit)) {
+    return;
+  }
+  RECT cr{};
+  GetClientRect(hwnd, &cr);
+  const int hintH = (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) ? 240 : 100;
+  MoveWindow(st->hintEdit, 12, 10, (std::max)(40, static_cast<int>(cr.right) - 24), hintH, TRUE);
+}
+
+static void TilePreviewCreateHintEdit(HWND hwnd, TilePreviewState* st) {
+  if (!st || st->hintEdit) {
+    return;
+  }
+  st->hintEdit = CreateWindowExW(
+      WS_EX_CLIENTEDGE, L"EDIT", st->hint.c_str(),
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL, 0, 0, 10,
+      10, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (st->hintEdit && UiGetAppFont()) {
+    SendMessageW(st->hintEdit, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+  }
+  TilePreviewLayoutHintEdit(hwnd, st);
+}
 
 static Gdiplus::Bitmap* TileCacheLookup(TilePreviewState* st, uint64_t key, const std::wstring& tilePath) {
   if (!st) {
@@ -3649,10 +3886,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
               hs << L"\n" << gdalDiag;
             }
             st->hint = hs.str();
+            TilePreviewCreateHintEdit(hwnd, st);
             return 0;
           }
           st->hint = L"【MBTiles / GeoPackage】GDAL 预览失败：\n" + gdalDiag +
                      L"\n\n请检查：构建已启用 GDAL、MBTiles/GPKG 驱动、PROJ 与 gdal_data；或「系统默认打开」/ 导出 XYZ 目录再预览。";
+          TilePreviewCreateHintEdit(hwnd, st);
           return 0;
         }
       }
@@ -3720,6 +3959,13 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           }
           st->hint = hs.str();
         }
+      }
+      TilePreviewCreateHintEdit(hwnd, st);
+      return 0;
+    }
+    case WM_SIZE: {
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        TilePreviewLayoutHintEdit(hwnd, st);
       }
       return 0;
     }
@@ -3794,18 +4040,11 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       FillRect(hdc, &cr, bg);
       DeleteObject(bg);
       if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-        RECT textRc = cr;
-        textRc.left += 12;
-        textRc.right -= 12;
-        textRc.top += 10;
-        const int hintH = (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) ? 240 : 100;
-        textRc.bottom = textRc.top + hintH;
         if (HFONT f = UiGetAppFont()) {
           SelectObject(hdc, f);
         }
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(32, 42, 64));
-        DrawTextW(hdc, st->hint.c_str(), -1, &textRc, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
           TilePaintSlippy(hdc, cr, st);
         } else if (st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok) {
@@ -3853,7 +4092,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingTilePreviewRoot = path;
   CreateWindowExW(WS_EX_TOOLWINDOW, kTilePreviewClass, L"瓦片预览 · 四叉树 / BVH 元数据",
-                  WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner, nullptr,
-                  GetModuleHandleW(nullptr), nullptr);
+                  WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
+                  nullptr, GetModuleHandleW(nullptr), nullptr);
 }
 

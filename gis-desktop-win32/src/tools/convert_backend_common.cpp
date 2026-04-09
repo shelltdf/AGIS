@@ -21,6 +21,9 @@
 #include <string>
 #include <regex>
 #include <windows.h>
+#if defined(AGIS_HAVE_LASZIP) && AGIS_HAVE_LASZIP
+#include <laszip_api.h>
+#endif
 #if GIS_DESKTOP_HAVE_GDAL
 #include <gdal.h>
 #include <gdal_utils.h>
@@ -1557,6 +1560,26 @@ void TargetHorizDeltaToApproxMeters(double refLonDeg, double refLatDeg, double p
 
 }  // namespace
 
+/// GIS→模型 / 瓦片→模型 仅产出 OBJ；若用户误选 .las/.laz 输出路径，会写成「扩展名像点云、内容为 OBJ」，预览 LAZ 时报 wrong file_signature。
+static void AgisCoerceModelOutputPathFromLasLazToObj(std::filesystem::path* path, const wchar_t* toolLabel) {
+  if (!path || path->empty()) {
+    return;
+  }
+  std::error_code ec;
+  if (std::filesystem::is_directory(*path, ec)) {
+    return;
+  }
+  std::wstring ext = path->extension().wstring();
+  for (auto& c : ext) {
+    c = static_cast<wchar_t>(std::towlower(c));
+  }
+  if (ext == L".laz" || ext == L".las") {
+    std::wcerr << L"[WARN] " << toolLabel
+               << L" 输出为 Wavefront OBJ，不能使用 .las/.laz 扩展名（否则内容仍为 OBJ，与点云格式不符）。已改为 .obj。\n";
+    path->replace_extension(L".obj");
+  }
+}
+
 int ConvertGisToModelImpl(const ConvertArgs& args) {
   auto reportProgress = [](int pct, const wchar_t* text) {
     const int p = (std::clamp)(pct, 0, 100);
@@ -1568,6 +1591,8 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   if (std::filesystem::is_directory(outPath, ec) || outPath.extension().empty()) {
     std::filesystem::create_directories(outPath, ec);
     outPath /= L"model.obj";
+  } else {
+    AgisCoerceModelOutputPathFromLasLazToObj(&outPath, L"GIS→模型");
   }
   const std::wstring mtlName = outPath.stem().wstring() + L".mtl";
   std::wcout << L"[OUT] model file: " << outPath.wstring() << L"\n";
@@ -2741,6 +2766,172 @@ static int WriteLas12Pdrf2(const std::filesystem::path& path, const std::vector<
   return ofs.good() ? 0 : 6;
 }
 
+static std::string AgisWideToUtf8ForCApi(const std::wstring& ws) {
+  if (ws.empty()) {
+    return {};
+  }
+  const int n =
+      WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
+  if (n <= 0) {
+    return {};
+  }
+  std::string out(static_cast<size_t>(n), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), static_cast<int>(ws.size()), out.data(), n, nullptr, nullptr);
+  return out;
+}
+
+#if defined(AGIS_HAVE_LASZIP) && AGIS_HAVE_LASZIP
+/// 与 WriteLas12Pdrf2 相同的 LAS 1.2 PDRF 2（RGB）语义，经 LASzip 压缩为 LAZ。
+static int WriteLas12Pdrf2Laz(const std::filesystem::path& path, const std::vector<LasPointFlt>& pts) {
+  if (pts.empty()) {
+    return 8;
+  }
+  double minx = pts[0].x, maxx = pts[0].x, miny = pts[0].y, maxy = pts[0].y, minz = pts[0].z, maxz = pts[0].z;
+  for (const auto& p : pts) {
+    minx = (std::min)(minx, p.x);
+    maxx = (std::max)(maxx, p.x);
+    miny = (std::min)(miny, p.y);
+    maxy = (std::max)(maxy, p.y);
+    minz = (std::min)(minz, p.z);
+    maxz = (std::max)(maxz, p.z);
+  }
+  double xscale = 0.001;
+  double yscale = 0.001;
+  double zscale = 0.001;
+  double xoff = minx;
+  double yoff = miny;
+  double zoff = minz;
+  const double span = (std::max)({maxx - minx, maxy - miny, maxz - minz, 1e-9});
+  if (span / xscale > 2.0e9) {
+    xscale = yscale = zscale = span / 2.0e9;
+  }
+  if (pts.size() > 0xffffffffull) {
+    std::wcerr << L"[ERROR] LAS 1.2 legacy 记录数超限。\n";
+    return 8;
+  }
+  const std::uint32_t nPts = static_cast<std::uint32_t>(pts.size());
+  const std::string utf8Path = AgisWideToUtf8ForCApi(path.wstring());
+  if (utf8Path.empty() && !path.empty()) {
+    std::wcerr << L"[ERROR] LAZ：无法将输出路径转为 UTF-8。\n";
+    return 3;
+  }
+  laszip_POINTER laszip = nullptr;
+  if (laszip_create(&laszip) != 0 || !laszip) {
+    std::wcerr << L"[ERROR] LAZ：laszip_create 失败。\n";
+    return 3;
+  }
+  laszip_header_struct* header = nullptr;
+  if (laszip_get_header_pointer(laszip, &header) != 0 || !header) {
+    std::wcerr << L"[ERROR] LAZ：无法取得 header 指针。\n";
+    laszip_destroy(laszip);
+    return 3;
+  }
+  std::memset(header, 0, sizeof(laszip_header_struct));
+  header->header_size = 227;
+  header->offset_to_point_data = 227;
+  header->number_of_variable_length_records = 0;
+  header->start_of_waveform_data_packet_record = 0;
+  header->start_of_first_extended_variable_length_record = 0;
+  header->number_of_extended_variable_length_records = 0;
+  header->extended_number_of_point_records = 0;
+  header->vlrs = nullptr;
+  header->user_data_in_header = nullptr;
+  header->user_data_after_header = nullptr;
+  header->version_major = 1;
+  header->version_minor = 2;
+  {
+    const char* sys = "AGIS";
+    const char* gen = "agis_convert_model_to_model LAZ";
+    std::memcpy(header->system_identifier, sys, (std::min)(std::strlen(sys), size_t(31)));
+    std::memcpy(header->generating_software, gen, (std::min)(std::strlen(gen), size_t(31)));
+  }
+  header->point_data_format = 2;
+  header->point_data_record_length = 26;
+  header->number_of_point_records = nPts;
+  header->number_of_points_by_return[0] = nPts;
+  header->x_scale_factor = xscale;
+  header->y_scale_factor = yscale;
+  header->z_scale_factor = zscale;
+  header->x_offset = xoff;
+  header->y_offset = yoff;
+  header->z_offset = zoff;
+  header->max_x = maxx;
+  header->min_x = minx;
+  header->max_y = maxy;
+  header->min_y = miny;
+  header->max_z = maxz;
+  header->min_z = minz;
+  if (laszip_open_writer(laszip, utf8Path.c_str(), 1) != 0) {
+    laszip_CHAR* err = nullptr;
+    if (laszip_get_error(laszip, &err) == 0 && err && err[0]) {
+      std::wcerr << L"[ERROR] LAZ：open_writer: ";
+      std::cerr << err;
+      std::wcerr << L"\n";
+    } else {
+      std::wcerr << L"[ERROR] LAZ：laszip_open_writer 失败。\n";
+    }
+    laszip_destroy(laszip);
+    return 3;
+  }
+  laszip_point_struct* point = nullptr;
+  if (laszip_get_point_pointer(laszip, &point) != 0 || !point) {
+    std::wcerr << L"[ERROR] LAZ：无法取得 point 指针。\n";
+    laszip_close_writer(laszip);
+    laszip_destroy(laszip);
+    return 3;
+  }
+  laszip_F64 coords[3]{};
+  for (const auto& p : pts) {
+    coords[0] = p.x;
+    coords[1] = p.y;
+    coords[2] = p.z;
+    if (laszip_set_coordinates(laszip, coords) != 0) {
+      std::wcerr << L"[ERROR] LAZ：laszip_set_coordinates 失败。\n";
+      laszip_close_writer(laszip);
+      laszip_destroy(laszip);
+      return 6;
+    }
+    point->intensity = 0;
+    point->return_number = 1;
+    point->number_of_returns = 1;
+    point->classification = 1;
+    point->scan_angle_rank = 0;
+    point->user_data = 0;
+    point->point_source_ID = 1;
+    const std::uint16_t R = static_cast<std::uint16_t>(p.r * 257);
+    const std::uint16_t G = static_cast<std::uint16_t>(p.g * 257);
+    const std::uint16_t B = static_cast<std::uint16_t>(p.b * 257);
+    point->gps_time = 0;
+    point->rgb[0] = R;
+    point->rgb[1] = G;
+    point->rgb[2] = B;
+    point->rgb[3] = 0;
+    if (laszip_write_point(laszip) != 0) {
+      laszip_CHAR* err = nullptr;
+      if (laszip_get_error(laszip, &err) == 0 && err && err[0]) {
+        std::wcerr << L"[ERROR] LAZ：write_point: ";
+        std::cerr << err;
+        std::wcerr << L"\n";
+      } else {
+        std::wcerr << L"[ERROR] LAZ：laszip_write_point 失败。\n";
+      }
+      laszip_close_writer(laszip);
+      laszip_destroy(laszip);
+      return 6;
+    }
+  }
+  if (laszip_close_writer(laszip) != 0) {
+    std::wcerr << L"[ERROR] LAZ：laszip_close_writer 失败。\n";
+    laszip_destroy(laszip);
+    return 6;
+  }
+  if (laszip_destroy(laszip) != 0) {
+    return 6;
+  }
+  return 0;
+}
+#endif  // AGIS_HAVE_LASZIP
+
 static int ReadLasPoints(const std::filesystem::path& path, std::vector<LasPointFlt>* outPts) {
   if (!outPts) {
     return 7;
@@ -3169,8 +3360,13 @@ static int ConvertMeshObjToLasJob(const ConvertArgs& args) {
     c = static_cast<wchar_t>(std::towlower(c));
   }
   if (ext == L".laz") {
-    std::wcerr << L"[WARN] LAZ 压缩需 LASzip；改输出为同目录 .las。\n";
+#if defined(AGIS_HAVE_LASZIP) && AGIS_HAVE_LASZIP
+    std::wcout << L"[OUT] LAZ (LASzip): " << outLas.wstring() << L" 点数=" << pts.size() << L"\n";
+    return WriteLas12Pdrf2Laz(outLas, pts);
+#else
+    std::wcerr << L"[WARN] 构建未编入 bundled LASzip，无法写入 LAZ；改输出为同目录 .las。\n";
     outLas.replace_extension(L".las");
+#endif
   } else if (ext != L".las") {
     outLas.replace_extension(L".las");
   }
@@ -4073,6 +4269,8 @@ int ConvertTileToModelImpl(const ConvertArgs& args) {
     if (std::filesystem::is_directory(outPath, ec) || outPath.extension().empty()) {
       std::filesystem::create_directories(outPath, ec);
       outPath /= L"tile_model_000.obj";
+    } else {
+      AgisCoerceModelOutputPathFromLasLazToObj(&outPath, L"瓦片→模型");
     }
     const std::wstring msg = std::wstring(kObjFileFormatBanner30) + L"o tile_model\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
     return WriteTextFile(outPath, msg);
@@ -4090,6 +4288,9 @@ int ConvertTileToModelImpl(const ConvertArgs& args) {
   std::filesystem::path outBase(args.output);
   std::error_code ec;
   bool outputIsDir = std::filesystem::is_directory(outBase, ec) || outBase.extension().empty();
+  if (!outputIsDir) {
+    AgisCoerceModelOutputPathFromLasLazToObj(&outBase, L"瓦片→模型");
+  }
   if (outputIsDir) {
     std::filesystem::create_directories(outBase, ec);
   } else {

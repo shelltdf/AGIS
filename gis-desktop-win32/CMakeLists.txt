@@ -28,6 +28,9 @@ option(AGIS_BUNDLE_GDAL
 
 option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static" OFF)
 option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
+option(AGIS_USE_LASZIP
+  "Bundle LASzip from ../3rdparty/LASzip for LAZ in model preview (AGIS_HAVE_LASZIP=1 when sources are present). Default ON; set OFF to skip."
+  ON)
 # 模型预览与其它 bgfx 路径依赖 bx/bimg；关闭 unsupported（勿传 -DAGIS_USE_BGFX=OFF）。
 option(AGIS_USE_BGFX "强制：须为 ON。模型预览使用 bgfx/bx/bimg，关闭不受支持。" ON)
 if(NOT AGIS_USE_BGFX)
@@ -121,7 +124,11 @@ endif()
 
 # --- LASzip（源码包解压到 ../3rdparty/LASzip，用于 LAZ 预览解压；非 git clone）---
 set(AGIS_HAVE_LASZIP FALSE)
-include(cmake/AGISBundledLASzip.cmake)
+if(AGIS_USE_LASZIP)
+  include(cmake/AGISBundledLASzip.cmake)
+else()
+  message(STATUS "AGIS: AGIS_USE_LASZIP=OFF — bundled LASzip skipped (LAZ relies on GDAL if available)")
+endif()
 
 # --- Draco（../3rdparty/draco，3D Tiles / glTF KHR_draco_mesh_compression；须先于 agis_desktop link）---
 set(AGIS_HAVE_DRACO FALSE)
@@ -446,6 +453,13 @@ else()
 endif()
 if(MSVC)
   target_compile_options(agis_convert_backend_common PRIVATE /utf-8)
+endif()
+if(AGIS_HAVE_LASZIP)
+  target_compile_definitions(agis_convert_backend_common PRIVATE AGIS_HAVE_LASZIP=1)
+  target_include_directories(agis_convert_backend_common PRIVATE
+    "${AGIS_LASZIP_ROOT}/dll"
+    "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
+  target_link_libraries(agis_convert_backend_common PRIVATE "${AGIS_LASZIP_TARGET}")
 endif()
 
 set(_agis_convert_tools

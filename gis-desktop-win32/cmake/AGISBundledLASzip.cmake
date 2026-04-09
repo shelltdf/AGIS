@@ -9,7 +9,8 @@ set(AGIS_LASZIP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/LASzip" CACHE PATH
 
 if(NOT EXISTS "${AGIS_LASZIP_ROOT}/CMakeLists.txt")
   set(AGIS_HAVE_LASZIP FALSE)
-  message(STATUS "AGIS: LASzip not found at ${AGIS_LASZIP_ROOT} (LAZ preview via LASzip disabled)")
+  message(STATUS
+          "AGIS: LASzip not found at ${AGIS_LASZIP_ROOT} (AGIS_USE_LASZIP=ON: place sources per README-LASZIP.md; AGIS_HAVE_LASZIP stays OFF until then)")
   return()
 endif()
 

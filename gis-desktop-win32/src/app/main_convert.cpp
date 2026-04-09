@@ -516,7 +516,8 @@ void FillConvertSubtypeCombo(HWND combo, int majorType) {
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TIN（三角网）"));
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"DEM（高程栅格）"));
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3DMesh（网格模型）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"点云（LAS；LAZ 输出为同路径 LAS + 提示）"));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(L"点云（LAS；选 LAZ 时在已编入 LASzip 的构建中输出真 LAZ）"));
       break;
     default:
       SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ（金字塔瓦片）"));
@@ -604,7 +605,7 @@ const wchar_t* ConvertSubtypeTooltipByMajorSubtype(int major, int sub) {
                L"细节：可与点云互转；贴图参与 LAS 着色。";
       case 3:
         return L"点云（LAS）\n"
-               L"文件格式：.las（PDRF 2 带 RGB）；选 .laz 时输出 .las 并提示需 LASzip 压缩。\n"
+               L"文件格式：.las / .laz（均为 LAS 1.2 PDRF 2 RGB；.laz 需构建编入 bundled LASzip，否则降为 .las）。\n"
                L"细节：可由带 UV 与 map_Kd 的 OBJ+MTL 按贴图像素采样生成。";
       default:
         return L"（未知模型子类型）";

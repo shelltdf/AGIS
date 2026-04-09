@@ -15,7 +15,7 @@
 3. **请将该文件夹重命名为** `LASzip`，使存在文件：  
    `3rdparty/LASzip/CMakeLists.txt`
 
-CMake 通过 `gis-desktop-win32/cmake/AGISBundledLASzip.cmake` 检测该路径；成功时主程序定义 `AGIS_HAVE_LASZIP=1` 并静态链接 `laszip3`（Windows）/`laszip`（其它平台），模型预览优先用 LASzip 读 LAZ，失败时再尝试 GDAL。
+`gis-desktop-win32/CMakeLists.txt` 中 **`AGIS_USE_LASZIP` 默认为 ON**（可用 `-DAGIS_USE_LASZIP=OFF` 关闭）。开启时由 `cmake/AGISBundledLASzip.cmake` 检测该路径：成功则主程序与 **`agis_convert_backend_common`**（各 `agis_convert_*` 工具）均定义 `AGIS_HAVE_LASZIP=1` 并静态链接 `laszip3`（Windows）/`laszip`（其它平台）：**模型预览**优先用 LASzip 读 LAZ；**`agis_convert_model_to_model`** 在 **3DMesh→点云** 且输出为 **`.laz`** 时用 **`laszip_open_writer`** 写入压缩 LAZ（与读路径相同的 LAS 1.2 PDRF 2 语义）。若未编入 LASzip，输出 **`.laz`** 时会降为 **`.las`**。
 
 ## 许可
 
