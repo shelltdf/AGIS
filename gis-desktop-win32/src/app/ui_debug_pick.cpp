@@ -11,18 +11,29 @@
 
 namespace {
 constexpr int kDebugPickHotkeyId = 0x4911;
+constexpr int kDebugCopyNameHotkeyId = 0x4912;
+constexpr int kDebugCopyPathHotkeyId = 0x4913;
+constexpr int kDebugExitHotkeyId = 0x4914;
 constexpr wchar_t kDebugOverlayClass[] = L"AGIS_DEBUG_PICK_OVERLAY";
-constexpr wchar_t kDebugInspectorClass[] = L"AGIS_DEBUG_PICK_INSPECTOR";
+constexpr wchar_t kDebugInspectorClass[] = L"AGIS_DEBUG_PICK_OUTLINE";
+constexpr wchar_t kDebugPropsClass[] = L"AGIS_DEBUG_PICK_PROPS";
 constexpr COLORREF kOverlayColorKey = RGB(1, 2, 3);
 constexpr int kInspectorTreeId = 1001;
 constexpr int kInspectorPropsId = 1002;
+constexpr int kInspectorModeToggleId = 1003;
+constexpr int kInspectorCopyPropsId = 1004;
 
 HINSTANCE g_inst = nullptr;
 HHOOK g_getMsgHook = nullptr;
 HWND g_overlay = nullptr;
 HWND g_inspector = nullptr;
+HWND g_propsWindow = nullptr;
 HWND g_tree = nullptr;
 HWND g_props = nullptr;
+HWND g_propsModeToggle = nullptr;
+HWND g_propsCopyBtn = nullptr;
+HFONT g_jsonFont = nullptr;
+HFONT g_uiFont = nullptr;
 bool g_enabled = false;
 bool g_dragging = false;
 POINT g_dragStart{};
@@ -35,6 +46,27 @@ int g_vsTop = 0;
 int g_vsW = 0;
 int g_vsH = 0;
 bool g_updatingTree = false;
+bool g_propsShowSubtree = false;
+
+HFONT EnsureJsonFont() {
+  if (g_jsonFont) return g_jsonFont;
+  g_jsonFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+  if (!g_jsonFont) {
+    g_jsonFont = static_cast<HFONT>(GetStockObject(ANSI_FIXED_FONT));
+  }
+  return g_jsonFont;
+}
+
+HFONT EnsureUiFont() {
+  if (g_uiFont) return g_uiFont;
+  g_uiFont = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, VARIABLE_PITCH | FF_SWISS, L"Segoe UI");
+  if (!g_uiFont) {
+    g_uiFont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  }
+  return g_uiFont;
+}
 
 const wchar_t* ControlIdName(int id) {
   switch (id) {
@@ -122,6 +154,24 @@ std::wstring HwndName(HWND h) {
   return std::wstring(cls);
 }
 
+std::wstring HwndFullPathName(HWND h) {
+  if (!h || !IsWindow(h)) return L"<invalid>";
+  std::vector<std::wstring> parts;
+  HWND cur = h;
+  while (cur && IsWindow(cur)) {
+    parts.push_back(HwndName(cur));
+    HWND p = GetParent(cur);
+    if (!p || p == cur) break;
+    cur = p;
+  }
+  std::wstring path;
+  for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+    if (!path.empty()) path += L" / ";
+    path += *it;
+  }
+  return path;
+}
+
 void CopyText(const std::wstring& s) {
   if (!OpenClipboard(nullptr)) return;
   EmptyClipboard();
@@ -138,6 +188,36 @@ void CopyText(const std::wstring& s) {
     if (h) GlobalFree(h);
   }
   CloseClipboard();
+}
+
+void CopySelectedNames() {
+  std::wstring all;
+  for (size_t i = 0; i < g_selected.size(); ++i) {
+    if (i) all += L"\r\n";
+    all += HwndName(g_selected[i]);
+  }
+  if (!all.empty()) CopyText(all);
+}
+
+void CopySelectedFullPaths() {
+  std::wstring all;
+  for (size_t i = 0; i < g_selected.size(); ++i) {
+    if (i) all += L"\r\n";
+    all += HwndFullPathName(g_selected[i]);
+  }
+  if (!all.empty()) CopyText(all);
+}
+
+void SetDebugRuntimeHotkeys(bool enable) {
+  if (enable) {
+    RegisterHotKey(nullptr, kDebugCopyNameHotkeyId, MOD_CONTROL, 'C');
+    RegisterHotKey(nullptr, kDebugCopyPathHotkeyId, MOD_CONTROL | MOD_SHIFT, 'C');
+    RegisterHotKey(nullptr, kDebugExitHotkeyId, MOD_NOREPEAT, VK_ESCAPE);
+  } else {
+    UnregisterHotKey(nullptr, kDebugCopyNameHotkeyId);
+    UnregisterHotKey(nullptr, kDebugCopyPathHotkeyId);
+    UnregisterHotKey(nullptr, kDebugExitHotkeyId);
+  }
 }
 
 void RefreshVirtualRect() {
@@ -163,8 +243,10 @@ void InvalidateOverlay() {
 }
 
 bool IsInspectorWindowOrChild(HWND h) {
-  if (!h || !g_inspector || !IsWindow(g_inspector)) return false;
-  return h == g_inspector || IsChild(g_inspector, h);
+  if (!h) return false;
+  if (g_inspector && IsWindow(g_inspector) && (h == g_inspector || IsChild(g_inspector, h))) return true;
+  if (g_propsWindow && IsWindow(g_propsWindow) && (h == g_propsWindow || IsChild(g_propsWindow, h))) return true;
+  return false;
 }
 
 bool IsHwndSelected(HWND h) {
@@ -228,28 +310,118 @@ void SyncTreeSelectionFromCurrent() {
   g_updatingTree = false;
 }
 
-void UpdateInspectorProps() {
-  if (!g_props || !IsWindow(g_props)) return;
-  if (g_selected.empty()) {
-    SetWindowTextW(g_props, L"(未选中控件)");
-    return;
+std::wstring JsonEscape(const std::wstring& s) {
+  std::wstring out;
+  out.reserve(s.size() + 16);
+  for (wchar_t ch : s) {
+    switch (ch) {
+      case L'\\': out += L"\\\\"; break;
+      case L'"': out += L"\\\""; break;
+      case L'\r': out += L"\\r"; break;
+      case L'\n': out += L"\\n"; break;
+      case L'\t': out += L"\\t"; break;
+      default: out.push_back(ch); break;
+    }
   }
-  HWND h = g_selected.front();
+  return out;
+}
+
+void AppendIndent(std::wstringstream& ss, int n) {
+  for (int i = 0; i < n; ++i) ss << L' ';
+}
+
+void AppendWindowJson(std::wstringstream& ss, HWND h, int indent, bool includeChildren) {
   RECT wr{};
   GetWindowRect(h, &wr);
   wchar_t cls[128]{};
   GetClassNameW(h, cls, 128);
   wchar_t txt[256]{};
   GetWindowTextW(h, txt, 256);
+  const int id = GetDlgCtrlID(h);
+
+  AppendIndent(ss, indent);
+  ss << L"{\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"name\": \"" << JsonEscape(HwndName(h)) << L"\",\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"fullPath\": \"" << JsonEscape(HwndFullPathName(h)) << L"\",\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"hwnd\": \"0x" << std::hex << reinterpret_cast<std::uintptr_t>(h) << std::dec << L"\",\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"class\": \"" << JsonEscape(cls) << L"\",\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"id\": " << id << L",\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"text\": \"" << JsonEscape(txt) << L"\",\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"rect\": {\n";
+  AppendIndent(ss, indent + 4);
+  ss << L"\"left\": " << wr.left << L",\n";
+  AppendIndent(ss, indent + 4);
+  ss << L"\"top\": " << wr.top << L",\n";
+  AppendIndent(ss, indent + 4);
+  ss << L"\"right\": " << wr.right << L",\n";
+  AppendIndent(ss, indent + 4);
+  ss << L"\"bottom\": " << wr.bottom << L"\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"},\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"size\": {\n";
+  AppendIndent(ss, indent + 4);
+  ss << L"\"width\": " << (wr.right - wr.left) << L",\n";
+  AppendIndent(ss, indent + 4);
+  ss << L"\"height\": " << (wr.bottom - wr.top) << L"\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"},\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"visible\": " << (IsWindowVisible(h) ? L"true" : L"false") << L",\n";
+  AppendIndent(ss, indent + 2);
+  ss << L"\"enabled\": " << (IsWindowEnabled(h) ? L"true" : L"false");
+  if (includeChildren) {
+    std::vector<HWND> children;
+    for (HWND c = GetWindow(h, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+      if (!IsWindow(c) || c == g_overlay || c == g_inspector || c == g_propsWindow) continue;
+      children.push_back(c);
+    }
+    if (children.empty()) {
+      ss << L",\n";
+      AppendIndent(ss, indent + 2);
+      ss << L"\"children\": []\n";
+    } else {
+      ss << L",\n";
+      AppendIndent(ss, indent + 2);
+      ss << L"\"children\": [\n";
+      for (size_t i = 0; i < children.size(); ++i) {
+        if (i) ss << L",\n";
+        AppendWindowJson(ss, children[i], indent + 4, true);
+      }
+      ss << L"\n";
+      AppendIndent(ss, indent + 2);
+      ss << L"]\n";
+    }
+    AppendIndent(ss, indent);
+    ss << L"}";
+    return;
+  }
+  ss << L"\n";
+  AppendIndent(ss, indent);
+  ss << L"}";
+}
+
+void UpdateInspectorProps() {
+  if (!g_props || !IsWindow(g_props)) return;
+  if (g_selected.empty()) {
+    SetWindowTextW(g_props, L"{\r\n  \"selected\": null\r\n}");
+    return;
+  }
+  HWND h = g_selected.front();
   std::wstringstream ss;
-  ss << L"变量名: " << HwndName(h) << L"\r\n";
-  ss << L"HWND: 0x" << std::hex << reinterpret_cast<std::uintptr_t>(h) << std::dec << L"\r\n";
-  ss << L"Class: " << cls << L"\r\n";
-  ss << L"Text: " << txt << L"\r\n";
-  ss << L"Rect: (" << wr.left << L"," << wr.top << L") - (" << wr.right << L"," << wr.bottom << L")\r\n";
-  ss << L"Size: " << (wr.right - wr.left) << L" x " << (wr.bottom - wr.top) << L"\r\n";
-  ss << L"Visible: " << (IsWindowVisible(h) ? L"true" : L"false") << L"\r\n";
-  ss << L"Enabled: " << (IsWindowEnabled(h) ? L"true" : L"false") << L"\r\n";
+  ss << L"{\r\n";
+  ss << L"  \"mode\": \"" << (g_propsShowSubtree ? L"with_children" : L"single") << L"\",\r\n";
+  ss << L"  \"selectedCount\": " << static_cast<int>(g_selected.size()) << L",\r\n";
+  ss << L"  \"selected\":\r\n";
+  AppendWindowJson(ss, h, 2, g_propsShowSubtree);
+  ss << L"\r\n}";
   SetWindowTextW(g_props, ss.str().c_str());
 }
 
@@ -266,7 +438,7 @@ HTREEITEM AddTreeNode(HWND tree, HTREEITEM parent, HWND h) {
 
 void BuildTreeChildren(HWND tree, HTREEITEM parentItem, HWND parentHwnd) {
   for (HWND c = GetWindow(parentHwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
-    if (!IsWindow(c) || c == g_overlay || c == g_inspector) continue;
+    if (!IsWindow(c) || c == g_overlay || c == g_inspector || c == g_propsWindow) continue;
     HTREEITEM item = AddTreeNode(tree, parentItem, c);
     BuildTreeChildren(tree, item, c);
   }
@@ -280,7 +452,7 @@ void RefreshInspectorTree() {
   EnumThreadWindows(GetCurrentThreadId(),
                     [](HWND h, LPARAM lp) -> BOOL {
                       HWND tree = reinterpret_cast<HWND>(lp);
-                      if (h == g_overlay || h == g_inspector) return TRUE;
+                      if (h == g_overlay || h == g_inspector || h == g_propsWindow) return TRUE;
                       HTREEITEM root = AddTreeNode(tree, TVI_ROOT, h);
                       BuildTreeChildren(tree, root, h);
                       return TRUE;
@@ -374,17 +546,14 @@ void SelectByRect(const RECT& sr, bool additive) {
   if (g_tree && IsWindow(g_tree)) InvalidateRect(g_tree, nullptr, TRUE);
 }
 
-LRESULT CALLBACK InspectorProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK OutlineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_CREATE: {
       g_tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_LINESATROOT |
                                                                  TVS_HASBUTTONS | TVS_SHOWSELALWAYS,
                                0, 0, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kInspectorTreeId)), g_inst,
                                nullptr);
-      g_props = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL |
-                                                               ES_READONLY | WS_VSCROLL,
-                                0, 0, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kInspectorPropsId)), g_inst,
-                                nullptr);
+      SendMessageW(g_tree, WM_SETFONT, reinterpret_cast<WPARAM>(EnsureUiFont()), TRUE);
       RefreshInspectorTree();
       UpdateInspectorProps();
       return 0;
@@ -394,9 +563,7 @@ LRESULT CALLBACK InspectorProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       GetClientRect(hwnd, &rc);
       const int w = rc.right - rc.left;
       const int h = rc.bottom - rc.top;
-      const int leftW = (std::max)(220, w * 45 / 100);
-      if (g_tree) MoveWindow(g_tree, 0, 0, leftW, h, TRUE);
-      if (g_props) MoveWindow(g_props, leftW + 2, 0, (std::max)(50, w - leftW - 2), h, TRUE);
+      if (g_tree) MoveWindow(g_tree, 0, 0, (std::max)(120, w), (std::max)(120, h), TRUE);
       return 0;
     }
     case WM_NOTIFY: {
@@ -435,6 +602,62 @@ LRESULT CALLBACK InspectorProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+LRESULT CALLBACK PropsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  switch (msg) {
+    case WM_CREATE: {
+      g_propsModeToggle = CreateWindowW(L"BUTTON", L"显示全部子节点", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 8, 8, 180, 24, hwnd,
+                                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kInspectorModeToggleId)), g_inst, nullptr);
+      g_propsCopyBtn = CreateWindowW(L"BUTTON", L"复制文本", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 196, 8, 90, 24, hwnd,
+                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kInspectorCopyPropsId)), g_inst, nullptr);
+      SendMessageW(g_propsModeToggle, BM_SETCHECK, g_propsShowSubtree ? BST_CHECKED : BST_UNCHECKED, 0);
+      g_props = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL |
+                                                               ES_AUTOHSCROLL | ES_READONLY | WS_VSCROLL | WS_HSCROLL,
+                                8, 36, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kInspectorPropsId)), g_inst,
+                                nullptr);
+      SendMessageW(g_propsModeToggle, WM_SETFONT, reinterpret_cast<WPARAM>(EnsureUiFont()), TRUE);
+      SendMessageW(g_propsCopyBtn, WM_SETFONT, reinterpret_cast<WPARAM>(EnsureUiFont()), TRUE);
+      SendMessageW(g_props, WM_SETFONT, reinterpret_cast<WPARAM>(EnsureJsonFont()), TRUE);
+      SendMessageW(g_props, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(8, 8));
+      UpdateInspectorProps();
+      return 0;
+    }
+    case WM_SIZE: {
+      RECT rc{};
+      GetClientRect(hwnd, &rc);
+      const int w = rc.right - rc.left;
+      const int h = rc.bottom - rc.top;
+      if (g_propsModeToggle) MoveWindow(g_propsModeToggle, 8, 8, (std::max)(120, w - 116), 24, TRUE);
+      if (g_propsCopyBtn) MoveWindow(g_propsCopyBtn, (std::max)(8, w - 98), 8, 90, 24, TRUE);
+      if (g_props) MoveWindow(g_props, 8, 36, (std::max)(120, w - 16), (std::max)(120, h - 44), TRUE);
+      return 0;
+    }
+    case WM_COMMAND: {
+      if (LOWORD(wParam) == kInspectorModeToggleId) {
+        g_propsShowSubtree = (SendMessageW(g_propsModeToggle, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        UpdateInspectorProps();
+        return 0;
+      }
+      if (LOWORD(wParam) == kInspectorCopyPropsId) {
+        if (g_props && IsWindow(g_props)) {
+          const int n = GetWindowTextLengthW(g_props);
+          std::wstring text(static_cast<size_t>((std::max)(0, n)) + 1, L'\0');
+          if (n > 0) {
+            GetWindowTextW(g_props, &text[0], n + 1);
+            text.resize(static_cast<size_t>(n));
+          } else {
+            text.clear();
+          }
+          CopyText(text);
+        }
+        return 0;
+      }
+      break;
+    }
+    default: break;
+  }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_NCHITTEST: return HTTRANSPARENT;
@@ -450,7 +673,7 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       SetBkMode(hdc, TRANSPARENT);
       SetTextColor(hdc, RGB(230, 240, 255));
       const std::wstring hint =
-          L"[UI调试模式] 单击选中 | Ctrl+单击多选 | 拖拽框选 | Ctrl+C复制控件名 | Esc退出";
+          L"[UI调试模式] 单击选中 | Ctrl+单击多选 | 拖拽框选 | Ctrl+C复制控件名 | Ctrl+Shift+C复制全路径 | Esc退出";
       RECT hintRc{12, 8, rc.right - 12, 28};
       HBRUSH hintBg = CreateSolidBrush(RGB(20, 40, 70));
       FillRect(hdc, &hintRc, hintBg);
@@ -477,7 +700,7 @@ LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       if (g_dragging) {
         RECT dr = g_dragRect;
         OffsetRect(&dr, -g_vsLeft, -g_vsTop);
-        HPEN boxPen = CreatePen(PS_DOT, 1, RGB(255, 210, 60));
+        HPEN boxPen = CreatePen(PS_SOLID, 3, RGB(180, 80, 255));
         SelectObject(hdc, boxPen);
         Rectangle(hdc, dr.left, dr.top, dr.right, dr.bottom);
         DeleteObject(boxPen);
@@ -512,16 +735,33 @@ void EnsureOverlayWindow() {
 }
 
 void EnsureInspectorWindow() {
-  if (g_inspector && IsWindow(g_inspector)) return;
-  WNDCLASSW wc{};
-  wc.lpfnWndProc = InspectorProc;
-  wc.hInstance = g_inst;
-  wc.lpszClassName = kDebugInspectorClass;
-  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-  RegisterClassW(&wc);
-  g_inspector = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, kDebugInspectorClass, L"UI 调试检查器（左大纲/右属性）",
-                                WS_OVERLAPPEDWINDOW | WS_VISIBLE, 120, 120, 700, 460, nullptr, nullptr, g_inst, nullptr);
+  WNDCLASSW wc1{};
+  wc1.lpfnWndProc = OutlineProc;
+  wc1.hInstance = g_inst;
+  wc1.lpszClassName = kDebugInspectorClass;
+  wc1.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc1.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  RegisterClassW(&wc1);
+
+  WNDCLASSW wc2{};
+  wc2.lpfnWndProc = PropsProc;
+  wc2.hInstance = g_inst;
+  wc2.lpszClassName = kDebugPropsClass;
+  wc2.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc2.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  RegisterClassW(&wc2);
+
+  RefreshVirtualRect();
+  if (!g_inspector || !IsWindow(g_inspector)) {
+    g_inspector = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, kDebugInspectorClass, L"UI 调试大纲（左）",
+                                  WS_OVERLAPPEDWINDOW | WS_VISIBLE, g_vsLeft + 20, g_vsTop + 80, 420, 620, nullptr, nullptr, g_inst,
+                                  nullptr);
+  }
+  if (!g_propsWindow || !IsWindow(g_propsWindow)) {
+    g_propsWindow = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, kDebugPropsClass, L"UI 调试属性（右，JSON）",
+                                    WS_OVERLAPPEDWINDOW | WS_VISIBLE, g_vsLeft + g_vsW - 520, g_vsTop + 80, 500, 620, nullptr, nullptr,
+                                    g_inst, nullptr);
+  }
 }
 
 void ToggleDebugMode() {
@@ -533,9 +773,12 @@ void ToggleDebugMode() {
     g_dragging = false;
     SetOverlayVisible(true);
     ShowWindow(g_inspector, SW_SHOW);
+    ShowWindow(g_propsWindow, SW_SHOW);
     SetWindowPos(g_inspector, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    SetWindowPos(g_propsWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
     RefreshInspectorTree();
     UpdateInspectorProps();
+    SetDebugRuntimeHotkeys(true);
     MessageBeep(MB_ICONINFORMATION);
   } else {
     g_dragging = false;
@@ -544,8 +787,14 @@ void ToggleDebugMode() {
       DestroyWindow(g_inspector);
       g_inspector = nullptr;
       g_tree = nullptr;
-      g_props = nullptr;
     }
+    if (g_propsWindow && IsWindow(g_propsWindow)) {
+      DestroyWindow(g_propsWindow);
+      g_propsWindow = nullptr;
+    }
+    g_propsModeToggle = nullptr;
+    g_props = nullptr;
+    SetDebugRuntimeHotkeys(false);
     MessageBeep(MB_ICONASTERISK);
   }
 }
@@ -563,6 +812,24 @@ bool HandleMsg(MSG* msg) {
     msg->message = WM_NULL;
     return true;
   }
+  if (msg->message == WM_HOTKEY && g_enabled) {
+    const int hk = static_cast<int>(msg->wParam);
+    if (hk == kDebugExitHotkeyId) {
+      ToggleDebugMode();
+      msg->message = WM_NULL;
+      return true;
+    }
+    if (hk == kDebugCopyPathHotkeyId) {
+      CopySelectedFullPaths();
+      msg->message = WM_NULL;
+      return true;
+    }
+    if (hk == kDebugCopyNameHotkeyId) {
+      CopySelectedNames();
+      msg->message = WM_NULL;
+      return true;
+    }
+  }
   if (!g_enabled) return false;
   auto consume = [&]() {
     msg->message = WM_NULL;
@@ -578,13 +845,13 @@ bool HandleMsg(MSG* msg) {
   if (IsInspectorWindowOrChild(msg->hwnd)) {
     return false;
   }
+  if (msg->message == WM_KEYDOWN && (msg->wParam == 'C' || msg->wParam == 'c') &&
+      (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+    CopySelectedFullPaths();
+    return consume();
+  }
   if (msg->message == WM_KEYDOWN && (msg->wParam == 'C' || msg->wParam == 'c') && (GetKeyState(VK_CONTROL) & 0x8000)) {
-    std::wstring all;
-    for (size_t i = 0; i < g_selected.size(); ++i) {
-      if (i) all += L"\r\n";
-      all += HwndName(g_selected[i]);
-    }
-    if (!all.empty()) CopyText(all);
+    CopySelectedNames();
     return consume();
   }
   if (msg->message == WM_LBUTTONDOWN) {
@@ -671,6 +938,7 @@ void AgisUiDebugPickInit(HINSTANCE inst) {
 
 void AgisUiDebugPickShutdown() {
   UnregisterHotKey(nullptr, kDebugPickHotkeyId);
+  SetDebugRuntimeHotkeys(false);
   if (g_getMsgHook) {
     UnhookWindowsHookEx(g_getMsgHook);
     g_getMsgHook = nullptr;
@@ -683,6 +951,21 @@ void AgisUiDebugPickShutdown() {
     DestroyWindow(g_inspector);
     g_inspector = nullptr;
   }
+  if (g_propsWindow && IsWindow(g_propsWindow)) {
+    DestroyWindow(g_propsWindow);
+    g_propsWindow = nullptr;
+  }
+  if (g_jsonFont && g_jsonFont != static_cast<HFONT>(GetStockObject(ANSI_FIXED_FONT))) {
+    DeleteObject(g_jsonFont);
+  }
+  if (g_uiFont && g_uiFont != static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT))) {
+    DeleteObject(g_uiFont);
+  }
+  g_jsonFont = nullptr;
+  g_uiFont = nullptr;
+  g_propsModeToggle = nullptr;
+  g_propsCopyBtn = nullptr;
+  g_props = nullptr;
 }
 
 bool AgisUiDebugPickHandleMessage(MSG* msg) {
