@@ -123,6 +123,8 @@ struct ModelPreviewState {
   int frameMsHistoryCount = 0;
   int frameMsHistoryPos = 0;
   std::wstring runtimeBottleneck = L"--";
+  std::wstring runtimeHudText;
+  std::wstring infoPanelText;
   bool pseudoPbrMode = true;
   AgisBgfxPbrViewMode pbrViewMode = AgisBgfxPbrViewMode::kPbrLit;
   bool inPaint = false;
@@ -1933,6 +1935,19 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   ModelPreviewState* st = ctx->st;
   st->lasSourcePointCount = 0;
   st->lasPointCache.clear();
+  if (st->path.empty()) {
+    // 无参数启动：直接进入空场景待机，不报错不退出。
+    st->loadedModel = ObjPreviewModel{};
+    st->loadedStats = ObjPreviewStats{};
+    st->textureLayers.clear();
+    st->sourceIs3DTiles = false;
+    st->loadFailed = false;
+    st->loadStage = 4;
+    st->loadProgress = 100;
+    PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 1, 0);
+    delete ctx;
+    return 0;
+  }
 
   if (st->loadAs3DTiles) {
     st->tilesLoadDiag.clear();
@@ -2066,13 +2081,7 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   }
 
   st->loadStage = 1;
-  st->loadProgress = 8;
-  st->loadedStats = ScanObjStats(st->path);
-  if (st->loadedStats.faces > kPreviewObjFaceHardLimit) {
-    std::wstring dbg = L"[PREVIEW] OBJ faces " + std::to_wstring(st->loadedStats.faces) + L" exceed soft limit " +
-                       std::to_wstring(kPreviewObjFaceHardLimit) + L", continue loading full geometry by request.\n";
-    OutputDebugStringW(dbg.c_str());
-  }
+  st->loadProgress = 5;
   st->loadStage = 2;
   st->loadProgress = 5;
   int parsePct = 0;
@@ -2087,8 +2096,22 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
     return 2;
   }
   st->loadStage = 3;
-  st->loadProgress = 96;
+  st->loadProgress = 92;
+  std::error_code ec;
+  st->loadedStats.fileBytes = std::filesystem::file_size(st->path, ec);
+  st->loadedStats.vertices = st->loadedModel.vertices.size();
+  st->loadedStats.texcoords = st->loadedModel.texcoords.size();
+  // ObjPreviewModel 当前不保留独立法线数组（仅保留面索引与UV），此处先按 0 统计避免二次扫描。
+  st->loadedStats.normals = 0;
+  st->loadedStats.faces = st->loadedModel.faces.size();
+  st->loadedStats.materials = st->loadedModel.materials.size();
   st->textureLayers = DetectTextureLayers(st->loadedModel);
+  st->loadedStats.textures = st->textureLayers.size();
+  if (st->loadedStats.faces > kPreviewObjFaceHardLimit) {
+    std::wstring dbg = L"[PREVIEW] OBJ faces " + std::to_wstring(st->loadedStats.faces) + L" exceed soft limit " +
+                       std::to_wstring(kPreviewObjFaceHardLimit) + L", continue loading full geometry by request.\n";
+    OutputDebugStringW(dbg.c_str());
+  }
   st->loadStage = 4;
   st->loadProgress = 100;
   PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 1, 0);
@@ -2245,17 +2268,6 @@ static void ShowPreviewCopyableMessage(HWND owner, const wchar_t* title, const w
 }
 
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  constexpr int kPreviewModeComboId = 1;
-  constexpr int kPreviewInfoEditId = 2;
-  constexpr int kPreviewModeTextId = 3;
-  constexpr int kPreviewSolidCheckId = 4;
-  constexpr int kPreviewRuntimeTextId = 5;
-  constexpr int kPreviewResetBtnId = 6;
-  constexpr int kPreviewFitBtnId = 7;
-  constexpr int kPreviewTexBtnId = 8;
-  constexpr int kPreviewTexEnableCheckId = 9;
-  constexpr int kPreviewGridCheckId = 10;
-  constexpr int kPreviewTexLayerComboId = 11;
   switch (msg) {
     case WM_CREATE: {
       auto* st = new ModelPreviewState();
@@ -2264,65 +2276,9 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       g_pendingPreviewLoadAs3DTiles = false;
       st->lastFpsTick = GetTickCount();
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
-      CreateWindowW(L"STATIC", L"渲染模式：", WS_CHILD | WS_VISIBLE, 12, 12, 72, 20, hwnd, nullptr,
-                    GetModuleHandleW(nullptr), nullptr);
-      HWND mode = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 88, 10, 180, 140,
-                                hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewModeComboId)),
-                                GetModuleHandleW(nullptr), nullptr);
-#if AGIS_USE_BGFX
-      SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bgfx - Direct3D 11"));
-      SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bgfx - OpenGL"));
-#else
-      SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"内置渲染 - OpenGL"));
-      SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"内置渲染 - DirectX11"));
-#endif
-      SendMessageW(mode, CB_SETCURSEL, 0, 0);
-      CreateWindowW(L"BUTTON", L"实体填充", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 280, 10, 88, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewSolidCheckId)), GetModuleHandleW(nullptr), nullptr);
-      SendMessageW(GetDlgItem(hwnd, kPreviewSolidCheckId), BM_SETCHECK, BST_CHECKED, 0);
-      CreateWindowW(L"BUTTON", L"重置视角", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 372, 10, 76, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewResetBtnId)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"适配模型", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 372, 34, 76, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewFitBtnId)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"预览贴图", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 280, 34, 88, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewTexBtnId)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"贴图", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 456, 10, 56, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewTexEnableCheckId)), GetModuleHandleW(nullptr),
-                    nullptr);
-      SendMessageW(GetDlgItem(hwnd, kPreviewTexEnableCheckId), BM_SETCHECK, BST_CHECKED, 0);
-      CreateWindowW(L"BUTTON", L"网格", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 516, 10, 56, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewGridCheckId)), GetModuleHandleW(nullptr), nullptr);
-      SendMessageW(GetDlgItem(hwnd, kPreviewGridCheckId), BM_SETCHECK, BST_CHECKED, 0);
-      HWND texLayer =
-          CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 456, 34, 180, 140, hwnd,
-                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewTexLayerComboId)),
-                        GetModuleHandleW(nullptr), nullptr);
-#if AGIS_USE_BGFX
-      CreateWindowW(L"STATIC", L"当前渲染器: Direct3D 11（bgfx）", WS_CHILD | WS_VISIBLE, 280, 12, 170, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewModeTextId)), GetModuleHandleW(nullptr), nullptr);
-#else
-      CreateWindowW(L"STATIC", L"当前渲染器: OpenGL（内置）", WS_CHILD | WS_VISIBLE, 280, 12, 170, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewModeTextId)), GetModuleHandleW(nullptr), nullptr);
-#endif
-      HWND info = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
-                                               WS_VSCROLL | ES_READONLY,
-                                12, 270, 436, 220, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewInfoEditId)),
-                                GetModuleHandleW(nullptr), nullptr);
-      SendMessageW(mode, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
-      SendMessageW(info, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
-      SendMessageW(texLayer, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
-      SetWindowTextW(info, L"模型正在后台加载，请稍候...");
+      st->infoPanelText = L"模型正在后台加载，请稍候...";
+      st->runtimeHudText = L"FPS: -- | 帧时: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | 瓶颈: -- | 曲线: --";
       FitPreviewCamera(st);
-      CreateWindowW(L"STATIC", L"FPS: -- | 帧时: -- ms | 瓶颈: -- | 曲线: --", WS_CHILD | WS_VISIBLE, 12, 494, 436, 20, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPreviewRuntimeTextId)),
-                    GetModuleHandleW(nullptr), nullptr);
-      if (HWND rt = GetDlgItem(hwnd, kPreviewRuntimeTextId)) {
-        SendMessageW(rt, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
-      }
-      // 2D/3D 预览窗口统一走“渲染内 UI（类 ImGui）”，隐藏传统 Win32 控件。
-      for (HWND c = GetWindow(hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
-        ShowWindow(c, SW_HIDE);
-      }
       SetFocus(hwnd);
       SetTimer(hwnd, 1, 33, nullptr);
       auto* loadCtx = new (std::nothrow) PreviewLoadCtx{hwnd, st};
@@ -2473,138 +2429,6 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       }
       return 0;
     }
-    case WM_COMMAND:
-      if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-        if (st->loading) return 0;
-      }
-      if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == kPreviewModeComboId) {
-        HWND mode = GetDlgItem(hwnd, kPreviewModeComboId);
-        const int sel = static_cast<int>(SendMessageW(mode, CB_GETCURSEL, 0, 0));
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-#if AGIS_USE_BGFX
-          const AgisBgfxRendererKind kind = (sel == 1) ? AgisBgfxRendererKind::kOpenGL : AgisBgfxRendererKind::kD3D11;
-          st->bgfxRenderer = kind;
-          if (st->bgfxCtx) {
-            if (st->imguiReady) {
-              imguiDestroy();
-              st->imguiReady = false;
-            }
-            agis_bgfx_preview_shutdown(hwnd, st->bgfxCtx);
-            st->bgfxCtx = nullptr;
-          }
-          if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, kind, st->model)) {
-            ShowPreviewCopyableMessage(hwnd, L"模型预览", L"切换渲染器后初始化失败。");
-          }
-          if (st->bgfxCtx && st->useTexture && st->currentTextureLayer < static_cast<int>(st->textureLayers.size())) {
-            agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[st->currentTextureLayer].second);
-          }
-          if (st->bgfxCtx) {
-            agis_bgfx_preview_set_pbr_textures(st->bgfxCtx, BuildPbrTexturePaths(*st));
-          }
-          if (st->bgfxCtx) {
-            agis_bgfx_preview_set_pseudo_pbr(st->bgfxCtx, st->pseudoPbrMode);
-            agis_bgfx_preview_set_pbr_view_mode(st->bgfxCtx, st->pbrViewMode);
-            imguiCreate(16.0f, nullptr);
-            st->imguiReady = true;
-          }
-#else
-          st->backend = (sel == 1) ? PreviewRenderBackend::kDx11 : PreviewRenderBackend::kOpenGL;
-          if (st->backend == PreviewRenderBackend::kOpenGL) {
-            ReleasePreviewDx(st);
-            InitPreviewGl(hwnd, st);
-          } else {
-            ReleasePreviewGl(hwnd, st);
-            InitPreviewDx(hwnd, st);
-          }
-#endif
-        }
-#if AGIS_USE_BGFX
-        SetWindowTextW(GetDlgItem(hwnd, kPreviewModeTextId),
-                       sel == 1 ? L"当前渲染器: OpenGL（bgfx）" : L"当前渲染器: Direct3D 11（bgfx）");
-#else
-        SetWindowTextW(GetDlgItem(hwnd, kPreviewModeTextId),
-                       sel == 1 ? L"当前渲染器: DirectX11（内置）" : L"当前渲染器: OpenGL（内置）");
-#endif
-        RECT vrc = GetPreviewViewportRect(hwnd);
-        InvalidateRect(hwnd, &vrc, FALSE);
-        return 0;
-      }
-      if (LOWORD(wParam) == kPreviewSolidCheckId && HIWORD(wParam) == BN_CLICKED) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          st->solid = (SendMessageW(GetDlgItem(hwnd, kPreviewSolidCheckId), BM_GETCHECK, 0, 0) == BST_CHECKED);
-          RECT vrc = GetPreviewViewportRect(hwnd);
-          InvalidateRect(hwnd, &vrc, FALSE);
-        }
-        return 0;
-      }
-      if (LOWORD(wParam) == kPreviewGridCheckId && HIWORD(wParam) == BN_CLICKED) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          st->showGrid = (SendMessageW(GetDlgItem(hwnd, kPreviewGridCheckId), BM_GETCHECK, 0, 0) == BST_CHECKED);
-          RECT vrc = GetPreviewViewportRect(hwnd);
-          InvalidateRect(hwnd, &vrc, FALSE);
-        }
-        return 0;
-      }
-      if (LOWORD(wParam) == kPreviewTexEnableCheckId && HIWORD(wParam) == BN_CLICKED) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          st->useTexture = (SendMessageW(GetDlgItem(hwnd, kPreviewTexEnableCheckId), BM_GETCHECK, 0, 0) == BST_CHECKED);
-#if AGIS_USE_BGFX
-          if (st->bgfxCtx) {
-            if (st->useTexture && st->currentTextureLayer < static_cast<int>(st->textureLayers.size())) {
-              agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[st->currentTextureLayer].second);
-            } else {
-              agis_bgfx_preview_set_texture(st->bgfxCtx, L"");
-            }
-          }
-#endif
-          RECT vrc = GetPreviewViewportRect(hwnd);
-          InvalidateRect(hwnd, &vrc, FALSE);
-        }
-        return 0;
-      }
-      if (LOWORD(wParam) == kPreviewTexLayerComboId && HIWORD(wParam) == CBN_SELCHANGE) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          st->currentTextureLayer = static_cast<int>(SendMessageW(GetDlgItem(hwnd, kPreviewTexLayerComboId), CB_GETCURSEL, 0, 0));
-          if (st->currentTextureLayer < 0) st->currentTextureLayer = 0;
-#if AGIS_USE_BGFX
-          if (st->bgfxCtx && st->useTexture && st->currentTextureLayer < static_cast<int>(st->textureLayers.size())) {
-            agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[st->currentTextureLayer].second);
-          }
-#endif
-          RECT vrc = GetPreviewViewportRect(hwnd);
-          InvalidateRect(hwnd, &vrc, FALSE);
-        }
-        return 0;
-      }
-      if (LOWORD(wParam) == kPreviewResetBtnId && HIWORD(wParam) == BN_CLICKED) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          st->rotX = 0.0f;
-          st->rotY = 0.0f;
-          st->zoom = 2.2f;
-          RECT vrc = GetPreviewViewportRect(hwnd);
-          InvalidateRect(hwnd, &vrc, FALSE);
-        }
-        return 0;
-      }
-      if (LOWORD(wParam) == kPreviewFitBtnId && HIWORD(wParam) == BN_CLICKED) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          FitPreviewCamera(st);
-          RECT vrc = GetPreviewViewportRect(hwnd);
-          InvalidateRect(hwnd, &vrc, FALSE);
-        }
-        return 0;
-      }
-      if (LOWORD(wParam) == kPreviewTexBtnId && HIWORD(wParam) == BN_CLICKED) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          if (!st->model.primaryMapKdPath.empty()) {
-            ShellExecuteW(hwnd, L"open", st->model.primaryMapKdPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-          } else {
-            ShowPreviewCopyableMessage(hwnd, L"预览贴图", L"当前模型未检测到 map_Kd 贴图路径。");
-          }
-        }
-        return 0;
-      }
-      break;
     case kPreviewLoadedMsg: {
       auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
       if (!st) return 0;
@@ -2682,24 +2506,18 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       st->model = std::move(st->loadedModel);
       st->stats = st->loadedStats;
       st->loadStage = 4;
-      if (HWND info = GetDlgItem(hwnd, kPreviewInfoEditId)) {
-        SetWindowTextW(info, BuildModelPreviewInfoText(*st).c_str());
-      }
-      if (HWND texLayer = GetDlgItem(hwnd, kPreviewTexLayerComboId)) {
-        SendMessageW(texLayer, CB_RESETCONTENT, 0, 0);
-        for (const auto& kv : st->textureLayers) {
-          SendMessageW(texLayer, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(kv.first.c_str()));
-        }
-        if (!st->textureLayers.empty()) {
-          SendMessageW(texLayer, CB_SETCURSEL, 0, 0);
-        }
-      }
+      st->infoPanelText = BuildModelPreviewInfoText(*st);
 #if AGIS_USE_BGFX
-      if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model)) {
-        ShowPreviewCopyableMessage(hwnd, L"模型预览",
-                                   L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ/点云网格有效）。");
-        DestroyWindow(hwnd);
-        return 0;
+      const bool hasRenderableMesh = !st->model.vertices.empty() && !st->model.faces.empty();
+      if (hasRenderableMesh) {
+        if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model)) {
+          ShowPreviewCopyableMessage(hwnd, L"模型预览",
+                                     L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ/点云网格有效）。");
+          DestroyWindow(hwnd);
+          return 0;
+        }
+      } else {
+        st->bgfxCtx = nullptr;
       }
       if (st->bgfxCtx && !st->textureLayers.empty()) {
         agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[0].second);
@@ -2787,22 +2605,6 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 #endif
       return 1;
     case WM_SIZE: {
-      RECT rc{};
-      GetClientRect(hwnd, &rc);
-      const int clientRight = static_cast<int>(rc.right);
-      const int clientBottom = static_cast<int>(rc.bottom);
-      const int margin = 12;
-      const int runtimeH = 20;
-      const int infoH = (std::clamp<int>)((clientBottom - 74) / 3, 120, 240);
-      const int runtimeTop = (std::max)(140, clientBottom - margin - runtimeH);
-      const int infoTop = (std::max)(120, runtimeTop - 8 - infoH);
-      const int infoW = (std::max)(120, clientRight - margin * 2);
-      if (HWND info = GetDlgItem(hwnd, kPreviewInfoEditId)) {
-        MoveWindow(info, margin, infoTop, infoW, infoH, TRUE);
-      }
-      if (HWND rt = GetDlgItem(hwnd, kPreviewRuntimeTextId)) {
-        MoveWindow(rt, margin, runtimeTop, infoW, runtimeH, TRUE);
-      }
       RECT vrc = GetPreviewViewportRect(hwnd);
       InvalidateRect(hwnd, &vrc, FALSE);
       return 0;
@@ -2935,11 +2737,18 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 agis_bgfx_preview_reload_model(st->bgfxCtx, st->model);
               }
               st->stats.faces = st->model.faces.size();
-              if (HWND info = GetDlgItem(hwnd, kPreviewInfoEditId)) {
-                SetWindowTextW(info, BuildModelPreviewInfoText(*st).c_str());
-              }
+              st->infoPanelText = BuildModelPreviewInfoText(*st);
             }
           }
+          ImGui::Separator();
+          ImGui::Text("Info");
+          std::string infoUtf8 = PreviewWideToUtf8(st->infoPanelText);
+          if (infoUtf8.empty()) {
+            infoUtf8 = "No model info.";
+          }
+          ImGui::BeginChild("model-info", ImVec2(420.0f, 170.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+          ImGui::TextUnformatted(infoUtf8.c_str());
+          ImGui::EndChild();
           if (!st->textureLayers.empty()) {
             std::string layerPreview;
             for (wchar_t ch : st->textureLayers[st->currentTextureLayer].first) {
@@ -3000,8 +2809,18 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           DrawAxisImGuiOverlay(vrc, st->rotX, st->rotY);
           imguiEndFrame();
         }
-        agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid, st->showGrid,
-                               st->backfaceCulling);
+        if (st->bgfxCtx) {
+          agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid, st->showGrid,
+                                 st->backfaceCulling);
+        } else {
+          HBRUSH bg = CreateSolidBrush(RGB(236, 236, 236));
+          FillRect(hdc, &vrc, bg);
+          DeleteObject(bg);
+          SetBkMode(hdc, TRANSPARENT);
+          SetTextColor(hdc, RGB(84, 84, 84));
+          const wchar_t* tip = L"空场景（未传入模型路径）";
+          TextOutW(hdc, vrc.left + 12, vrc.top + 12, tip, static_cast<int>(wcslen(tip)));
+        }
 #else
         if (st->backend == PreviewRenderBackend::kOpenGL) {
           InitPreviewGl(hwnd, st);
@@ -3048,7 +2867,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           swprintf_s(line,
                      L"FPS: %.1f | 帧时: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | 瓶颈: %s | 曲线:%s",
                      st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), spark.c_str());
-          SetWindowTextW(GetDlgItem(hwnd, kPreviewRuntimeTextId), line);
+          st->runtimeHudText = line;
         }
 #if AGIS_USE_BGFX
         if (!st->imguiReady) {

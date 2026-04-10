@@ -2314,11 +2314,14 @@ void PreviewPath(HWND hwnd, bool inputSide) {
   }
   if (chosen == 1) {
     if (major == 0) {
-      WriteConvertLog(hwnd,
-                      L"[预览] GIS 数据（.gis / 矢量 / 栅格等）请在 AGIS 主界面打开工程或叠加图层查看与编辑；数据转换窗口的内置 3D/瓦片采样预览不用于 GIS。");
-      MessageBoxW(hwnd,
-                    L"GIS 类数据请使用 AGIS 主程序中的工程与图层进行查看和编辑。\n此处「内置预览」不打开 GIS 内容。",
-                    L"预览", MB_OK | MB_ICONINFORMATION);
+      // GIS 内置预览 = 打开 AGIS workbench（优先带路径参数，失败则仅启动主程序）。
+      if (!LaunchPreviewExe(hwnd, L"AGIS.exe", path)) {
+        if (!LaunchPreviewExe(hwnd, L"AGIS.exe", L"")) {
+          MessageBoxW(hwnd, L"无法启动 AGIS 主程序（AGIS.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          return;
+        }
+      }
+      WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(GIS→AGIS工作台)：" : L"[预览] 输出(GIS→AGIS工作台)：") + path).c_str());
       return;
     }
     if (major == 1) {
