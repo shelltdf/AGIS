@@ -1978,6 +1978,25 @@ std::wstring QuoteArg(const std::wstring& s) {
   return out;
 }
 
+static bool LaunchPreviewExe(HWND owner, const wchar_t* exeName, const std::wstring& path, const wchar_t* extraArg = nullptr) {
+  if (!exeName || !exeName[0]) return false;
+  wchar_t modulePath[MAX_PATH]{};
+  GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+  std::wstring exeDir = modulePath;
+  const size_t slash = exeDir.find_last_of(L"\\/");
+  if (slash != std::wstring::npos) exeDir.resize(slash + 1);
+  const std::wstring exePath = exeDir + exeName;
+
+  std::wstring params;
+  if (extraArg && extraArg[0]) {
+    params += extraArg;
+    params += L" ";
+  }
+  params += QuoteArg(path);
+  HINSTANCE h = ShellExecuteW(owner, L"open", exePath.c_str(), params.c_str(), nullptr, SW_SHOWNORMAL);
+  return reinterpret_cast<INT_PTR>(h) > 32;
+}
+
 std::wstring AssembleConvertProcessCommandLine(HWND hwnd) {
   ConvertUiVisibility v{};
   ComputeConvertUiVisibility(hwnd, &v);
@@ -2268,7 +2287,7 @@ void PreviewPath(HWND hwnd, bool inputSide) {
   const int ctrl = inputSide ? IDC_CONV_INPUT_PATH : IDC_CONV_OUTPUT_PATH;
   const int majorCtrl = inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE;
   wchar_t pathBuf[1024]{};
-  GetWindowTextW(GetDlgItem(hwnd, ctrl), pathBuf, 1024);
+  GetWindowTextW(FindConvertCtrl(hwnd, ctrl), pathBuf, 1024);
   std::wstring path = pathBuf;
   if (path.empty()) {
     MessageBoxW(hwnd, L"请先设置路径。", L"预览", MB_OK | MB_ICONINFORMATION);
@@ -2333,13 +2352,19 @@ void PreviewPath(HWND hwnd, bool inputSide) {
 #  endif
         }
 #endif
-        OpenModelPreviewWindow(hwnd, path);
+        if (!LaunchPreviewExe(hwnd, L"AGIS-ModelPreview.exe", path)) {
+          MessageBoxW(hwnd, L"无法启动内置模型预览程序（AGIS-ModelPreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          return;
+        }
         WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(内置3D)：" : L"[预览] 输出(内置3D)：") + path).c_str());
         return;
       }
       const std::wstring previewPath = FindFirstModelPreviewFileInDirectory(path);
       if (!previewPath.empty()) {
-        OpenModelPreviewWindow(hwnd, previewPath);
+        if (!LaunchPreviewExe(hwnd, L"AGIS-ModelPreview.exe", previewPath)) {
+          MessageBoxW(hwnd, L"无法启动内置模型预览程序（AGIS-ModelPreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          return;
+        }
         WriteConvertLog(hwnd,
                         (std::wstring(inputSide ? L"[预览] 输入(内置3D，目录内模型/点云)：" : L"[预览] 输出(内置3D，目录内模型/点云)：") +
                          previewPath)
@@ -2357,7 +2382,10 @@ void PreviewPath(HWND hwnd, bool inputSide) {
         WriteConvertLog(hwnd,
                         L"[预览] 3D Tiles：内置 bgfx 三维预览（tinygltf + nlohmann/json，无 vcpkg）。解析本地 b3dm/i3dm(glb)/glb/cmpt；"
                         L"KHR_draco_mesh_compression、仅 http(s) 外链、pnts 等跳过。另可选用「系统默认打开」。");
-        OpenModelPreviewWindow3DTiles(hwnd, path);
+        if (!LaunchPreviewExe(hwnd, L"AGIS-ModelPreview.exe", path, L"--3dtiles")) {
+          MessageBoxW(hwnd, L"无法启动内置 3D Tiles 预览程序（AGIS-ModelPreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          return;
+        }
         WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(内置 3D Tiles)：" : L"[预览] 输出(内置 3D Tiles)：") + path).c_str());
         return;
       }
@@ -2373,7 +2401,10 @@ void PreviewPath(HWND hwnd, bool inputSide) {
         WriteConvertLog(hwnd,
                         L"[预览] MBTiles / GeoPackage：启用 GDAL 时内置窗体会做栅格缩略预览；失败则见窗内说明或用系统打开 / 导出 XYZ。");
       }
-      OpenTileRasterPreviewWindow(hwnd, path);
+      if (!LaunchPreviewExe(hwnd, L"AGIS-TilePreview.exe", path)) {
+        MessageBoxW(hwnd, L"无法启动内置瓦片预览程序（AGIS-TilePreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+        return;
+      }
       WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(内置瓦片采样)：" : L"[预览] 输出(内置瓦片采样)：") + path).c_str());
       return;
     }

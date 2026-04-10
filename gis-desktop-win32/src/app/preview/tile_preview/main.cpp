@@ -7,6 +7,7 @@
 #include "common/app_core/main_app.h"
 #include "common/app_core/main_globals.h"
 #include "common/ui/ui_font.h"
+#include "ui_engine/gdiplus_ui.h"
 
 static bool RegisterTilePreviewClass(HINSTANCE inst) {
   WNDCLASSW wc{};
@@ -21,9 +22,11 @@ static bool RegisterTilePreviewClass(HINSTANCE inst) {
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
   INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES | ICC_BAR_CLASSES};
   InitCommonControlsEx(&icc);
+  UiGdiplusInit();
   UiFontInit();
   if (!RegisterTilePreviewClass(hInst)) {
     UiFontShutdown();
+    UiGdiplusShutdown();
     return 1;
   }
 
@@ -39,5 +42,6 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     DispatchMessageW(&msg);
   }
   UiFontShutdown();
+  UiGdiplusShutdown();
   return static_cast<int>(msg.wParam);
 }
