@@ -27,20 +27,20 @@
 #endif
 
 #if GIS_DESKTOP_HAVE_GDAL
-#include "app/agis_gdal_runtime_env.h"
+#include "common/runtime/agis_gdal_runtime_env.h"
 #include <cpl_conv.h>
 #include <gdal.h>
 #include <gdal_priv.h>
 #include <ogr_api.h>
 #endif
 
-#include "app/resource.h"
-#include "app/ui_layout.h"
-#include "app/ui_font.h"
-#include "app/ui_theme.h"
-#include "main_app.h"
-#include "main_globals.h"
-#include "gis_document/main_gis_xml.h"
+#include "common/app_core/resource.h"
+#include "common/ui/ui_layout.h"
+#include "common/ui/ui_font.h"
+#include "common/ui/ui_theme.h"
+#include "common/app_core/main_app.h"
+#include "common/app_core/main_globals.h"
+#include "common/gis_document/main_gis_xml.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_projection.h"
 

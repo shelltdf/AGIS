@@ -1,4 +1,4 @@
-#include "app/agis_gdal_runtime_env.h"
+#include "common/runtime/agis_gdal_runtime_env.h"
 
 #include <filesystem>
 
@@ -29,16 +29,16 @@ void AgisEnsureGdalDataPath() {
   const std::filesystem::path exeDir = std::filesystem::path(modulePath).parent_path();
   const std::filesystem::path marker = L"tms_NZTM2000.json";
   // 自 exe 目录向上若干层查找 gdal_data（覆盖 Release、x64/Release 与仅复制到 build/gdal_data 等布局）。
-  std::filesystem::path probe = exeDir;
+  std::filesystem::path probeDir = exeDir;
   for (int i = 0; i < 16; ++i) {
-    const std::filesystem::path base = probe / L"gdal_data";
+    const std::filesystem::path base = probeDir / L"gdal_data";
     std::error_code ec;
     if (!std::filesystem::is_regular_file(base / marker, ec)) {
-      std::filesystem::path parent = probe.parent_path();
-      if (parent == probe) {
+      std::filesystem::path parent = probeDir.parent_path();
+      if (parent == probeDir) {
         break;
       }
-      probe = std::move(parent);
+      probeDir = std::move(parent);
       continue;
     }
     std::filesystem::path dir = std::filesystem::weakly_canonical(base, ec);

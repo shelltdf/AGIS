@@ -6,7 +6,7 @@
 #include "ui_engine/widget_core.h"
 #include "ui_engine/widgets_mainframe.h"
 
-#include "app/ui_private.h"
+#include "common/ui/ui_private.h"
 
 #include <algorithm>
 #include <string>

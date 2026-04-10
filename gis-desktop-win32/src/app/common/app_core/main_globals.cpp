@@ -1,4 +1,4 @@
-#include "main_globals.h"
+#include "common/app_core/main_globals.h"
 
 void AgisCenterWindowInMonitorWorkArea(HWND hwnd, HWND refForMonitor) {
   if (!hwnd || !IsWindow(hwnd)) {

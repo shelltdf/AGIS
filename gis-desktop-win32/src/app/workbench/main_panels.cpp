@@ -8,12 +8,12 @@
 #define GIS_DESKTOP_HAVE_GDAL 0
 #endif
 
-#include "app/resource.h"
-#include "app/ui_font.h"
-#include "app/ui_theme.h"
+#include "common/app_core/resource.h"
+#include "common/ui/ui_font.h"
+#include "common/ui/ui_theme.h"
 #include "core/app_log.h"
-#include "main_app.h"
-#include "main_globals.h"
+#include "common/app_core/main_app.h"
+#include "common/app_core/main_globals.h"
 #include "map_engine/map_engine.h"
 #include "ui_engine/gdiplus_ui.h"
 

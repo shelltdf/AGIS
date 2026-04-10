@@ -190,8 +190,11 @@ target_include_directories(agis_ui_engine PUBLIC
   ${AGIS_UI_ENGINE_DIR}/app
   ${AGIS_UI_ENGINE_DIR}/src/platform
 )
-# `widgets_mainframe.cpp` 依赖 `app/ui_private.h`（实现仍在 ui_engine 库内）
-target_include_directories(agis_ui_engine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+# `widgets_mainframe.cpp` 依赖 `common/ui/ui_private.h`（当前位于 `src/app/common/ui`）
+target_include_directories(agis_ui_engine PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+)
 
 if(AGIS_UI_ENGINE_SHARED)
   target_compile_definitions(agis_ui_engine PRIVATE AGIS_UI_EXPORTS)
@@ -278,21 +281,44 @@ if(MSVC)
   target_compile_options(agis_bgfx_vendor PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
 endif()
 
-add_executable(agis_desktop WIN32
-  src/app/main.cpp
-  src/app/main_globals.cpp
-  src/app/gis_document/main_gis_xml.cpp
-  src/app/gis_document/main_gis_document.cpp
-  src/app/main_chrome.cpp
-  src/app/main_panels.cpp
-  src/app/main_convert.cpp
-  src/app/ui_layout.cpp
-  src/app/ui_debug_pick.cpp
+add_library(agis_common_app STATIC
+  src/app/common/runtime/agis_gdal_runtime_env.cpp
+  src/app/common/ui/ui_layout.cpp
+  src/app/common/ui/ui_debug_pick.cpp
+  src/app/common/ui/ui_font.cpp
+  src/app/common/ui/ui_theme.cpp
+  src/app/common/app_core/main_globals.cpp
+  src/core/app_log.cpp
+)
+target_include_directories(agis_common_app PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+  ${AGIS_UI_ENGINE_DIR}/include
+)
+target_compile_definitions(agis_common_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
+target_compile_features(agis_common_app PRIVATE cxx_std_20)
+if(NOT AGIS_UI_ENGINE_SHARED)
+  target_compile_definitions(agis_common_app PRIVATE AGIS_UI_STATIC=1)
+endif()
+
+set(AGIS_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/../3rdparty")
+
+add_library(agis_workbench_app STATIC
+  src/app/common/gis_document/main_gis_xml.cpp
+  src/app/common/gis_document/main_gis_document.cpp
+  src/app/workbench/main_chrome.cpp
+  src/app/workbench/main_panels.cpp
+  src/app/converter/main_convert.cpp
   src/app/preview/main_model_preview.cpp
+  src/app/preview/model_preview_bgfx.cpp
   src/app/preview/tiles_gltf_loader.cpp
-  src/app/ui_font.cpp
-  src/app/ui_theme.cpp
-  src/app/help_data_drivers.cpp
+  src/app/workbench/help_data_drivers.cpp
+  ${AGIS_BGFX_DIR}/examples/common/imgui/imgui.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_draw.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_tables.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_widgets.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
   src/map_engine/map_layer.cpp
   src/map_engine/map_layer_driver.cpp
   src/map_engine/map_layer_driver_gdal.cpp
@@ -300,14 +326,52 @@ add_executable(agis_desktop WIN32
   src/map_engine/map_engine.cpp
   src/map_engine/map_gpu.cpp
   src/map_engine/map_projection.cpp
-  src/core/app_log.cpp
 )
-
-set(AGIS_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/../3rdparty")
-target_include_directories(agis_desktop PRIVATE
+target_include_directories(agis_workbench_app PRIVATE
   ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_BX_DIR}/include
+  $<$<AND:$<PLATFORM_ID:Windows>,$<CXX_COMPILER_ID:MSVC>>:${AGIS_BX_DIR}/include/compat/msvc>
+  ${AGIS_BX_DIR}/3rdparty
+  ${AGIS_BGFX_DIR}/include
+  ${AGIS_BGFX_DIR}/3rdparty
+  ${AGIS_BGFX_DIR}/3rdparty/khronos
+  ${AGIS_BGFX_DIR}/examples/17-drawstress
+  ${AGIS_BGFX_DIR}/examples/common
+  ${AGIS_BGFX_DIR}/examples/common/imgui
+  ${AGIS_BGFX_DIR}/examples/common/debugdraw
+  ${AGIS_THIRDPARTY_ROOT}
+  ${AGIS_THIRDPARTY_ROOT}/tinygltf
+)
+target_link_libraries(agis_workbench_app PRIVATE agis_common_app agis_ui_engine agis_bgfx_vendor)
+target_compile_definitions(agis_workbench_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
+target_compile_features(agis_workbench_app PRIVATE cxx_std_20)
+
+add_library(agis_converter_app STATIC
+  src/app/common/gis_document/main_gis_xml.cpp
+  src/app/converter/main_convert.cpp
+  src/map_engine/map_projection.cpp
+)
+target_include_directories(agis_converter_app PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
   ${AGIS_UI_ENGINE_DIR}/include
 )
+target_link_libraries(agis_converter_app PRIVATE agis_common_app)
+target_compile_definitions(agis_converter_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
+target_compile_features(agis_converter_app PRIVATE cxx_std_20)
+
+add_executable(agis_desktop WIN32
+  src/app/workbench/main.cpp
+)
+
+target_include_directories(agis_desktop PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+  ${AGIS_UI_ENGINE_DIR}/include
+)
+target_link_libraries(agis_desktop PRIVATE agis_workbench_app agis_common_app)
 
 set_target_properties(agis_desktop PROPERTIES
   OUTPUT_NAME "AGIS"
@@ -331,16 +395,8 @@ target_link_libraries(agis_desktop PRIVATE
 )
 
 target_compile_definitions(agis_desktop PRIVATE AGIS_USE_BGFX=1 BX_CONFIG_DEBUG=0)
+target_compile_definitions(agis_workbench_app PRIVATE AGIS_USE_BGFX=1 BX_CONFIG_DEBUG=0)
 target_link_libraries(agis_desktop PRIVATE agis_bgfx_vendor)
-target_sources(agis_desktop PRIVATE
-  src/app/preview/model_preview_bgfx.cpp
-  ${AGIS_BGFX_DIR}/examples/common/imgui/imgui.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_draw.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_tables.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_widgets.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
-)
 target_include_directories(agis_desktop PRIVATE
   ${AGIS_BGFX_DIR}/examples/17-drawstress
   ${AGIS_BGFX_DIR}/examples/common
@@ -362,42 +418,59 @@ endif()
 target_compile_features(agis_desktop PRIVATE cxx_std_20)
 
 if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_common_app PRIVATE GDAL::GDAL)
+  target_link_libraries(agis_workbench_app PRIVATE GDAL::GDAL)
   target_link_libraries(agis_desktop PRIVATE GDAL::GDAL)
-  target_sources(agis_desktop PRIVATE src/app/agis_gdal_runtime_env.cpp)
   if(TARGET PROJ::proj)
+    target_link_libraries(agis_common_app PRIVATE PROJ::proj)
+    target_link_libraries(agis_workbench_app PRIVATE PROJ::proj)
     target_link_libraries(agis_desktop PRIVATE PROJ::proj)
   endif()
 endif()
+if(AGIS_HAVE_DRACO)
+  target_compile_definitions(agis_workbench_app PRIVATE TINYGLTF_ENABLE_DRACO=1)
+  target_link_libraries(agis_workbench_app PRIVATE draco::draco)
+  target_include_directories(agis_workbench_app PRIVATE
+    "${AGIS_THIRDPARTY_ROOT}/draco/src"
+    "${CMAKE_BINARY_DIR}")
+endif()
 
 if(AGIS_HAVE_LASZIP)
+  target_compile_definitions(agis_workbench_app PRIVATE AGIS_HAVE_LASZIP=1)
+  target_compile_definitions(agis_converter_app PRIVATE AGIS_HAVE_LASZIP=1)
   target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_LASZIP=1)
+  target_include_directories(agis_workbench_app PRIVATE
+    "${AGIS_LASZIP_ROOT}/dll"
+    "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
+  target_link_libraries(agis_workbench_app PRIVATE "${AGIS_LASZIP_TARGET}")
+  target_include_directories(agis_converter_app PRIVATE
+    "${AGIS_LASZIP_ROOT}/dll"
+    "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
+  target_link_libraries(agis_converter_app PRIVATE "${AGIS_LASZIP_TARGET}")
   target_include_directories(agis_desktop PRIVATE
     "${AGIS_LASZIP_ROOT}/dll"
     "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
   target_link_libraries(agis_desktop PRIVATE "${AGIS_LASZIP_TARGET}")
 endif()
 if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_workbench_app PRIVATE AGIS_HAVE_BASISU=1)
+  target_compile_definitions(agis_converter_app PRIVATE AGIS_HAVE_BASISU=1)
   target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=1)
 else()
+  target_compile_definitions(agis_workbench_app PRIVATE AGIS_HAVE_BASISU=0)
+  target_compile_definitions(agis_converter_app PRIVATE AGIS_HAVE_BASISU=0)
   target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=0)
 endif()
 
 add_executable(agis_convert_gui WIN32
-  src/app/main_convert_standalone.cpp
-  src/app/main_convert.cpp
-  src/app/ui_layout.cpp
-  src/app/main_globals.cpp
-  src/app/ui_debug_pick.cpp
-  src/app/gis_document/main_gis_xml.cpp
-  src/app/ui_font.cpp
-  src/app/ui_theme.cpp
-  src/map_engine/map_projection.cpp
-  src/core/app_log.cpp
+  src/app/converter/main_convert_standalone.cpp
 )
 target_include_directories(agis_convert_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
   ${AGIS_UI_ENGINE_DIR}/include
 )
+target_link_libraries(agis_convert_gui PRIVATE agis_converter_app agis_common_app)
 set_target_properties(agis_convert_gui PROPERTIES
   OUTPUT_NAME "AGIS-Convert"
   WIN32_EXECUTABLE ON
@@ -413,9 +486,12 @@ target_link_libraries(agis_convert_gui PRIVATE
   shell32
 )
 if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_common_app PRIVATE GDAL::GDAL)
+  target_link_libraries(agis_converter_app PRIVATE GDAL::GDAL)
   target_link_libraries(agis_convert_gui PRIVATE GDAL::GDAL)
-  target_sources(agis_convert_gui PRIVATE src/app/agis_gdal_runtime_env.cpp)
   if(TARGET PROJ::proj)
+    target_link_libraries(agis_common_app PRIVATE PROJ::proj)
+    target_link_libraries(agis_converter_app PRIVATE PROJ::proj)
     target_link_libraries(agis_convert_gui PRIVATE PROJ::proj)
   endif()
 endif()
@@ -426,6 +502,99 @@ else()
 endif()
 if(MSVC)
   target_compile_options(agis_convert_gui PRIVATE /utf-8)
+endif()
+if(MSVC)
+  target_compile_options(agis_common_app PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+  target_compile_options(agis_workbench_app PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+  target_compile_options(agis_converter_app PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+endif()
+
+add_executable(agis_model_preview_gui WIN32
+  src/app/preview/model_preview/main.cpp
+)
+target_include_directories(agis_model_preview_gui PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+  ${AGIS_UI_ENGINE_DIR}/include
+)
+set_target_properties(agis_model_preview_gui PROPERTIES
+  OUTPUT_NAME "AGIS-ModelPreview"
+  WIN32_EXECUTABLE ON
+)
+target_compile_definitions(agis_model_preview_gui PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
+target_link_libraries(agis_model_preview_gui PRIVATE
+  agis_workbench_app
+  agis_common_app
+  agis_bgfx_vendor
+  agis_ui_engine
+  comctl32
+  comdlg32
+  user32
+  gdi32
+  gdiplus
+  shell32
+  d3d11
+  dxgi
+  d3dcompiler
+  opengl32
+)
+if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_model_preview_gui PRIVATE GDAL::GDAL)
+  if(TARGET PROJ::proj)
+    target_link_libraries(agis_model_preview_gui PRIVATE PROJ::proj)
+  endif()
+endif()
+if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_model_preview_gui PRIVATE AGIS_HAVE_BASISU=1)
+else()
+  target_compile_definitions(agis_model_preview_gui PRIVATE AGIS_HAVE_BASISU=0)
+endif()
+if(MSVC)
+  target_compile_options(agis_model_preview_gui PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+endif()
+
+add_executable(agis_tile_preview_gui WIN32
+  src/app/preview/tile_preview/main.cpp
+)
+target_include_directories(agis_tile_preview_gui PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+  ${AGIS_UI_ENGINE_DIR}/include
+)
+set_target_properties(agis_tile_preview_gui PROPERTIES
+  OUTPUT_NAME "AGIS-TilePreview"
+  WIN32_EXECUTABLE ON
+)
+target_compile_definitions(agis_tile_preview_gui PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
+target_link_libraries(agis_tile_preview_gui PRIVATE
+  agis_workbench_app
+  agis_common_app
+  agis_bgfx_vendor
+  agis_ui_engine
+  comctl32
+  comdlg32
+  user32
+  gdi32
+  gdiplus
+  shell32
+  d3d11
+  dxgi
+  d3dcompiler
+  opengl32
+)
+if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_tile_preview_gui PRIVATE GDAL::GDAL)
+  if(TARGET PROJ::proj)
+    target_link_libraries(agis_tile_preview_gui PRIVATE PROJ::proj)
+  endif()
+endif()
+if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_tile_preview_gui PRIVATE AGIS_HAVE_BASISU=1)
+else()
+  target_compile_definitions(agis_tile_preview_gui PRIVATE AGIS_HAVE_BASISU=0)
+endif()
+if(MSVC)
+  target_compile_options(agis_tile_preview_gui PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
 endif()
 
 if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
@@ -439,6 +608,24 @@ if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
         $<TARGET_FILE:PROJ::proj>
         $<TARGET_FILE_DIR:agis_desktop>)
   endif()
+  add_custom_command(TARGET agis_model_preview_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:GDAL>
+      $<TARGET_FILE_DIR:agis_model_preview_gui>)
+  add_custom_command(TARGET agis_tile_preview_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:GDAL>
+      $<TARGET_FILE_DIR:agis_tile_preview_gui>)
+  if(TARGET PROJ::proj)
+    add_custom_command(TARGET agis_model_preview_gui POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:PROJ::proj>
+        $<TARGET_FILE_DIR:agis_model_preview_gui>)
+    add_custom_command(TARGET agis_tile_preview_gui POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:PROJ::proj>
+        $<TARGET_FILE_DIR:agis_tile_preview_gui>)
+  endif()
 endif()
 
 if(WIN32 AND AGIS_UI_ENGINE_SHARED)
@@ -446,10 +633,20 @@ if(WIN32 AND AGIS_UI_ENGINE_SHARED)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       $<TARGET_FILE:agis_ui_engine>
       $<TARGET_FILE_DIR:agis_desktop>)
+  add_custom_command(TARGET agis_model_preview_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:agis_ui_engine>
+      $<TARGET_FILE_DIR:agis_model_preview_gui>)
+  add_custom_command(TARGET agis_tile_preview_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:agis_ui_engine>
+      $<TARGET_FILE_DIR:agis_tile_preview_gui>)
 endif()
 
 if(MSVC)
   target_sources(agis_desktop PRIVATE app.manifest)
+  target_sources(agis_model_preview_gui PRIVATE app.manifest)
+  target_sources(agis_tile_preview_gui PRIVATE app.manifest)
   target_compile_options(agis_desktop PRIVATE /utf-8)
   # bx/bgfx 头文件要求（与 agis_bgfx_vendor 一致）
   target_compile_options(agis_desktop PRIVATE /Zc:__cplusplus /Zc:preprocessor)
@@ -468,8 +665,8 @@ else()
   )
 endif()
 
-# `widgets_all.h` → `app/ui_private.h`（主程序侧 Widget 声明，实现仍在 agis_ui_engine）
-target_include_directories(ui_engine_demo PRIVATE ${AGIS_UI_ENGINE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+# `widgets_all.h` → `common/ui/ui_private.h`（主程序侧 Widget 声明，实现仍在 agis_ui_engine）
+target_include_directories(ui_engine_demo PRIVATE ${AGIS_UI_ENGINE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app)
 if(WIN32)
   set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
 endif()
@@ -507,14 +704,15 @@ endif()
 
 # 7 个数据转换后端命令行工具（3 类型互转 6 过程 + 模型↔模型 1 过程）
 set(_agis_convert_backend_sources
-  src/tools/convert_backend_common.cpp
-  src/app/agis_gdal_runtime_env.cpp
+  src/app/tools/convert_backend_common.cpp
+  src/app/common/runtime/agis_gdal_runtime_env.cpp
 )
 if(AGIS_HAVE_BASISU)
-  list(APPEND _agis_convert_backend_sources src/tools/ktx2_basis_encode.cpp)
+  list(APPEND _agis_convert_backend_sources src/app/tools/ktx2_basis_encode.cpp)
 endif()
 add_library(agis_convert_backend_common STATIC ${_agis_convert_backend_sources})
-target_include_directories(agis_convert_backend_common PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(agis_convert_backend_common PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app)
+target_compile_features(agis_convert_backend_common PRIVATE cxx_std_20)
 if(AGIS_USE_GDAL AND GDAL_FOUND)
   target_link_libraries(agis_convert_backend_common PRIVATE GDAL::GDAL)
   target_compile_definitions(agis_convert_backend_common PRIVATE GIS_DESKTOP_HAVE_GDAL=1)
@@ -558,8 +756,8 @@ set(_agis_convert_tools
 )
 
 foreach(_tool IN LISTS _agis_convert_tools)
-  add_executable(${_tool} src/tools/${_tool}.cpp)
-  target_include_directories(${_tool} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  add_executable(${_tool} src/app/tools/${_tool}.cpp)
+  target_include_directories(${_tool} PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app)
   target_link_libraries(${_tool} PRIVATE agis_convert_backend_common)
   if(MSVC)
     target_compile_options(${_tool} PRIVATE /utf-8)

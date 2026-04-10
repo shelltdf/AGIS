@@ -1,7 +1,7 @@
 #include "ui_theme.h"
 
-#include "main_globals.h"
-#include "app/resource.h"
+#include "common/app_core/main_globals.h"
+#include "common/app_core/resource.h"
 #include "ui_engine/gdiplus_ui.h"
 
 #include <dwmapi.h>

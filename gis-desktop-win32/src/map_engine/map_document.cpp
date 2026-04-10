@@ -14,7 +14,7 @@
 #include <string>
 
 #if GIS_DESKTOP_HAVE_GDAL
-#include "app/agis_gdal_runtime_env.h"
+#include "common/runtime/agis_gdal_runtime_env.h"
 #include "cpl_conv.h"
 #include "gdal_priv.h"
 #endif

@@ -1,4 +1,4 @@
-#include "app/ui_debug_pick.h"
+#include "common/ui/ui_debug_pick.h"
 
 #include <algorithm>
 #include <sstream>
@@ -7,7 +7,7 @@
 #include <commctrl.h>
 #include <windowsx.h>
 
-#include "app/resource.h"
+#include "common/app_core/resource.h"
 
 namespace {
 constexpr int kDebugPickHotkeyId = 0x4911;

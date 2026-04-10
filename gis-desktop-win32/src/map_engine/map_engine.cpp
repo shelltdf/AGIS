@@ -18,15 +18,15 @@
 
 #include <gdiplus.h>
 
-#include "app/resource.h"
-#include "app/ui_font.h"
+#include "common/app_core/resource.h"
+#include "common/ui/ui_font.h"
 #include "core/app_log.h"
 #include "ui_engine/gdiplus_ui.h"
 
 #pragma comment(lib, "comdlg32.lib")
 
 #if GIS_DESKTOP_HAVE_GDAL
-#include "app/agis_gdal_runtime_env.h"
+#include "common/runtime/agis_gdal_runtime_env.h"
 #include "cpl_conv.h"
 #include "gdal_alg.h"
 #include "gdal_priv.h"
