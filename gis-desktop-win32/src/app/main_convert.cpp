@@ -59,6 +59,7 @@ int g_convertMidViewportH = 0;
 int g_convertMidViewportX = 0;
 int g_convertMidViewportY = 0;
 int g_convertMidViewportW = 0;
+bool g_convertLogCollapsed = false;
 struct ConvertRuntimeInfo {
   ULONGLONG startTick = 0;
   std::time_t startEpoch = 0;
@@ -472,6 +473,12 @@ static int LayoutParamGroup(HWND hwnd, HWND grpBox, int x, int y0, int colW, con
   const int gap = 6;
   int local = padTop;
   int cnt = 0;
+  const int vpTop = g_convertMidViewportY;
+  const int vpBottom = g_convertMidViewportY + g_convertMidViewportH;
+  auto rowVisible = [&](int top, int h) {
+    const int bottom = top + h;
+    return !(bottom <= vpTop || top >= vpBottom);
+  };
   for (const ParamRowSpec& r : rows) {
     HWND hl = GetDlgItem(hwnd, r.labelId);
     HWND hc = GetDlgItem(hwnd, r.ctrlId);
@@ -485,14 +492,20 @@ static int LayoutParamGroup(HWND hwnd, HWND grpBox, int x, int y0, int colW, con
       continue;
     }
     cnt++;
+    const int rowTop = y0 + local;
+    const bool vis = rowVisible(rowTop, rowH);
     if (hl) {
-      ShowWindow(hl, SW_SHOW);
-      MoveWindow(hl, x + padX, y0 + local, lblW, 18, TRUE);
+      ShowWindow(hl, vis ? SW_SHOW : SW_HIDE);
+      if (vis) {
+        MoveWindow(hl, x + padX, rowTop, lblW, 18, TRUE);
+      }
     }
     if (hc) {
-      ShowWindow(hc, SW_SHOW);
+      ShowWindow(hc, vis ? SW_SHOW : SW_HIDE);
       const int ctrlW = (std::max)(72, colW - 2 * padX - lblW - 4);
-      MoveWindow(hc, x + padX + lblW + 4, y0 + local - 2, ctrlW, rowH, TRUE);
+      if (vis) {
+        MoveWindow(hc, x + padX + lblW + 4, rowTop - 2, ctrlW, rowH, TRUE);
+      }
       EnableWindow(hc, r.enable ? TRUE : FALSE);
     }
     local += rowH + gap;
@@ -505,8 +518,11 @@ static int LayoutParamGroup(HWND hwnd, HWND grpBox, int x, int y0, int colW, con
   }
   const int gh = local + 8;
   if (grpBox) {
-    ShowWindow(grpBox, SW_SHOW);
-    MoveWindow(grpBox, x, y0, colW, gh, TRUE);
+    const bool gvis = rowVisible(y0, gh);
+    ShowWindow(grpBox, gvis ? SW_SHOW : SW_HIDE);
+    if (gvis) {
+      MoveWindow(grpBox, x, y0, colW, gh, TRUE);
+    }
   }
   return y0 + gh + 6;
 }
@@ -606,54 +622,84 @@ static void UpdateConvertMidScrollBar(HWND hwnd) {
   ShowWindow(sb, maxScroll > 0 ? SW_SHOW : SW_HIDE);
 }
 
+static void UpdateConvertLogFoldUi(HWND hwnd) {
+  if (HWND btn = GetDlgItem(hwnd, IDC_CONV_TOGGLE_LOG)) {
+    SetWindowTextW(btn, g_convertLogCollapsed ? L"展开日志" : L"折叠日志");
+  }
+  if (HWND copy = GetDlgItem(hwnd, IDC_CONV_COPY_LOG)) {
+    ShowWindow(copy, g_convertLogCollapsed ? SW_HIDE : SW_SHOW);
+  }
+  if (HWND log = GetDlgItem(hwnd, IDC_CONV_LOG)) {
+    ShowWindow(log, g_convertLogCollapsed ? SW_HIDE : SW_SHOW);
+  }
+}
+
 void LayoutConvertWindow(HWND hwnd) {
   RECT rc{};
   GetClientRect(hwnd, &rc);
   const int w = rc.right - rc.left;
   const int h = rc.bottom - rc.top;
   const int m = 10;
-  const int topH = std::max(180, h / 2);
+  const int taskH = 190;
+  const int minLogH = 120;
+  const int fixedBottom = taskH + 2 + 24 + minLogH + m;  // 任务区 + 日志工具条 + 最小日志区 + 底边距
+  const int minTopH = 180;
+  const int topH = (std::max)(minTopH, h - fixedBottom - m);
   const int colW = (w - m * 4) / 3;
   const int midScrollW = 12;
   const int midColW = (std::max)(120, colW - (midScrollW + 4));
 
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE), m, m + 20, colW - 28, 220, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE_HELP), m + colW - 24, m + 20, 24, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE), m, m + 48, colW - 28, 220, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE_HELP), m + colW - 24, m + 48, 24, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), m, m + 76, colW - 146, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_BROWSE), m + colW - 142, m + 76, 68, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PREVIEW), m + colW - 70, m + 76, 70, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_INFO), m, m + 106, colW, topH - 110, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_INPUT_PANEL), m, m, colW, topH, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_TITLE), m + 10, m + 8, 120, 16, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE), m + 10, m + 30, colW - 28, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_TYPE_HELP), m + colW - 24, m + 30, 24, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE), m + 10, m + 58, colW - 28, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_SUBTYPE_HELP), m + colW - 24, m + 58, 24, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PATH), m + 10, m + 86, colW - 146, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_BROWSE), m + colW - 142, m + 86, 68, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_PREVIEW), m + colW - 70, m + 86, 70, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_INPUT_INFO), m + 10, m + 116, colW - 10, topH - 120, TRUE);
 
   const int midColX = m * 2 + colW;
-  LayoutConvertMidColumn(hwnd, midColX, midColW, m, topH);
   g_convertMidViewportX = midColX;
   g_convertMidViewportY = m;
   g_convertMidViewportW = midColW;
-  g_convertMidViewportH = (std::max)(80, topH - 20);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MID_SCROLL), midColX + midColW + 2, m, midScrollW, g_convertMidViewportH, TRUE);
+  g_convertMidViewportH = (std::max)(80, topH - 2);
+  LayoutConvertMidColumn(hwnd, midColX, midColW, m, topH);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MID_SCROLL), midColX + midColW + 2, m + 1, midScrollW, (std::max)(24, g_convertMidViewportH - 2), TRUE);
+  if (HWND sb = GetDlgItem(hwnd, IDC_CONV_MID_SCROLL)) {
+    SetWindowPos(sb, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+  }
   UpdateConvertMidScrollBar(hwnd);
 
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), m * 3 + colW * 2, m + 20, colW - 28, 220, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE_HELP), m * 3 + colW * 2 + colW - 24, m + 20, 24, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE), m * 3 + colW * 2, m + 48, colW - 28, 220, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE_HELP), m * 3 + colW * 2 + colW - 24, m + 48, 24, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), m * 3 + colW * 2, m + 76, colW - 146, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_BROWSE), m * 3 + colW * 2 + colW - 142, m + 76, 68, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PREVIEW), m * 3 + colW * 2 + colW - 70, m + 76, 70, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_INFO), m * 3 + colW * 2, m + 106, colW, topH - 110, TRUE);
+  const int outX = m * 3 + colW * 2;
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_OUTPUT_PANEL), outX, m, colW, topH, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TITLE), outX + 10, m + 8, 120, 16, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE), outX + 10, m + 30, colW - 28, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_TYPE_HELP), outX + colW - 24, m + 30, 24, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE), outX + 10, m + 58, colW - 28, 220, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_SUBTYPE_HELP), outX + colW - 24, m + 58, 24, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PATH), outX + 10, m + 86, colW - 146, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_BROWSE), outX + colW - 142, m + 86, 68, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_PREVIEW), outX + colW - 70, m + 86, 70, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_OUTPUT_INFO), outX + 10, m + 116, colW - 10, topH - 120, TRUE);
 
   const int y1 = m + topH + 8;
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_TASK_PANEL), m, y1, w - m * 2, taskH, TRUE);
   const int cmdBtnLane = 212;  // 左列「复制命令/复制输出」+ 间距 + 右列「开始转换」
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m, y1, w - m * 2 - cmdBtnLane, 88, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_CMD), w - m - cmdBtnLane, y1, 100, 26, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_LOG), w - m - cmdBtnLane, y1 + 30, 100, 26, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1, 100, 52, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m, y1 + 96, w - m * 2, 22, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG), m, y1 + 122, w - m * 2, 24, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG_DETAIL), m, y1 + 146, w - m * 2, 44, TRUE);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_LOG), m, y1 + 194, w - m * 2, h - (y1 + 194) - m, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_CMDLINE), m + 10, y1 + 8, w - m * 2 - cmdBtnLane, 88, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_CMD), w - m - cmdBtnLane, y1 + 8, 100, 26, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_RUN), w - m - 100, y1 + 8, 100, 52, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PROGRESS), m + 10, y1 + 104, w - m * 2 - 20, 22, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG), m + 10, y1 + 130, w - m * 2 - 20, 24, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_MSG_DETAIL), m + 10, y1 + 154, w - m * 2 - 20, 30, TRUE);
+  const int yLogBar = y1 + taskH + 2;
+  const int logPanelH = (std::max)(minLogH + 24, h - yLogBar - m);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_TOGGLE_LOG), m, yLogBar, 100, 22, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_COPY_LOG), m + 106, yLogBar, 100, 22, TRUE);
+  const int yLogTop = yLogBar + 24;
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_LOG), m, yLogTop, w - m * 2, (std::max)(minLogH, h - yLogTop - m), TRUE);
+  UpdateConvertLogFoldUi(hwnd);
 }
 
 void FillConvertTypeCombo(HWND combo) {
@@ -2143,7 +2189,7 @@ void ShowDataConvertWindow(HWND owner) {
     return;
   }
   g_hwndConvertDlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kConvertClass, L"数据转换",
-                                     WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 920, 620, owner, nullptr,
+                                     WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, CW_USEDEFAULT, CW_USEDEFAULT, 920, 620, owner, nullptr,
                                      GetModuleHandleW(nullptr), nullptr);
   if (g_hwndConvertDlg) {
     AgisCenterWindowInMonitorWorkArea(g_hwndConvertDlg, owner ? owner : g_hwndMain);
@@ -2161,7 +2207,26 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
   switch (msg) {
     case WM_CREATE: {
       SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
-      CreateWindowW(L"STATIC", L"输入数据源", WS_CHILD | WS_VISIBLE, 10, 8, 120, 16, hwnd, nullptr,
+      CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 10, 10, 240, 240, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PANEL_INPUT)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 280, 10, 244, 240, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PANEL_MID)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 550, 10, 240, 240, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PANEL_OUTPUT)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 10, 280, 860, 190, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PANEL_TASK)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 10, 474, 860, 180, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PANEL_LOG)), GetModuleHandleW(nullptr), nullptr);
+      ShowWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_INPUT), SW_HIDE);
+      ShowWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_MID), SW_HIDE);
+      ShowWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_OUTPUT), SW_HIDE);
+      ShowWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_TASK), SW_HIDE);
+      ShowWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_LOG), SW_HIDE);
+      CreateWindowW(L"BUTTON", L"输入数据", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 6, 6, 248, 240, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_GRP_INPUT_PANEL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"STATIC", L"输入数据源", WS_CHILD | WS_VISIBLE, 10, 8, 120, 16, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_TITLE)),
                     GetModuleHandleW(nullptr), nullptr);
       HWND inType = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 10, 30, 240,
                                   240, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_INPUT_TYPE)),
@@ -2200,7 +2265,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       CreateWindowW(L"BUTTON", L"输出子类型（--output-subtype）", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 280, 192, 240,
                     48, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_GRP_OUT_SUB)), GetModuleHandleW(nullptr),
                     nullptr);
-      CreateWindowW(L"SCROLLBAR", L"", WS_CHILD | SBS_VERT, 524, 10, 12, 220, hwnd,
+      CreateWindowW(L"SCROLLBAR", L"", WS_CHILD | WS_VISIBLE | SBS_VERT, 524, 10, 12, 220, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MID_SCROLL)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"STATIC", L"高程/水平比（1 = 1:1）：", WS_CHILD | WS_VISIBLE, 280, 238, 200, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_ELEV_HORIZ_LBL)), GetModuleHandleW(nullptr),
@@ -2327,7 +2392,11 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MODEL_BUDGET_MB)), GetModuleHandleW(nullptr),
                     nullptr);
 
-      CreateWindowW(L"STATIC", L"输出目标", WS_CHILD | WS_VISIBLE, 550, 8, 120, 16, hwnd, nullptr,
+      CreateWindowW(L"BUTTON", L"输出数据", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 546, 6, 248, 240, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_GRP_OUTPUT_PANEL)), GetModuleHandleW(nullptr),
+                    nullptr);
+      CreateWindowW(L"STATIC", L"输出目标", WS_CHILD | WS_VISIBLE, 550, 8, 120, 16, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_OUTPUT_TITLE)),
                     GetModuleHandleW(nullptr), nullptr);
       HWND outType =
           CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 550, 30, 240, 240,
@@ -2358,10 +2427,12 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       CreateWindowW(PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 10, 280, 740, 22, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_PROGRESS)), GetModuleHandleW(nullptr),
                     nullptr);
+      CreateWindowW(L"BUTTON", L"任务状态", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 6, 272, 868, 196, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_GRP_TASK_PANEL)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"BUTTON", L"复制命令", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 608, 280, 100, 26, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_CMD)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"复制输出", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 608, 310, 100, 26, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_LOG)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"BUTTON", L"折叠日志", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 608, 310, 100, 26, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_TOGGLE_LOG)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"BUTTON", L"开始转换", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 718, 280, 100, 52, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_RUN)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL |
@@ -2372,6 +2443,8 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MSG)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"STATIC", L"阶段：-  文件：-  I/O：-", WS_CHILD | WS_VISIBLE, 10, 330, 860, 42, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_MSG_DETAIL)), GetModuleHandleW(nullptr), nullptr);
+      CreateWindowW(L"BUTTON", L"复制输出", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 770, 376, 100, 24, hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_COPY_LOG)), GetModuleHandleW(nullptr), nullptr);
       CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 10,
                     336, 860, 220, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONV_LOG)),
                     GetModuleHandleW(nullptr), nullptr);
@@ -2382,7 +2455,8 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       RebuildConvertSubtypeComboForSide(hwnd, false);
       SyncConvertInfoByType(hwnd, true);
       SyncConvertInfoByType(hwnd, false);
-      for (int cid : {IDC_CONV_INPUT_TYPE, IDC_CONV_INPUT_TYPE_HELP, IDC_CONV_INPUT_SUBTYPE, IDC_CONV_INPUT_SUBTYPE_HELP,
+      for (int cid : {IDC_CONV_GRP_INPUT_PANEL, IDC_CONV_INPUT_TITLE, IDC_CONV_INPUT_TYPE, IDC_CONV_INPUT_TYPE_HELP,
+                      IDC_CONV_INPUT_SUBTYPE, IDC_CONV_INPUT_SUBTYPE_HELP,
                       IDC_CONV_INPUT_PATH, IDC_CONV_INPUT_BROWSE, IDC_CONV_INPUT_PREVIEW, IDC_CONV_INPUT_INFO,
                       IDC_CONV_GRP_IN_TYPE, IDC_CONV_GRP_IN_SUB, IDC_CONV_GRP_OUT_TYPE, IDC_CONV_GRP_OUT_SUB,
                       IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO, IDC_CONV_TARGET_CRS_LBL, IDC_CONV_TARGET_CRS,
@@ -2391,11 +2465,12 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                       IDC_CONV_TEXTURE_FMT_LBL, IDC_CONV_TEXTURE_FORMAT,
                       IDC_CONV_OBJ_FP_TYPE_LBL, IDC_CONV_OBJ_FP_TYPE,
                       IDC_CONV_MODEL_COORD_LBL, IDC_CONV_VECTOR_MODE_LBL,
-                      IDC_CONV_OUTPUT_TYPE, IDC_CONV_OUTPUT_TYPE_HELP,
+                      IDC_CONV_GRP_OUTPUT_PANEL, IDC_CONV_OUTPUT_TITLE, IDC_CONV_OUTPUT_TYPE, IDC_CONV_OUTPUT_TYPE_HELP,
                       IDC_CONV_OUTPUT_SUBTYPE,
                       IDC_CONV_OUTPUT_SUBTYPE_HELP, IDC_CONV_OUTPUT_PATH, IDC_CONV_OUTPUT_BROWSE, IDC_CONV_OUTPUT_PREVIEW,
-                      IDC_CONV_OUTPUT_INFO, IDC_CONV_MODEL_COORD, IDC_CONV_VECTOR_MODE, IDC_CONV_COPY_CMD,
-                      IDC_CONV_COPY_LOG,
+                      IDC_CONV_OUTPUT_INFO, IDC_CONV_MODEL_COORD, IDC_CONV_VECTOR_MODE, IDC_CONV_PANEL_MID, IDC_CONV_PANEL_TASK, IDC_CONV_GRP_TASK_PANEL, IDC_CONV_COPY_CMD,
+                      IDC_CONV_TOGGLE_LOG,
+                      IDC_CONV_PANEL_LOG, IDC_CONV_COPY_LOG,
                       IDC_CONV_PROGRESS,
                       IDC_CONV_RUN, IDC_CONV_MSG, IDC_CONV_MSG_DETAIL}) {
         if (HWND c = GetDlgItem(hwnd, cid)) {
@@ -2426,6 +2501,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                       L"[提示] GIS→模型：Mesh 输出 OBJ+MTL+贴图；TIN/DEM 差异由 DEM 插值与网格拓扑参数控制；输出子类型为「点云」或路径为 .las/.laz 时输出点云（与模型→点云相同采样）。"
                       L" 瓦片→模型仍为 OBJ。纯 OBJ↔LAS 互转请用「模型↔模型」。");
       RefreshConvertSettingPanels(hwnd);
+      g_convertLogCollapsed = false;
       g_convertMidScrollY = 0;
       g_convertMidContentH = 0;
       g_convertMidViewportH = 0;
@@ -2527,8 +2603,15 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_MOUSEWHEEL: {
       POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
       ScreenToClient(hwnd, &pt);
-      const RECT midRc{g_convertMidViewportX, g_convertMidViewportY, g_convertMidViewportX + g_convertMidViewportW,
-                       g_convertMidViewportY + g_convertMidViewportH};
+      RECT midRc{};
+      if (HWND midPanel = GetDlgItem(hwnd, IDC_CONV_PANEL_MID)) {
+        GetWindowRect(midPanel, &midRc);
+        POINT tl{midRc.left, midRc.top};
+        POINT br{midRc.right, midRc.bottom};
+        ScreenToClient(hwnd, &tl);
+        ScreenToClient(hwnd, &br);
+        midRc = RECT{tl.x, tl.y, br.x, br.y};
+      }
       if (!PtInRect(&midRc, pt)) {
         break;
       }
@@ -2698,6 +2781,11 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         CopyControlTextToClipboard(hwnd, IDC_CONV_LOG, L"[输出] 日志已复制到剪贴板。");
         return 0;
       }
+      if (LOWORD(wParam) == IDC_CONV_TOGGLE_LOG) {
+        g_convertLogCollapsed = !g_convertLogCollapsed;
+        LayoutConvertWindow(hwnd);
+        return 0;
+      }
       if (LOWORD(wParam) == IDC_CONV_RUN) {
         if (g_convertRunning) {
           MessageBoxW(hwnd, L"已有转换任务在运行，请等待完成。", L"数据转换", MB_OK | MB_ICONINFORMATION);
@@ -2774,6 +2862,9 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       g_hwndConvertDlg = nullptr;
       g_convertMutedParamLabelIds.clear();
       s_tip = nullptr;
+      if (!g_hwndMain || !IsWindow(g_hwndMain)) {
+        PostQuitMessage(0);
+      }
       if (s_bgLight) {
         DeleteObject(s_bgLight);
         s_bgLight = nullptr;

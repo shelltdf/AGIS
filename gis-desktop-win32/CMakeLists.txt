@@ -286,6 +286,7 @@ add_executable(agis_desktop WIN32
   src/app/main_chrome.cpp
   src/app/main_panels.cpp
   src/app/main_convert.cpp
+  src/app/ui_debug_pick.cpp
   src/app/preview/main_model_preview.cpp
   src/app/preview/tiles_gltf_loader.cpp
   src/app/ui_font.cpp
@@ -378,6 +379,51 @@ if(AGIS_HAVE_BASISU)
   target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=1)
 else()
   target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=0)
+endif()
+
+add_executable(agis_convert_gui WIN32
+  src/app/main_convert_standalone.cpp
+  src/app/main_convert.cpp
+  src/app/main_globals.cpp
+  src/app/ui_debug_pick.cpp
+  src/app/gis_document/main_gis_xml.cpp
+  src/app/ui_font.cpp
+  src/app/ui_theme.cpp
+  src/map_engine/map_projection.cpp
+  src/core/app_log.cpp
+)
+target_include_directories(agis_convert_gui PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${AGIS_UI_ENGINE_DIR}/include
+)
+set_target_properties(agis_convert_gui PROPERTIES
+  OUTPUT_NAME "AGIS-Convert"
+  WIN32_EXECUTABLE ON
+)
+target_compile_definitions(agis_convert_gui PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
+target_link_libraries(agis_convert_gui PRIVATE
+  agis_ui_engine
+  comctl32
+  comdlg32
+  user32
+  gdi32
+  gdiplus
+  shell32
+)
+if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_convert_gui PRIVATE GDAL::GDAL)
+  target_sources(agis_convert_gui PRIVATE src/app/agis_gdal_runtime_env.cpp)
+  if(TARGET PROJ::proj)
+    target_link_libraries(agis_convert_gui PRIVATE PROJ::proj)
+  endif()
+endif()
+if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_convert_gui PRIVATE AGIS_HAVE_BASISU=1)
+else()
+  target_compile_definitions(agis_convert_gui PRIVATE AGIS_HAVE_BASISU=0)
+endif()
+if(MSVC)
+  target_compile_options(agis_convert_gui PRIVATE /utf-8)
 endif()
 
 if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)

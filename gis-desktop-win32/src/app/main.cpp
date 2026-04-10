@@ -11,6 +11,7 @@
 
 #include "app/help_data_drivers.h"
 #include "app/resource.h"
+#include "app/ui_debug_pick.h"
 #include "app/ui_font.h"
 #include "app/ui_theme.h"
 #include "core/app_log.h"
@@ -580,11 +581,16 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
   AgisCenterWindowInMonitorWorkArea(hwnd, nullptr);
   ShowWindow(hwnd, cmdShow);
   UpdateWindow(hwnd);
+  AgisUiDebugPickInit(hInst);
   MSG msg{};
   while (GetMessageW(&msg, nullptr, 0, 0)) {
+    if (AgisUiDebugPickHandleMessage(&msg)) {
+      continue;
+    }
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
+  AgisUiDebugPickShutdown();
   UiGdiplusShutdown();
   return static_cast<int>(msg.wParam);
 }
