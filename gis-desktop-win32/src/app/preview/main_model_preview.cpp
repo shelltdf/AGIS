@@ -40,6 +40,7 @@
 #include "imgui/imgui.h"
 #endif
 #include "app/preview/tiles_gltf_loader.h"
+#include "app/preview/tile_preview/tile_preview_protocol_picker.h"
 #include <gdiplus.h>
 #include "common/ui/ui_font.h"
 #include "common/app_core/main_app.h"
@@ -3794,6 +3795,9 @@ static std::optional<std::wstring> FindTilesetJsonPath(const std::wstring& rootW
     if (_wcsicmp(p.filename().c_str(), L"tileset.json") == 0) {
       return p.wstring();
     }
+    if (_wcsicmp(p.extension().c_str(), L".json") == 0) {
+      return p.wstring();
+    }
     return std::nullopt;
   }
   if (!std::filesystem::is_directory(p, ec)) {
@@ -4181,6 +4185,15 @@ struct TilePreviewState {
   float pixelsPerTile = 256.f;
   bool dragging = false;
   POINT lastDragPt{};
+  /// 鼠标（客户区）与地理读数，供底部状态条使用。
+  POINT lastPointerClient{};
+  bool pointerOverImage = false;
+  bool pointerGeoValid = false;
+  double pointerLon = 0.0;
+  double pointerLat = 0.0;
+  /// 底部单行状态（客户区坐标、经纬度/像素等），在 WM_PAINT 中绘制。
+  std::wstring tilePointerStatusLine;
+  bool tileMouseTrackingLeave = false;
 };
 
 static constexpr size_t kTilePreviewBitmapCacheMax = 160;
@@ -4188,10 +4201,184 @@ static constexpr UINT kTilePreviewRequestOpenMsg = WM_APP + 301;
 
 static std::wstring g_pendingTilePreviewRoot;
 
-static RECT TileSlippyImageArea(RECT cr) {
-  constexpr int kTopBar = 100;
+/// 底部单行状态条高度（半透明信息栏）。
+static constexpr int kTilePreviewBottomStatus = 28;
+
+/// 顶部说明区高度：随模式变化（含「打开方式」+ 动态 hint）。
+/// Slippy 地图模式仅保留一行快捷说明 + 动态 hint，避免固定 212px 把地图挤到窗口下半区。
+static int TilePreviewTopBarPx(TilePreviewState::Mode mode) {
+  switch (mode) {
+  case TilePreviewState::Mode::kThreeDTilesMeta:
+    return 288;
+  case TilePreviewState::Mode::kSlippyQuadtree:
+    return 72;
+  default:
+    return 212;
+  }
+}
+
+static RECT TilePreviewStatusBarRect(RECT cr) {
+  const int h = kTilePreviewBottomStatus;
+  return {cr.left, (std::max)(cr.top, cr.bottom - h), cr.right, cr.bottom};
+}
+
+static RECT TileSlippyImageArea(RECT cr, TilePreviewState::Mode mode) {
   const int margin = 10;
-  return {cr.left + margin, cr.top + kTopBar, cr.right - margin, cr.bottom - margin};
+  const int top = cr.top + TilePreviewTopBarPx(mode);
+  const int bot = cr.bottom - margin - kTilePreviewBottomStatus;
+  if (bot <= top + 8) {
+    return {cr.left + margin, top, cr.right - margin, top + 8};
+  }
+  return {cr.left + margin, top, cr.right - margin, bot};
+}
+
+/// 与单图预览 WM_PAINT 中缩放逻辑一致，用于命中测试与状态栏。
+static bool TilePreviewComputeRasterDestRect(const TilePreviewState* st, RECT imgArea, RECT* outDest) {
+  if (!st || !outDest || !st->bmp || st->bmp->GetLastStatus() != Gdiplus::Ok) {
+    return false;
+  }
+  const int iw = st->bmp->GetWidth();
+  const int ih = st->bmp->GetHeight();
+  if (iw <= 0 || ih <= 0) {
+    return false;
+  }
+  const int aw = (std::max)(1, static_cast<int>(imgArea.right - imgArea.left));
+  const int ah = (std::max)(1, static_cast<int>(imgArea.bottom - imgArea.top));
+  const float scale = (std::min)(static_cast<float>(aw) / static_cast<float>(iw), static_cast<float>(ah) / static_cast<float>(ih));
+  const int dw = static_cast<int>(static_cast<float>(iw) * scale);
+  const int dh = static_cast<int>(static_cast<float>(ih) * scale);
+  const int dx = imgArea.left + (aw - dw) / 2;
+  const int dy = imgArea.top + (ah - dh) / 2;
+  *outDest = {dx, dy, dx + dw, dy + dh};
+  return true;
+}
+
+/// XYZ 片元坐标（当前 Z 下，0..2^z）→ WGS84 经纬度（度），球面墨卡托反算。
+static void SlippyTileXYToLonLat(double tileX, double tileY, int z, double* lonDeg, double* latDeg) {
+  if (!lonDeg || !latDeg || z < 0 || z > 30) {
+    return;
+  }
+  const double n = static_cast<double>(1u << static_cast<unsigned>(z));
+  *lonDeg = tileX / n * 360.0 - 180.0;
+  constexpr double kPi = 3.14159265358979323846;
+  const double latRad = std::atan(std::sinh(kPi * (1.0 - 2.0 * tileY / n)));
+  *latDeg = latRad * 180.0 / kPi;
+}
+
+static void TilePreviewUpdatePointerGeo(TilePreviewState* st, HWND hwnd, POINT clientPt) {
+  if (!st || !hwnd) {
+    return;
+  }
+  st->lastPointerClient = clientPt;
+  st->pointerOverImage = false;
+  st->pointerGeoValid = false;
+  RECT cr{};
+  GetClientRect(hwnd, &cr);
+  wchar_t line[512]{};
+
+  if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+    const RECT img = TileSlippyImageArea(cr, st->mode);
+    if (!PtInRect(&img, clientPt)) {
+      swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入地图区域查看经纬度", clientPt.x, clientPt.y);
+      st->tilePointerStatusLine = line;
+      return;
+    }
+    st->pointerOverImage = true;
+    const int aw = (std::max)(1, static_cast<int>(img.right - img.left));
+    const int ah = (std::max)(1, static_cast<int>(img.bottom - img.top));
+    const double worldW = static_cast<double>(aw) / static_cast<double>(st->pixelsPerTile);
+    const double worldH = static_cast<double>(ah) / static_cast<double>(st->pixelsPerTile);
+    const double worldLeft = st->centerTx - worldW * 0.5;
+    const double worldTop = st->centerTy - worldH * 0.5;
+    const double tileX = worldLeft + static_cast<double>(clientPt.x - img.left) / static_cast<double>(st->pixelsPerTile);
+    const double tileY = worldTop + static_cast<double>(clientPt.y - img.top) / static_cast<double>(st->pixelsPerTile);
+    SlippyTileXYToLonLat(tileX, tileY, st->viewZ, &st->pointerLon, &st->pointerLat);
+    st->pointerGeoValid = true;
+    swprintf_s(line, L"客户区 (%d, %d) | λ %.6f° φ %.6f° | 椭球高 —（平面瓦片，无 DTM）", clientPt.x, clientPt.y, st->pointerLon,
+               st->pointerLat);
+    st->tilePointerStatusLine = line;
+    return;
+  }
+
+  if (st->mode == TilePreviewState::Mode::kSingleRaster && st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok) {
+    const RECT imgArea = TileSlippyImageArea(cr, st->mode);
+    RECT dest{};
+    if (TilePreviewComputeRasterDestRect(st, imgArea, &dest) && PtInRect(&dest, clientPt)) {
+      st->pointerOverImage = true;
+      const int iw = st->bmp->GetWidth();
+      const int ih = st->bmp->GetHeight();
+      const int dw = (std::max)(1, static_cast<int>(dest.right - dest.left));
+      const int dh = (std::max)(1, static_cast<int>(dest.bottom - dest.top));
+      const double u = (static_cast<double>(clientPt.x - dest.left) + 0.5) / static_cast<double>(dw);
+      const double v = (static_cast<double>(clientPt.y - dest.top) + 0.5) / static_cast<double>(dh);
+      const int px = (std::clamp)(static_cast<int>(u * static_cast<double>(iw - 1)), 0, iw - 1);
+      const int py = (std::clamp)(static_cast<int>(v * static_cast<double>(ih - 1)), 0, ih - 1);
+      swprintf_s(line, L"客户区 (%d, %d) | 图像像素 (%d, %d) | 源图尺寸 %d×%d（无地理参照）", clientPt.x, clientPt.y, px, py, iw, ih);
+    } else {
+      swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入缩略图区域查看像素坐标", clientPt.x, clientPt.y);
+    }
+    st->tilePointerStatusLine = line;
+    return;
+  }
+
+  if (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) {
+    swprintf_s(line, L"客户区 (%d, %d) | 3D Tiles 元数据模式：无平面地图坐标（见上方 BVH/层级说明）", clientPt.x, clientPt.y);
+    st->tilePointerStatusLine = line;
+    return;
+  }
+
+  swprintf_s(line, L"客户区 (%d, %d)", clientPt.x, clientPt.y);
+  st->tilePointerStatusLine = line;
+}
+
+static void TileFillRectSemi(HDC hdc, int x, int y, int w, int h, BYTE a, BYTE r, BYTE g, BYTE b) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+  Gdiplus::Graphics gx(hdc);
+  Gdiplus::SolidBrush br(Gdiplus::Color(a, r, g, b));
+  gx.FillRectangle(&br, x, y, w, h);
+}
+
+/// 在半透明衬底上绘制多行文字（GDI），避免与底图混在一起。
+static void TileDrawTextBlockSemiBg(HDC hdc, const wchar_t* text, RECT boxRc, int pad, BYTE bgAlpha) {
+  if (!text) {
+    return;
+  }
+  RECT measureRc = boxRc;
+  DrawTextW(hdc, text, -1, &measureRc, DT_CALCRECT | DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+  RECT bgRc = measureRc;
+  InflateRect(&bgRc, pad, pad);
+  if (bgRc.right > boxRc.right) {
+    bgRc.right = boxRc.right;
+  }
+  if (bgRc.bottom > boxRc.bottom) {
+    bgRc.bottom = boxRc.bottom;
+  }
+  TileFillRectSemi(hdc, bgRc.left, bgRc.top, bgRc.right - bgRc.left, bgRc.bottom - bgRc.top, bgAlpha, 250, 252, 255);
+  RECT drawRc = measureRc;
+  if (drawRc.right > boxRc.right) {
+    drawRc.right = boxRc.right;
+  }
+  if (drawRc.bottom > boxRc.bottom) {
+    drawRc.bottom = boxRc.bottom;
+  }
+  DrawTextW(hdc, text, -1, &drawRc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+}
+
+static void TileDrawTextLineSemiBg(HDC hdc, const wchar_t* text, RECT lineRc, int padH, int padV, BYTE bgAlpha) {
+  if (!text) {
+    return;
+  }
+  RECT tr{};
+  tr.left = lineRc.left;
+  tr.top = lineRc.top;
+  tr.right = lineRc.right;
+  tr.bottom = lineRc.bottom;
+  DrawTextW(hdc, text, -1, &tr, DT_CALCRECT | DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+  InflateRect(&tr, padH, padV);
+  TileFillRectSemi(hdc, tr.left, tr.top, tr.right - tr.left, tr.bottom - tr.top, bgAlpha, 252, 254, 255);
+  DrawTextW(hdc, text, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
 static void TilePruneBitmapCacheNotAtZ(TilePreviewState* st, int z) {
@@ -4252,7 +4439,7 @@ static void TileZoomSlippy(TilePreviewState* st, RECT clientCr, const POINT* cur
   if (newZ == st->viewZ) {
     return;
   }
-  const RECT img = TileSlippyImageArea(clientCr);
+  const RECT img = TileSlippyImageArea(clientCr, st->mode);
   const int aw = (std::max)(1, static_cast<int>(img.right - img.left));
   const int ah = (std::max)(1, static_cast<int>(img.bottom - img.top));
   POINT focusPt{};
@@ -4288,29 +4475,58 @@ static RECT TileOpenButtonRect(RECT cr) {
   return RECT{cr.left + 12, cr.top + 10, cr.left + 92, cr.top + 34};
 }
 
-static bool PromptOpenTilePreviewPath(HWND owner, std::wstring* pathOut) {
-  if (!pathOut) return false;
-  wchar_t fileBuf[32768]{};
-  OPENFILENAMEW ofn{};
-  ofn.lStructSize = sizeof(ofn);
-  ofn.hwndOwner = owner;
-  ofn.lpstrFile = fileBuf;
-  ofn.nMaxFile = static_cast<DWORD>(std::size(fileBuf));
-  ofn.lpstrFilter =
-      L"瓦片/栅格/容器\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.mbtiles;*.gpkg;*.json\0"
-      L"3D Tiles JSON (*.json)\0*.json\0"
-      L"栅格图像 (*.png;*.jpg;*.jpeg;*.webp;*.bmp)\0*.png;*.jpg;*.jpeg;*.webp;*.bmp\0"
-      L"瓦片容器 (*.mbtiles;*.gpkg)\0*.mbtiles;*.gpkg\0"
-      L"所有文件 (*.*)\0*.*\0\0";
-  ofn.nFilterIndex = 1;
-  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_HIDEREADONLY;
-  if (!GetOpenFileNameW(&ofn)) return false;
-  *pathOut = fileBuf;
-  return true;
+struct TilePreviewLoadReport {
+  bool ok = true;
+  std::wstring errorTitle;
+  std::wstring errorText;
+};
+
+static void TilePreviewShowLoadError(HWND owner, const TilePreviewLoadReport& rep) {
+  if (rep.ok || rep.errorText.empty()) {
+    return;
+  }
+  const wchar_t* cap = rep.errorTitle.empty() ? L"瓦片预览" : rep.errorTitle.c_str();
+  MessageBoxW(owner, rep.errorText.c_str(), cap, MB_OK | MB_ICONWARNING);
 }
 
-static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::wstring& path) {
-  if (!st) return;
+static const wchar_t kTilePreviewOpenMethods[] =
+    L"【打开方式】\n"
+    L"· 命令行：AGIS-TilePreview.exe <文件夹或单文件路径>\n"
+    L"· 窗口左上角「Open…」浏览选择\n"
+    L"· 将文件或文件夹拖入本窗口（拖放）\n"
+    L"· 从工作台等入口带路径参数启动\n"
+    L"\n"
+    L"【支持的数据】\n"
+    L"· XYZ / TMS 瓦片根目录（如 {z}/{x}/{y}.png；可含 tilejson.json）\n"
+    L"· tileset.json（3D Tiles：BVH / 元数据面板）\n"
+    L"· 单张栅格 PNG / JPG / JPEG / WebP / BMP（缩放置中）\n"
+    L"· .mbtiles / .gpkg（需 GDAL：全球拼图缩略预览）";
+
+/// Slippy 顶栏一行：完整「打开方式」见其它模式或产品文档；此处为地图区让出高度。
+static const wchar_t kTilePreviewSlippyTopLine[] =
+    L"Open… 或拖入瓦片根目录。滚轮：Z 层级；Shift+滚轮：视口中心；Ctrl+滚轮：片元像素；拖拽平移。";
+
+static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::wstring& path, TilePreviewLoadReport* report) {
+  if (!st) {
+    return;
+  }
+  const auto markOk = [&]() {
+    if (report) {
+      report->ok = true;
+      report->errorTitle.clear();
+      report->errorText.clear();
+    }
+  };
+  const auto markFail = [&](const wchar_t* title, std::wstring text) {
+    st->hint = std::move(text);
+    if (report) {
+      report->ok = false;
+      report->errorTitle = title;
+      report->errorText = st->hint;
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
+  };
+
   st->rootPath = path;
   st->samplePath.clear();
   st->hint.clear();
@@ -4327,6 +4543,18 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   st->centerTy = 0.5;
   st->pixelsPerTile = 256.f;
   st->dragging = false;
+  st->lastPointerClient = {};
+  st->pointerOverImage = false;
+  st->pointerGeoValid = false;
+  st->tilePointerStatusLine = L"移动鼠标查看坐标";
+  st->tileMouseTrackingLeave = false;
+
+  if (st->rootPath.empty()) {
+    st->hint = L"【操作提示】地图模式：滚轮切换 Z（光标中心；Shift+滚轮以视口中心）；Ctrl+滚轮调整片元像素尺寸；拖拽平移。";
+    InvalidateRect(hwnd, nullptr, FALSE);
+    markOk();
+    return;
+  }
 
   std::error_code ecPath;
   const std::filesystem::path rootFs(st->rootPath);
@@ -4341,14 +4569,26 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
         std::wostringstream hs;
         hs << L"【MBTiles / GeoPackage】GDAL 栅格缩略预览（全球拼图下采样至 <=2048px）。\n路径：\n"
            << st->rootPath;
-        if (!gdalDiag.empty()) hs << L"\n" << gdalDiag;
+        if (!gdalDiag.empty()) {
+          hs << L"\n" << gdalDiag;
+        }
         st->hint = hs.str();
         InvalidateRect(hwnd, nullptr, FALSE);
+        markOk();
         return;
       }
-      st->hint = L"【MBTiles / GeoPackage】GDAL 预览失败：\n" + gdalDiag +
-                 L"\n请检查 GDAL/PROJ/gdal_data 配置，或导出 XYZ 目录后再预览。";
-      InvalidateRect(hwnd, nullptr, FALSE);
+      markFail(L"MBTiles / GeoPackage 预览失败",
+               L"【MBTiles / GeoPackage】GDAL 预览失败：\n" + gdalDiag +
+                   L"\n请检查 GDAL/PROJ/gdal_data 配置，或导出 XYZ 目录后再预览。");
+      return;
+    }
+  }
+#else
+  if (std::filesystem::is_regular_file(rootFs, ecPath)) {
+    const std::wstring ext = rootFs.extension().wstring();
+    if (_wcsicmp(ext.c_str(), L".mbtiles") == 0 || _wcsicmp(ext.c_str(), L".gpkg") == 0) {
+      markFail(L"构建未启用 GDAL",
+               L"当前构建未启用 GDAL，无法预览 .mbtiles / .gpkg。\n请使用带 GDAL 的构建，或改为打开 XYZ 瓦片目录 / 单张栅格图。");
       return;
     }
   }
@@ -4374,96 +4614,202 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
     std::wostringstream hs;
     hs << L"【平面四叉树 / XYZ】已索引 " << st->tileCount << L" 个图块。拖拽平移，滚轮换级，Ctrl+滚轮改片元尺度。";
     st->hint = hs.str();
-  } else if (tilesetPathOpt.has_value()) {
-    st->mode = TilePreviewState::Mode::kThreeDTilesMeta;
-    st->hint = BuildThreeDTilesDashboard(st->rootPath, *tilesetPathOpt, bvForTileset);
-  } else {
-    const TileFindResult found = FindSampleTileRaster(st->rootPath);
-    if (found.code == TileSampleResult::kContainerUnsupported) {
-      st->hint = L"单文件 MBTiles / GeoPackage 不能直接解码为交互瓦片。\n请系统默认打开或导出 XYZ 后预览。";
-    } else if (found.code == TileSampleResult::kOk && !found.path.empty()) {
-      st->samplePath = found.path;
-      auto loaded = std::make_unique<Gdiplus::Bitmap>(st->samplePath.c_str());
-      if (loaded && loaded->GetLastStatus() == Gdiplus::Ok) {
-        st->bmp = std::move(loaded);
-        st->hint = L"单图采样预览：\n" + st->samplePath;
-      } else {
-        st->hint = L"无法加载栅格文件：\n" + st->samplePath;
-      }
-    } else {
-      st->hint = L"未找到可预览的 PNG/JPG 栅格或 z/x/y 目录结构。";
-    }
-  }
-  InvalidateRect(hwnd, nullptr, FALSE);
-}
-
-static void TilePaintSlippy(HDC hdc, RECT cr, TilePreviewState* st) {
-  if (!st || st->slippyPaths.empty()) {
+    InvalidateRect(hwnd, nullptr, FALSE);
+    markOk();
     return;
   }
-  const RECT imgArea = TileSlippyImageArea(cr);
-  const int aw = (std::max)(1, static_cast<int>(imgArea.right - imgArea.left));
-  const int ah = (std::max)(1, static_cast<int>(imgArea.bottom - imgArea.top));
-  const double worldW = static_cast<double>(aw) / static_cast<double>(st->pixelsPerTile);
-  const double worldH = static_cast<double>(ah) / static_cast<double>(st->pixelsPerTile);
-  const double worldLeft = st->centerTx - worldW * 0.5;
-  const double worldTop = st->centerTy - worldH * 0.5;
-  const int dim = 1 << st->viewZ;
-  int tx0 = static_cast<int>(std::floor(worldLeft));
-  int ty0 = static_cast<int>(std::floor(worldTop));
-  int tx1 = static_cast<int>(std::ceil(worldLeft + worldW));
-  int ty1 = static_cast<int>(std::ceil(worldTop + worldH));
-  tx0 = (std::max)(0, tx0);
-  ty0 = (std::max)(0, ty0);
-  tx1 = (std::min)(dim - 1, tx1);
-  ty1 = (std::min)(dim - 1, ty1);
-  const int spanX = tx1 - tx0 + 1;
-  const int spanY = ty1 - ty0 + 1;
-  bool tooMany = spanX * spanY > 220;
+  if (tilesetPathOpt.has_value()) {
+    st->mode = TilePreviewState::Mode::kThreeDTilesMeta;
+    st->hint = BuildThreeDTilesDashboard(st->rootPath, *tilesetPathOpt, bvForTileset);
+    InvalidateRect(hwnd, nullptr, FALSE);
+    markOk();
+    return;
+  }
 
-  {
-    Gdiplus::Graphics g(hdc);
-    g.SetInterpolationMode(Gdiplus::InterpolationModeLowQuality);
-    Gdiplus::SolidBrush miss(Gdiplus::Color(255, 238, 240, 245));
-    if (!tooMany) {
-      for (int ty = ty0; ty <= ty1; ++ty) {
-        for (int tx = tx0; tx <= tx1; ++tx) {
-          const uint64_t key = PackTileKey(st->viewZ, tx, ty);
-          auto pit = st->slippyPaths.find(key);
-          const int sx =
-              imgArea.left + static_cast<int>(std::lround((static_cast<double>(tx) - worldLeft) * st->pixelsPerTile));
-          const int sy =
-              imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - worldTop) * st->pixelsPerTile));
-          const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
-          if (pit == st->slippyPaths.end()) {
-            g.FillRectangle(&miss, sx, sy, sw, sw);
-            continue;
-          }
-          Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second);
-          if (bm) {
-            g.DrawImage(bm, sx, sy, sw, sw);
-          } else {
-            g.FillRectangle(&miss, sx, sy, sw, sw);
-          }
-        }
+  const TileFindResult found = FindSampleTileRaster(st->rootPath);
+  if (found.code == TileSampleResult::kContainerUnsupported) {
+    markFail(L"不支持的容器",
+             L"单文件 MBTiles / GeoPackage 不能直接解码为交互瓦片。\n请系统默认打开或导出 XYZ 后预览。");
+    return;
+  }
+  if (found.code == TileSampleResult::kOk && !found.path.empty()) {
+    st->samplePath = found.path;
+    auto loaded = std::make_unique<Gdiplus::Bitmap>(st->samplePath.c_str());
+    if (loaded && loaded->GetLastStatus() == Gdiplus::Ok) {
+      st->bmp = std::move(loaded);
+      st->hint = L"单图采样预览：\n" + st->samplePath;
+      InvalidateRect(hwnd, nullptr, FALSE);
+      markOk();
+      return;
+    }
+    markFail(L"栅格加载失败", L"无法加载栅格文件（GDI+ 解码失败）：\n" + st->samplePath);
+    return;
+  }
+
+  markFail(L"无法预览",
+           L"未找到可预览的内容：\n"
+           L"· 目录下无 z/x/y（或 TMS）瓦片结构；且\n"
+           L"· 无 tileset.json / 有效 .json；且\n"
+           L"· 未找到可读的 PNG/JPG/WebP/BMP 栅格。\n"
+           L"请确认路径正确，或通过「Open…」按协议重新选择。");
+}
+
+/// Slippy 绘制布局（瓦片层与 HUD 层共用；分阶段绘制以保证 Z 序：瓦片 → 顶栏 UI → 地图 HUD → 底栏）。
+struct TileSlippyPaintLayout {
+  RECT imgArea{};
+  int aw = 1;
+  int ah = 1;
+  double worldW = 1.0;
+  double worldH = 1.0;
+  double worldLeft = 0.0;
+  double worldTop = 0.0;
+  int dim = 0;
+  int tx0 = 0;
+  int ty0 = 0;
+  int tx1 = 0;
+  int ty1 = 0;
+  int spanX = 0;
+  int spanY = 0;
+  bool tooMany = false;
+  bool valid = false;
+};
+
+static bool TileSlippyBuildPaintLayout(RECT cr, TilePreviewState* st, TileSlippyPaintLayout* out) {
+  if (!st || !out || st->slippyPaths.empty()) {
+    return false;
+  }
+  out->imgArea = TileSlippyImageArea(cr, st->mode);
+  out->aw = (std::max)(1, static_cast<int>(out->imgArea.right - out->imgArea.left));
+  out->ah = (std::max)(1, static_cast<int>(out->imgArea.bottom - out->imgArea.top));
+  out->worldW = static_cast<double>(out->aw) / static_cast<double>(st->pixelsPerTile);
+  out->worldH = static_cast<double>(out->ah) / static_cast<double>(st->pixelsPerTile);
+  out->worldLeft = st->centerTx - out->worldW * 0.5;
+  out->worldTop = st->centerTy - out->worldH * 0.5;
+  out->dim = 1 << st->viewZ;
+  out->tx0 = static_cast<int>(std::floor(out->worldLeft));
+  out->ty0 = static_cast<int>(std::floor(out->worldTop));
+  out->tx1 = static_cast<int>(std::ceil(out->worldLeft + out->worldW));
+  out->ty1 = static_cast<int>(std::ceil(out->worldTop + out->worldH));
+  out->tx0 = (std::max)(0, out->tx0);
+  out->ty0 = (std::max)(0, out->ty0);
+  out->tx1 = (std::min)(out->dim - 1, out->tx1);
+  out->ty1 = (std::min)(out->dim - 1, out->ty1);
+  out->spanX = out->tx1 - out->tx0 + 1;
+  out->spanY = out->ty1 - out->ty0 + 1;
+  out->tooMany = out->spanX * out->spanY > 220;
+  out->valid = true;
+  return true;
+}
+
+static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippyPaintLayout& lay) {
+  if (!lay.valid || lay.tooMany) {
+    return;
+  }
+  const RECT& imgArea = lay.imgArea;
+  Gdiplus::Graphics g(hdc);
+  g.SetInterpolationMode(Gdiplus::InterpolationModeLowQuality);
+  Gdiplus::SolidBrush miss(Gdiplus::Color(255, 238, 240, 245));
+  for (int ty = lay.ty0; ty <= lay.ty1; ++ty) {
+    for (int tx = lay.tx0; tx <= lay.tx1; ++tx) {
+      const uint64_t key = PackTileKey(st->viewZ, tx, ty);
+      auto pit = st->slippyPaths.find(key);
+      const int sx = imgArea.left +
+                     static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * st->pixelsPerTile));
+      const int sy =
+          imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
+      const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
+      if (pit == st->slippyPaths.end()) {
+        g.FillRectangle(&miss, sx, sy, sw, sw);
+        continue;
+      }
+      Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second);
+      if (bm) {
+        g.DrawImage(bm, sx, sy, sw, sw);
+      } else {
+        g.FillRectangle(&miss, sx, sy, sw, sw);
       }
     }
   }
+}
+
+static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPaintLayout& lay) {
+  if (!lay.valid) {
+    return;
+  }
+  const RECT& imgArea = lay.imgArea;
   if (HFONT f = UiGetAppFont()) {
     SelectObject(hdc, f);
   }
   SetBkMode(hdc, TRANSPARENT);
-  SetTextColor(hdc, RGB(90, 60, 30));
-  wchar_t status[320]{};
-  if (tooMany) {
-    swprintf_s(status, L"可视块过多(%d×%d)；请滚轮缩小（降低 Z）或 Ctrl+滚轮缩小片元。", spanX, spanY);
+  SetTextColor(hdc, RGB(28, 36, 52));
+
+  wchar_t status[384]{};
+  if (lay.tooMany) {
+    swprintf_s(status, L"当前显示层级 Z = %d（金字塔最大 Z = %d）\n可视块过多 (%d×%d)：请滚轮降低 Z 或 Ctrl+滚轮缩小片元。", st->viewZ,
+               st->indexMaxZ, lay.spanX, lay.spanY);
   } else {
     swprintf_s(status,
-               L"Z=%d 可视 [%d..%d]×[%d..%d] 已索引 %zu | 拖拽平移 | 滚轮=换级(光标中心) | Shift+滚轮=视口中心换级 | Ctrl+滚轮=片元尺度",
-               st->viewZ, tx0, tx1, ty0, ty1, st->tileCount);
+               L"当前显示层级 Z = %d（金字塔最大 Z = %d）| 屏幕片元约 %.0f×%.0f px\n"
+               L"可视瓦片列 [%d..%d] 行 [%d..%d] | 已索引 %zu 块 | 拖拽平移 | 滚轮换级 | Shift+滚轮视口中心 | Ctrl+滚轮片元尺度",
+               st->viewZ, st->indexMaxZ, static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile),
+               lay.tx0, lay.tx1, lay.ty0, lay.ty1, st->tileCount);
   }
-  RECT sr{imgArea.left, imgArea.top - 26, imgArea.right, imgArea.top - 4};
-  DrawTextW(hdc, status, -1, &sr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+  const int zPad = 6;
+  const int zBandH = lay.tooMany ? 68 : 62;
+  RECT zRc{imgArea.left + zPad, imgArea.top + zPad, imgArea.right - zPad, imgArea.top + zPad + zBandH};
+  if (zRc.bottom > imgArea.bottom - 10) {
+    zRc.bottom = imgArea.bottom - 10;
+  }
+  if (zRc.top >= zRc.bottom - 8) {
+    zRc.top = (std::max)(imgArea.top + 2, zRc.bottom - 40);
+  }
+  TileDrawTextBlockSemiBg(hdc, status, zRc, 5, 210);
+
+  if (!lay.tooMany) {
+    const int saved = SaveDC(hdc);
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(255, 120, 0));
+    HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    for (int ty = lay.ty0; ty <= lay.ty1; ++ty) {
+      for (int tx = lay.tx0; tx <= lay.tx1; ++tx) {
+        const uint64_t key = PackTileKey(st->viewZ, tx, ty);
+        auto pit = st->slippyPaths.find(key);
+        const int sx = imgArea.left +
+                       static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * st->pixelsPerTile));
+        const int sy =
+            imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
+        const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
+        Rectangle(hdc, sx, sy, sx + sw + 1, sy + sw + 1);
+        int bw = static_cast<int>(std::lround(st->pixelsPerTile));
+        int bh = bw;
+        if (pit != st->slippyPaths.end()) {
+          if (Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second)) {
+            bw = bm->GetWidth();
+            bh = bm->GetHeight();
+            if (bw < 1) {
+              bw = static_cast<int>(std::lround(st->pixelsPerTile));
+            }
+            if (bh < 1) {
+              bh = bw;
+            }
+          }
+        }
+        wchar_t zxyLine[80]{};
+        wchar_t dimLine[48]{};
+        swprintf_s(zxyLine, L"z/x/y = %d / %d / %d", st->viewZ, tx, ty);
+        swprintf_s(dimLine, L"%d×%d px", bw, bh);
+        const int labelRight = (std::min)(sx + 340, static_cast<int>(imgArea.right) - 2);
+        RECT trZ{sx + 3, sy + 3, labelRight, sy + 20};
+        TileDrawTextLineSemiBg(hdc, zxyLine, trZ, 3, 2, 200);
+        RECT trD{sx + 3, sy + 20, labelRight, sy + 40};
+        TileDrawTextLineSemiBg(hdc, dimLine, trD, 3, 2, 200);
+      }
+    }
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
+    RestoreDC(hdc, saved);
+  }
 }
 
 LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -4475,7 +4821,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       st->rootPath = g_pendingTilePreviewRoot;
       g_pendingTilePreviewRoot.clear();
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
-      TilePreviewLoadFromPath(hwnd, st, st->rootPath);
+      TilePreviewLoadReport loadRep{};
+      TilePreviewLoadFromPath(hwnd, st, st->rootPath, &loadRep);
+      if (!st->rootPath.empty() && !loadRep.ok) {
+        TilePreviewShowLoadError(hwnd, loadRep);
+      }
+      DragAcceptFiles(hwnd, TRUE);
       return 0;
     }
     case WM_SIZE:
@@ -4511,9 +4862,20 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     }
     case WM_MOUSEMOVE: {
       if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        const int x = GET_X_LPARAM(lParam);
+        const int y = GET_Y_LPARAM(lParam);
+        if (!st->tileMouseTrackingLeave) {
+          TRACKMOUSEEVENT tme{};
+          tme.cbSize = sizeof(tme);
+          tme.dwFlags = TME_LEAVE;
+          tme.hwndTrack = hwnd;
+          if (TrackMouseEvent(&tme)) {
+            st->tileMouseTrackingLeave = true;
+          }
+        }
+        TilePreviewUpdatePointerGeo(st, hwnd, POINT{x, y});
+        InvalidateRect(hwnd, nullptr, FALSE);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree && st->dragging) {
-          const int x = GET_X_LPARAM(lParam);
-          const int y = GET_Y_LPARAM(lParam);
           const double dx = static_cast<double>(x - st->lastDragPt.x);
           const double dy = static_cast<double>(y - st->lastDragPt.y);
           st->centerTx -= dx / static_cast<double>(st->pixelsPerTile);
@@ -4523,9 +4885,33 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           const double lim = double(1 << st->viewZ) + 2.0;
           st->centerTx = (std::clamp)(st->centerTx, -1.0, lim);
           st->centerTy = (std::clamp)(st->centerTy, -1.0, lim);
-          InvalidateRect(hwnd, nullptr, FALSE);
         }
       }
+      return 0;
+    }
+    case WM_MOUSELEAVE: {
+      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        st->tileMouseTrackingLeave = false;
+        st->pointerOverImage = false;
+        st->pointerGeoValid = false;
+        st->tilePointerStatusLine = L"鼠标已离开窗口";
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      return 0;
+    }
+    case WM_DROPFILES: {
+      HDROP hDrop = reinterpret_cast<HDROP>(wParam);
+      auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      wchar_t pathBuf[MAX_PATH * 4]{};
+      const UINT n = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+      if (st && n > 0 && DragQueryFileW(hDrop, 0, pathBuf, static_cast<UINT>(std::size(pathBuf))) > 0) {
+        TilePreviewLoadReport loadRep{};
+        TilePreviewLoadFromPath(hwnd, st, pathBuf, &loadRep);
+        if (!loadRep.ok) {
+          TilePreviewShowLoadError(hwnd, loadRep);
+        }
+      }
+      DragFinish(hDrop);
       return 0;
     }
     case WM_MOUSEWHEEL: {
@@ -4553,10 +4939,27 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     }
     case kTilePreviewRequestOpenMsg: {
       auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-      if (!st) return 0;
+      if (!st) {
+        return 0;
+      }
       std::wstring path;
-      if (PromptOpenTilePreviewPath(hwnd, &path)) {
-        TilePreviewLoadFromPath(hwnd, st, path);
+      AgisTilePreviewProtocol proto{};
+      std::wstring pickerErr;
+      if (!TilePreviewShowProtocolAndPickPath(hwnd, &path, &proto, &pickerErr)) {
+        if (!pickerErr.empty()) {
+          MessageBoxW(hwnd, pickerErr.c_str(), L"打开瓦片", MB_OK | MB_ICONWARNING);
+        }
+        return 0;
+      }
+      std::wstring mismatch;
+      if (!TilePreviewValidatePathMatchesProtocol(proto, path, &mismatch)) {
+        MessageBoxW(hwnd, mismatch.c_str(), L"路径与协议不符", MB_OK | MB_ICONWARNING);
+        return 0;
+      }
+      TilePreviewLoadReport loadRep{};
+      TilePreviewLoadFromPath(hwnd, st, path, &loadRep);
+      if (!loadRep.ok) {
+        TilePreviewShowLoadError(hwnd, loadRep);
       }
       return 0;
     }
@@ -4574,6 +4977,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       FillRect(hdc, &cr, bg);
       DeleteObject(bg);
       if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        TileSlippyPaintLayout slippyLay{};
+        const bool slippyPaint =
+            (st->mode == TilePreviewState::Mode::kSlippyQuadtree) && TileSlippyBuildPaintLayout(cr, st, &slippyLay);
+        if (slippyPaint) {
+          TilePaintSlippyTiles(hdc, st, slippyLay);
+        }
         if (HFONT f = UiGetAppFont()) {
           SelectObject(hdc, f);
         }
@@ -4585,13 +4994,23 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         DeleteObject(btnBg);
         Rectangle(hdc, openRc.left, openRc.top, openRc.right, openRc.bottom);
         DrawTextW(hdc, L"Open...", -1, &openRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        RECT hintRc{openRc.right + 10, 10, cr.right - 12, (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) ? 250 : 110};
-        DrawTextW(hdc, st->hint.c_str(), -1, &hintRc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
-        if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
-          TilePaintSlippy(hdc, cr, st);
-        } else if (st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok) {
-          const int margin = 12;
-          RECT imgArea{cr.left + margin, cr.top + 110, cr.right - margin, cr.bottom - margin};
+        RECT hintRc{openRc.right + 8, 8, cr.right - 10, cr.top + TilePreviewTopBarPx(st->mode) - 6};
+        if (hintRc.bottom < hintRc.top + 20) {
+          hintRc.bottom = hintRc.top + 20;
+        }
+        {
+          const std::wstring panel =
+              (st->mode == TilePreviewState::Mode::kSlippyQuadtree)
+                  ? (std::wstring(kTilePreviewSlippyTopLine) + L"\n\n" + st->hint)
+                  : (std::wstring(kTilePreviewOpenMethods) + L"\n\n──\n" + st->hint);
+          TileDrawTextBlockSemiBg(hdc, panel.c_str(), hintRc, 6, 218);
+        }
+        if (slippyPaint) {
+          TilePaintSlippyHud(hdc, st, slippyLay);
+        }
+        if (st->mode != TilePreviewState::Mode::kSlippyQuadtree && st->bmp &&
+            st->bmp->GetLastStatus() == Gdiplus::Ok) {
+          const RECT imgArea = TileSlippyImageArea(cr, st->mode);
           const int aw = (std::max)(1, static_cast<int>(imgArea.right - imgArea.left));
           const int ah = (std::max)(1, static_cast<int>(imgArea.bottom - imgArea.top));
           const int iw = st->bmp->GetWidth();
@@ -4608,6 +5027,17 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             g.DrawImage(st->bmp.get(), dx, dy, dw, dh);
           }
         }
+        RECT sbr = TilePreviewStatusBarRect(cr);
+        TileFillRectSemi(hdc, sbr.left, sbr.top, sbr.right - sbr.left, sbr.bottom - sbr.top, 228, 16, 20, 28);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(230, 234, 242));
+        if (HFONT f2 = UiGetAppFont()) {
+          SelectObject(hdc, f2);
+        }
+        RECT tbr = sbr;
+        InflateRect(&tbr, -10, -3);
+        DrawTextW(hdc, st->tilePointerStatusLine.c_str(), -1, &tbr,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
       }
       BitBlt(hdcWnd, 0, 0, cw, ch, hdc, 0, 0, SRCCOPY);
       SelectObject(hdc, oldBmp);

@@ -310,6 +310,7 @@ add_library(agis_workbench_app STATIC
   src/app/workbench/main_panels.cpp
   src/app/converter/main_convert.cpp
   src/app/preview/main_model_preview.cpp
+  src/app/preview/tile_preview/tile_preview_protocol_picker.cpp
   src/app/preview/model_preview_bgfx.cpp
   src/app/preview/tiles_gltf_loader.cpp
   src/app/workbench/help_data_drivers.cpp
