@@ -9,6 +9,8 @@
 #include <memory>
 #include <vector>
 
+#include <windows.h>
+
 #include <bgfx/bgfx.h>
 #include <bgfx/embedded_shader.h>
 #include <bx/allocator.h>
@@ -17,6 +19,23 @@
 
 #include "fs_debugdraw_fill_texture.bin.h"
 #include "vs_debugdraw_fill_texture.bin.h"
+
+void agis_bgfx_preview_pump_win32_messages(HWND repaintHwnd) {
+  MSG msg{};
+  int budget = 0;
+  while (budget < 512 && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+    ++budget;
+    if (msg.message == WM_QUIT) {
+      PostQuitMessage(static_cast<int>(msg.wParam));
+      continue;
+    }
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+  if (repaintHwnd && IsWindow(repaintHwnd)) {
+    InvalidateRect(repaintHwnd, nullptr, FALSE);
+  }
+}
 
 namespace {
 
@@ -111,12 +130,20 @@ struct AgisBgfxPreviewContextImpl {
   uint32_t resetFlags = BGFX_RESET_VSYNC;
   AgisBgfxRuntimeStats runtime{};
   ObjPreviewModel cachedModel{};
+  /// 非空则 `RebuildMeshBuffers` 等从该指针读网格，避免与 `ModelPreviewState::model` 重复持有巨型副本。
+  ObjPreviewModel* meshSource = nullptr;
   bool pseudoPbrEnabled = true;
   CpuPbrMaps cpuMaps{};
   AgisBgfxPbrViewMode pbrViewMode = AgisBgfxPbrViewMode::kPbrLit;
   /// 由 `agis_bgfx_preview_init` 从 worker 包 move 入；供 `makeRef` 指向的 CPU 内存活到 `shutdown`。
   std::unique_ptr<AgisBgfxPreviewWorkerPackage> workerPayloadKeep;
+  /// 初始化 / 重建网格时泵消息并可选 Invalidate 加载 UI（见 `agis_bgfx_preview_pump_win32_messages`）。
+  HWND hostHwnd = nullptr;
 };
+
+static void PumpForCtx(AgisBgfxPreviewContextImpl* c) {
+  agis_bgfx_preview_pump_win32_messages(c ? c->hostHwnd : nullptr);
+}
 
 static bgfx::RendererType::Enum ToBgfxType(AgisBgfxRendererKind k) {
   return (k == AgisBgfxRendererKind::kOpenGL) ? bgfx::RendererType::OpenGL : bgfx::RendererType::Direct3D11;
@@ -762,12 +789,15 @@ static bool UploadPrebuiltMeshCopy(AgisBgfxPreviewContextImpl* c, const AgisBgfx
   const bgfx::Memory* vmem =
       bgfx::copy(mesh.vertices.data(), static_cast<uint32_t>(mesh.vertices.size() * sizeof(PosTexColorVertex)));
   c->vbh = bgfx::createVertexBuffer(vmem, PosTexColorVertex::Layout());
+  PumpForCtx(c);
   const bgfx::Memory* tmem =
       bgfx::copy(mesh.triIndices.data(), static_cast<uint32_t>(mesh.triIndices.size() * sizeof(uint32_t)));
   c->ibhTri = bgfx::createIndexBuffer(tmem, BGFX_BUFFER_INDEX32);
+  PumpForCtx(c);
   const bgfx::Memory* lmem =
       bgfx::copy(mesh.lineIndices.data(), static_cast<uint32_t>(mesh.lineIndices.size() * sizeof(uint32_t)));
   c->ibhLine = bgfx::createIndexBuffer(lmem, BGFX_BUFFER_INDEX32);
+  PumpForCtx(c);
   c->triCount = static_cast<uint32_t>(mesh.triIndices.size());
   c->lineCount = static_cast<uint32_t>(mesh.lineIndices.size());
   return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
@@ -786,17 +816,28 @@ static bool UploadPrebuiltMeshRef(AgisBgfxPreviewContextImpl* c, const AgisBgfxC
                                            static_cast<uint32_t>(mesh.vertices.size() * sizeof(PosTexColorVertex)),
                                            nullptr, nullptr);
   c->vbh = bgfx::createVertexBuffer(vmem, PosTexColorVertex::Layout());
+  PumpForCtx(c);
   const bgfx::Memory* tmem = bgfx::makeRef(mesh.triIndices.data(),
                                           static_cast<uint32_t>(mesh.triIndices.size() * sizeof(uint32_t)), nullptr,
                                           nullptr);
   c->ibhTri = bgfx::createIndexBuffer(tmem, BGFX_BUFFER_INDEX32);
+  PumpForCtx(c);
   const bgfx::Memory* lmem = bgfx::makeRef(mesh.lineIndices.data(),
                                            static_cast<uint32_t>(mesh.lineIndices.size() * sizeof(uint32_t)), nullptr,
                                            nullptr);
   c->ibhLine = bgfx::createIndexBuffer(lmem, BGFX_BUFFER_INDEX32);
+  PumpForCtx(c);
   c->triCount = static_cast<uint32_t>(mesh.triIndices.size());
   c->lineCount = static_cast<uint32_t>(mesh.lineIndices.size());
   return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
+}
+
+static const ObjPreviewModel& MeshForRebuild(const AgisBgfxPreviewContextImpl* c) {
+  static const ObjPreviewModel kEmpty{};
+  if (!c) {
+    return kEmpty;
+  }
+  return c->meshSource ? *c->meshSource : c->cachedModel;
 }
 
 static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
@@ -806,9 +847,10 @@ static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
   std::vector<PosTexColorVertex> verts;
   std::vector<uint32_t> triIdx;
   std::vector<uint32_t> lineIdx;
-  if (!BuildMesh(c->cachedModel, c->pseudoPbrEnabled, c->pbrViewMode, &c->cpuMaps, &verts, &triIdx, &lineIdx, nullptr)) {
+  if (!BuildMesh(MeshForRebuild(c), c->pseudoPbrEnabled, c->pbrViewMode, &c->cpuMaps, &verts, &triIdx, &lineIdx, nullptr)) {
     return false;
   }
+  PumpForCtx(c);
   DestroyMesh(c);
   if (verts.empty() || triIdx.empty()) {
     c->triCount = 0;
@@ -817,10 +859,13 @@ static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
   }
   const bgfx::Memory* vmem = bgfx::copy(verts.data(), static_cast<uint32_t>(verts.size() * sizeof(PosTexColorVertex)));
   c->vbh = bgfx::createVertexBuffer(vmem, PosTexColorVertex::Layout());
+  PumpForCtx(c);
   const bgfx::Memory* tmem = bgfx::copy(triIdx.data(), static_cast<uint32_t>(triIdx.size() * sizeof(uint32_t)));
   c->ibhTri = bgfx::createIndexBuffer(tmem, BGFX_BUFFER_INDEX32);
+  PumpForCtx(c);
   const bgfx::Memory* lmem = bgfx::copy(lineIdx.data(), static_cast<uint32_t>(lineIdx.size() * sizeof(uint32_t)));
   c->ibhLine = bgfx::createIndexBuffer(lmem, BGFX_BUFFER_INDEX32);
+  PumpForCtx(c);
   c->triCount = static_cast<uint32_t>(triIdx.size());
   c->lineCount = static_cast<uint32_t>(lineIdx.size());
   return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
@@ -912,6 +957,7 @@ static bool UploadPreviewTexturesAndMesh(AgisBgfxPreviewContextImpl* c, const Ob
   if (!bgfx::isValid(c->texture)) {
     return false;
   }
+  PumpForCtx(c);
 
   if (workerPkg) {
     auto tryBaseFromPackage = [&]() -> bool {
@@ -942,6 +988,7 @@ static bool UploadPreviewTexturesAndMesh(AgisBgfxPreviewContextImpl* c, const Ob
         c->texBaseColor = LoadMapKdTexture(model.primaryMapKdPath);
       }
     }
+    PumpForCtx(c);
     c->cpuMaps = CpuPbrMaps{};
     auto slot = [&](CpuImage2D* cpu, bgfx::TextureHandle* gpu, const AgisBgfxCpuImage2D& img) {
       if (img.pixels.empty()) {
@@ -949,6 +996,7 @@ static bool UploadPreviewTexturesAndMesh(AgisBgfxPreviewContextImpl* c, const Ob
       }
       AttachBorrowCpuMap(cpu, img);
       *gpu = CreateBgfxTextureFromCpuImageRef(img);
+      PumpForCtx(c);
     };
     slot(&c->cpuMaps.normal, &c->texNormal, workerPkg->normalMap);
     slot(&c->cpuMaps.roughness, &c->texRoughness, workerPkg->roughnessMap);
@@ -968,6 +1016,7 @@ static bool UploadPreviewTexturesAndMesh(AgisBgfxPreviewContextImpl* c, const Ob
       c->texture = mapTex;
       c->texBaseColor = LoadMapKdTexture(model.primaryMapKdPath);
     }
+    PumpForCtx(c);
   }
   return RebuildMeshBuffers(c);
 }
@@ -985,7 +1034,8 @@ bool agis_bgfx_preview_prepare_on_worker(const ObjPreviewModel& model, bool pseu
 }
 
 bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRendererKind renderer, const ObjPreviewModel& model,
-                            AgisBgfxPreviewWorkerPackage* workerPkg, bool pseudoPbr, AgisBgfxPbrViewMode pbrViewMode) {
+                            AgisBgfxPreviewWorkerPackage* workerPkg, bool pseudoPbr, AgisBgfxPbrViewMode pbrViewMode,
+                            ObjPreviewModel* meshSourceForRebuild) {
   if (!ctx || !hwnd) return false;
   if (*ctx) {
     agis_bgfx_preview_shutdown(hwnd, *ctx);
@@ -997,7 +1047,13 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
   const uint32_t ch = (std::max)(1L, cr.bottom - cr.top);
 
   auto* c = new AgisBgfxPreviewContextImpl();
-  c->cachedModel = model;
+  c->hostHwnd = hwnd;
+  c->meshSource = meshSourceForRebuild;
+  if (c->meshSource) {
+    c->cachedModel = ObjPreviewModel{};
+  } else {
+    c->cachedModel = model;
+  }
   c->pseudoPbrEnabled = pseudoPbr;
   c->pbrViewMode = pbrViewMode;
   c->renderer = ToBgfxType(renderer);
@@ -1053,6 +1109,7 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
     *workerPkg = AgisBgfxPreviewWorkerPackage{};
   }
   const AgisBgfxPreviewWorkerPackage* pkgForUpload = c->workerPayloadKeep ? c->workerPayloadKeep.get() : nullptr;
+  PumpForCtx(c);
   if (!UploadPreviewTexturesAndMesh(c, model, pkgForUpload)) {
     c->workerPayloadKeep.reset();
     DestroyTextureResources(c);
@@ -1062,6 +1119,7 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
     delete c;
     return false;
   }
+  PumpForCtx(c);
   c->lastResetW = cw;
   c->lastResetH = ch;
 
@@ -1073,6 +1131,8 @@ void agis_bgfx_preview_shutdown(HWND hwnd, AgisBgfxPreviewContext* ctx) {
   (void)hwnd;
   if (!ctx) return;
   AgisBgfxPreviewContextImpl* c = AsImpl(ctx);
+  c->hostHwnd = nullptr;
+  c->meshSource = nullptr;
   DestroyMesh(c);
   DestroyTextureResources(c);
   if (bgfx::isValid(c->program)) bgfx::destroy(c->program);
@@ -1299,6 +1359,10 @@ bool agis_bgfx_preview_reload_model(AgisBgfxPreviewContext* ctx, const ObjPrevie
     return false;
   }
   AgisBgfxPreviewContextImpl* impl = AsImpl(ctx);
+  if (impl->meshSource) {
+    (void)model;
+    return RebuildMeshBuffers(impl);
+  }
   impl->cachedModel = model;
   return RebuildMeshBuffers(impl);
 }

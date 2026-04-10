@@ -586,6 +586,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
   msg.wParam = 0;
   bool quit = false;
   while (!quit) {
+    if (HWND pw = FindWindowW(kModelPreviewClass, nullptr); pw && IsWindow(pw)) {
+      ModelPreviewPumpPriorityLoadMessages(pw);
+    }
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
       if (msg.message == WM_QUIT) {
         quit = true;
@@ -605,7 +608,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
       ModelPreviewFrameStep(pw);
     }
     if (!PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
-      WaitMessage();
+      (void)MsgWaitForMultipleObjectsEx(0, nullptr, 50, QS_ALLINPUT, 0);
     }
   }
   AgisUiDebugPickShutdown();

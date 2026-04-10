@@ -78,6 +78,8 @@ void OpenModelPreviewWindow3DTiles(HWND owner, const std::wstring& tilesetRootOr
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 /// 模型预览：每帧在消息泵空闲时调用（`bgfx::frame` 不在 WM_PAINT 内）。加载中仅 Invalidate 以刷新 GDI 进度条。
 void ModelPreviewFrameStep(HWND hwnd);
+/// 在主循环中先于通用 PeekMessage 调用：优先派发加载完成消息，避免被海量输入/WM_PAINT 插队导致长时间停在「100%」后无响应。
+void ModelPreviewPumpPriorityLoadMessages(HWND hwnd);
 
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path);
 LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

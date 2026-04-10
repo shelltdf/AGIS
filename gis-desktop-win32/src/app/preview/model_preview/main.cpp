@@ -59,11 +59,12 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     OpenModelPreviewWindow(nullptr, path);
   }
   AgisUiDebugPickInit(hInst);
-  const HWND previewWnd = FindWindowW(kModelPreviewClass, nullptr);
   MSG msg{};
   msg.wParam = 0;
   bool quit = false;
   while (!quit) {
+    HWND previewWnd = FindWindowW(kModelPreviewClass, nullptr);
+    ModelPreviewPumpPriorityLoadMessages(previewWnd);
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
       if (msg.message == WM_QUIT) {
         quit = true;
@@ -83,7 +84,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     }
     ModelPreviewFrameStep(previewWnd);
     if (!PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
-      WaitMessage();
+      // WaitMessage 在无用户输入时永不返回，加载线程更新 loadProgress 期间主循环无法周期执行 FrameStep→Invalidate，进度条冻结。
+      (void)MsgWaitForMultipleObjectsEx(0, nullptr, 50, QS_ALLINPUT, 0);
     }
   }
   AgisUiDebugPickShutdown();

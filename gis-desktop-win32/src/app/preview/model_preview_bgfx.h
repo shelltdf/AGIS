@@ -75,11 +75,15 @@ bool agis_bgfx_preview_prepare_on_worker(const ObjPreviewModel& model, bool pseu
                                          const AgisBgfxPbrTexturePaths& pbrPaths, int* progressPct,
                                          AgisBgfxPreviewWorkerPackage* out);
 
+/// 大块 GPU / ImGui 初始化期间泵送 Win32 消息。`repaintHwnd` 非空且有效时在本轮末尾 `InvalidateRect`，便于加载条与视口 GDI 重绘。
+void agis_bgfx_preview_pump_win32_messages(HWND repaintHwnd);
+
 /// 主线程仅：bgfx init、用 `bgfx::makeRef` 把包内像素/索引交给 GPU（避免巨型 `bgfx::copy` 卡死 UI）、渲染。
 /// 若传入 `workerPackage` 非空，init 会 **std::move 吞掉** 其内容；调用后 `*workerPackage` 被清空。传 `nullptr` 时从磁盘重建（如切换 Renderer）。
+/// `meshSourceForRebuild` 非空时，内部 **不再深拷贝** `model` 到缓存（大 OBJ 时拷贝可达数 GB，会卡死「未响应」）；PBR/线框切换从该指针读网格。生命周期须覆盖 ctx 直至 `shutdown`。
 bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRendererKind renderer, const ObjPreviewModel& model,
                             AgisBgfxPreviewWorkerPackage* workerPackage = nullptr, bool pseudoPbr = true,
-                            AgisBgfxPbrViewMode pbrViewMode = AgisBgfxPbrViewMode::kPbrLit);
+                            AgisBgfxPbrViewMode pbrViewMode = AgisBgfxPbrViewMode::kPbrLit, ObjPreviewModel* meshSourceForRebuild = nullptr);
 void agis_bgfx_preview_shutdown(HWND hwnd, AgisBgfxPreviewContext* ctx);
 void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& viewportPx, float rotX, float rotY, float zoom,
                             bool solid, bool showGrid, bool backfaceCulling);
