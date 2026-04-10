@@ -71,6 +71,8 @@ bool IsKnownFlag(const wchar_t* s) {
       L"--coord-system",   L"--vector-mode",    L"--elev-horiz-ratio",
       L"--target-crs",     L"--output-unit",    L"--mesh-spacing",
       L"--texture-format", L"--raster-max-dim", L"--tile-levels", L"--obj-fp-type", L"--tile-max-memory-mb",
+      L"--obj-texture-mode", L"--obj-visual-effect", L"--obj-snow-scale", L"--gis-dem-interp", L"--gis-mesh-topology",
+      L"--model-budget-mode", L"--model-budget-mb", L"--gis-model-split-parts",
   };
   for (const wchar_t* f : kFlags) {
     if (_wcsicmp(s, f) == 0) {
@@ -166,6 +168,17 @@ void PrintConvertCliHelpGrouped(std::wostream& os, bool chinese, const wchar_t* 
        << L"  --output-subtype <token>\n"
        << L"      Output format/shape subtype.\n"
        << ost << L"\n";
+  }
+}
+
+void PrintConvertCliIoSection(std::wostream& os, bool chinese, const wchar_t* lines) {
+  if (!lines || !*lines) {
+    return;
+  }
+  if (chinese) {
+    os << L"\n【输入/输出文件（路径形态与扩展名）】\n" << lines << L"\n";
+  } else {
+    os << L"\n[Input/output files (path shape and extensions)]\n" << lines << L"\n";
   }
 }
 
@@ -277,10 +290,114 @@ bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out) {
       return false;
     }
   }
+  out->obj_texture_mode = ArgValue(argc, argv, L"--obj-texture-mode");
+  if (out->obj_texture_mode.empty()) {
+    out->obj_texture_mode = L"color";
+  }
+  for (auto& c : out->obj_texture_mode) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  if (out->obj_texture_mode != L"color" && out->obj_texture_mode != L"pbr") {
+    std::wcerr << L"[ERROR] invalid --obj-texture-mode, expected color|pbr.\n";
+    return false;
+  }
+  out->obj_visual_effect = ArgValue(argc, argv, L"--obj-visual-effect");
+  if (out->obj_visual_effect.empty()) {
+    out->obj_visual_effect = L"none";
+  }
+  for (auto& c : out->obj_visual_effect) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  if (out->obj_visual_effect != L"none" && out->obj_visual_effect != L"night" && out->obj_visual_effect != L"snow") {
+    std::wcerr << L"[ERROR] invalid --obj-visual-effect, expected none|night|snow.\n";
+    return false;
+  }
+  out->obj_snow_scale = 1.0;
+  const std::wstring snowStr = ArgValue(argc, argv, L"--obj-snow-scale");
+  if (!snowStr.empty()) {
+    const double s = _wtof(snowStr.c_str());
+    if (std::isfinite(s) && s >= 0.25 && s <= 8.0) {
+      out->obj_snow_scale = s;
+    } else {
+      std::wcerr << L"[ERROR] invalid --obj-snow-scale, expected 0.25..8.\n";
+      return false;
+    }
+  }
+  out->gis_dem_interp = ArgValue(argc, argv, L"--gis-dem-interp");
+  if (out->gis_dem_interp.empty()) {
+    out->gis_dem_interp = L"bilinear";
+  }
+  for (auto& c : out->gis_dem_interp) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  if (out->gis_dem_interp != L"bilinear" && out->gis_dem_interp != L"nearest" && out->gis_dem_interp != L"cell_avg" &&
+      out->gis_dem_interp != L"bicubic" && out->gis_dem_interp != L"median" && out->gis_dem_interp != L"average" &&
+      out->gis_dem_interp != L"dem_avg") {
+    std::wcerr << L"[ERROR] invalid --gis-dem-interp, expected bilinear|nearest|cell_avg|average|dem_avg|median|bicubic.\n";
+    return false;
+  }
+  out->gis_mesh_topology = ArgValue(argc, argv, L"--gis-mesh-topology");
+  if (out->gis_mesh_topology.empty()) {
+    out->gis_mesh_topology = L"grid";
+  }
+  for (auto& c : out->gis_mesh_topology) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  if (out->gis_mesh_topology == L"tin") {
+    out->gis_mesh_topology = L"grid";
+  }
+  if (out->gis_mesh_topology != L"grid" && out->gis_mesh_topology != L"delaunay") {
+    std::wcerr << L"[ERROR] invalid --gis-mesh-topology, expected grid|tin|delaunay.\n";
+    return false;
+  }
+  out->model_budget_mode = ArgValue(argc, argv, L"--model-budget-mode");
+  if (out->model_budget_mode.empty()) {
+    out->model_budget_mode = L"memory";
+  }
+  for (auto& c : out->model_budget_mode) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  if (out->model_budget_mode != L"memory" && out->model_budget_mode != L"file" && out->model_budget_mode != L"vram") {
+    std::wcerr << L"[ERROR] invalid --model-budget-mode, expected memory|file|vram.\n";
+    return false;
+  }
+  out->model_budget_mb = 4096;
+  const std::wstring budMb = ArgValue(argc, argv, L"--model-budget-mb");
+  if (!budMb.empty()) {
+    wchar_t* end = nullptr;
+    const long long v = wcstoll(budMb.c_str(), &end, 10);
+    if (end == budMb.c_str() || v < 256 || v > 262144) {
+      std::wcerr << L"[ERROR] invalid --model-budget-mb, expected 256..262144 (MB).\n";
+      return false;
+    }
+    out->model_budget_mb = v;
+  }
+  out->gis_model_split_parts = 1;
+  const std::wstring splitPartsStr = ArgValue(argc, argv, L"--gis-model-split-parts");
+  if (!splitPartsStr.empty()) {
+    const long v = wcstol(splitPartsStr.c_str(), nullptr, 10);
+    if (v >= 1 && v <= 512) {
+      out->gis_model_split_parts = static_cast<int>(v);
+    } else {
+      std::wcerr << L"[ERROR] invalid --gis-model-split-parts, expected 1..512.\n";
+      return false;
+    }
+  }
   const std::wstring fields[] = {
       out->input_type,      out->input_subtype, out->output_type, out->output_subtype,
       out->coord_system,    out->vector_mode,   out->target_crs,  out->output_unit,
-      out->texture_format,  out->obj_fp_type,
+      out->texture_format,  out->obj_fp_type,   out->obj_texture_mode, out->obj_visual_effect,
+      out->gis_dem_interp,  out->gis_mesh_topology, out->model_budget_mode,
   };
   for (const auto& f : fields) {
     if (!ValidateAsciiField(f) || HasCjkChars(f)) {
@@ -310,6 +427,16 @@ void PrintConvertBanner(const wchar_t* title, const ConvertArgs& args) {
   std::wcout << L"  tile levels: " << (args.tile_levels < 0 ? L"auto" : std::to_wstring(args.tile_levels)) << L"\n";
   std::wcout << L"  tile merge memory limit (MB): " << args.tile_max_memory_mb << L"\n";
   std::wcout << L"  obj fp type: " << args.obj_fp_type << L"\n";
+  std::wcout << L"  obj texture mode: " << args.obj_texture_mode << L"\n";
+  std::wcout << L"  obj visual effect: " << args.obj_visual_effect;
+  if (args.obj_visual_effect == L"snow") {
+    std::wcout << L" (snow_scale=" << args.obj_snow_scale << L")";
+  }
+  std::wcout << L"\n";
+  std::wcout << L"  gis dem interp: " << args.gis_dem_interp << L"\n";
+  std::wcout << L"  gis mesh topology: " << args.gis_mesh_topology << L"\n";
+  std::wcout << L"  model budget: " << args.model_budget_mode << L" " << args.model_budget_mb << L" MB\n";
+  std::wcout << L"  gis model split parts: " << args.gis_model_split_parts << L"\n";
 }
 
 namespace {
@@ -1246,6 +1373,131 @@ unsigned char SampleBilinearRgb(const std::vector<unsigned char>& rgb, int W, in
   return static_cast<unsigned char>((std::clamp)(o, 0, 255));
 }
 
+static float SampleNearestF(const std::vector<float>& e, int W, int H, double col, double row) {
+  if (W <= 0 || H <= 0 || e.size() < static_cast<size_t>(W * H)) {
+    return 0.f;
+  }
+  col = (std::clamp)(col, 0.0, static_cast<double>(W - 1));
+  row = (std::clamp)(row, 0.0, static_cast<double>(H - 1));
+  const int xi = static_cast<int>(std::lround(col));
+  const int yi = static_cast<int>(std::lround(row));
+  return e[static_cast<size_t>((std::clamp)(yi, 0, H - 1)) * W + (std::clamp)(xi, 0, W - 1)];
+}
+
+static float SampleCellAvgF(const std::vector<float>& e, int W, int H, double col, double row) {
+  if (W <= 0 || H <= 0 || e.size() < static_cast<size_t>(W * H)) {
+    return 0.f;
+  }
+  const int cx = static_cast<int>(std::floor(col + 0.5));
+  const int cy = static_cast<int>(std::floor(row + 0.5));
+  double sum = 0.0;
+  int n = 0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      const int x = (std::clamp)(cx + dx, 0, W - 1);
+      const int y = (std::clamp)(cy + dy, 0, H - 1);
+      sum += static_cast<double>(e[static_cast<size_t>(y) * W + x]);
+      ++n;
+    }
+  }
+  return static_cast<float>(sum / static_cast<double>((std::max)(1, n)));
+}
+
+static float SampleMedian3x3F(const std::vector<float>& e, int W, int H, double col, double row) {
+  if (W <= 0 || H <= 0 || e.size() < static_cast<size_t>(W * H)) {
+    return 0.f;
+  }
+  const int cx = static_cast<int>(std::floor(col + 0.5));
+  const int cy = static_cast<int>(std::floor(row + 0.5));
+  std::array<float, 9> buf{};
+  int k = 0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      const int x = (std::clamp)(cx + dx, 0, W - 1);
+      const int y = (std::clamp)(cy + dy, 0, H - 1);
+      buf[static_cast<size_t>(k++)] = e[static_cast<size_t>(y) * W + x];
+    }
+  }
+  std::sort(buf.begin(), buf.begin() + k);
+  return buf[static_cast<size_t>(k / 2)];
+}
+
+static double CubicHermite(double p0, double p1, double p2, double p3, double t) {
+  const double a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+  const double b = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
+  const double c = -0.5 * p0 + 0.5 * p2;
+  const double d = p1;
+  return ((a * t + b) * t + c) * t + d;
+}
+
+static float SampleBicubicF(const std::vector<float>& e, int W, int H, double col, double row) {
+  if (W <= 0 || H <= 0 || e.size() < static_cast<size_t>(W * H)) {
+    return 0.f;
+  }
+  col = (std::clamp)(col, 0.0, static_cast<double>(W - 1));
+  row = (std::clamp)(row, 0.0, static_cast<double>(H - 1));
+  const int x1 = static_cast<int>(std::floor(col));
+  const int y1 = static_cast<int>(std::floor(row));
+  const double tx = col - x1;
+  const double ty = row - y1;
+  auto at = [&](int x, int y) -> double {
+    x = (std::clamp)(x, 0, W - 1);
+    y = (std::clamp)(y, 0, H - 1);
+    return static_cast<double>(e[static_cast<size_t>(y) * W + x]);
+  };
+  const int xm1 = x1 - 1;
+  const int xp2 = x1 + 2;
+  const int ym1 = y1 - 1;
+  const int yp2 = y1 + 2;
+  double c0 = CubicHermite(at(xm1, ym1), at(x1, ym1), at(x1 + 1, ym1), at(xp2, ym1), tx);
+  double c1 = CubicHermite(at(xm1, y1), at(x1, y1), at(x1 + 1, y1), at(xp2, y1), tx);
+  double c2 = CubicHermite(at(xm1, y1 + 1), at(x1, y1 + 1), at(x1 + 1, y1 + 1), at(xp2, y1 + 1), tx);
+  double c3 = CubicHermite(at(xm1, yp2), at(x1, yp2), at(x1 + 1, yp2), at(xp2, yp2), tx);
+  return static_cast<float>(CubicHermite(c0, c1, c2, c3, ty));
+}
+
+static float SampleDemElevForMesh(const std::vector<float>& elev, int rw, int rh, double col, double row,
+                                  const std::wstring& mode) {
+  if (_wcsicmp(mode.c_str(), L"nearest") == 0) {
+    return SampleNearestF(elev, rw, rh, col, row);
+  }
+  if (_wcsicmp(mode.c_str(), L"cell_avg") == 0 || _wcsicmp(mode.c_str(), L"average") == 0 ||
+      _wcsicmp(mode.c_str(), L"dem_avg") == 0) {
+    return SampleCellAvgF(elev, rw, rh, col, row);
+  }
+  if (_wcsicmp(mode.c_str(), L"median") == 0) {
+    return SampleMedian3x3F(elev, rw, rh, col, row);
+  }
+  if (_wcsicmp(mode.c_str(), L"bicubic") == 0) {
+    return SampleBicubicF(elev, rw, rh, col, row);
+  }
+  return SampleBilinearF(elev, rw, rh, col, row);
+}
+
+static std::int64_t EstimateGisModelChunkBytes(const std::wstring& budgetMode, int ni, int nj, int texW, int texH,
+                                               bool wantPbr, bool objFloat) {
+  if (ni < 2 || nj < 2 || texW < 1 || texH < 1) {
+    return 0;
+  }
+  const std::int64_t verts = static_cast<std::int64_t>(ni) * static_cast<std::int64_t>(nj);
+  const std::int64_t faces = static_cast<std::int64_t>(ni - 1) * static_cast<std::int64_t>(nj - 1) * 2;
+  const int pbrMaps = wantPbr ? 5 : 1;
+  const int bytesPerVertLine = objFloat ? 48 : 80;
+  const std::int64_t objText = verts * bytesPerVertLine + faces * 72 + 4096;
+  const std::int64_t texBytes = static_cast<std::int64_t>(texW) * static_cast<std::int64_t>(texH) * 4 * pbrMaps;
+  const std::int64_t cpuMesh = verts * 40 + faces * 72;
+  const std::int64_t vramTex = static_cast<std::int64_t>(static_cast<double>(texW) * texH * 4.0 * static_cast<double>(pbrMaps) * 1.33);
+  const std::int64_t vramMesh = verts * 32 + faces * 36;
+  if (_wcsicmp(budgetMode.c_str(), L"file") == 0) {
+    const std::int64_t pngGuess = static_cast<std::int64_t>(texW) * texH * 3 * pbrMaps / 2 + objText;
+    return (std::max)(objText + texBytes / 4, pngGuess);
+  }
+  if (_wcsicmp(budgetMode.c_str(), L"vram") == 0) {
+    return vramTex + vramMesh;
+  }
+  return cpuMesh + texBytes;
+}
+
 #if GIS_DESKTOP_HAVE_GDAL
 static void TerrainSampleRasterAtLonLat(const RasterExtract& r, bool useElevAsHeight, double lonDeg, double latDeg,
                                           double bLonMin, double bLonMax, double bLatMin, double bLatMax,
@@ -1573,7 +1825,156 @@ void TargetHorizDeltaToApproxMeters(double refLonDeg, double refLatDeg, double p
 
 }  // namespace
 
-/// GIS→模型 / 瓦片→模型 仅产出 OBJ；若用户误选 .las/.laz 输出路径，会写成「扩展名像点云、内容为 OBJ」，预览 LAZ 时报 wrong file_signature。
+struct AgisMeshDelaunayTri {
+  int a = 0;
+  int b = 0;
+  int c = 0;
+};
+
+static bool AgisMeshInCircumcircleXY(double ax, double ay, double bx, double by, double cx, double cy, double px, double py) {
+  const double a11 = bx - ax, a12 = by - ay, a13 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+  const double a21 = cx - ax, a22 = cy - ay, a23 = (cx - ax) * (cx - ax) + (cy - ay) * (cy - ay);
+  const double a31 = px - ax, a32 = py - ay, a33 = (px - ax) * (px - ax) + (py - ay) * (py - ay);
+  const double det = a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31);
+  return det > 1e-12;
+}
+
+static std::vector<AgisMeshDelaunayTri> AgisMeshDelaunayTriangulate2D(const std::vector<std::array<double, 2>>& pts) {
+  std::vector<AgisMeshDelaunayTri> out;
+  const int n = static_cast<int>(pts.size());
+  if (n < 3) {
+    return out;
+  }
+  double minx = pts[0][0], maxx = pts[0][0], miny = pts[0][1], maxy = pts[0][1];
+  for (int i = 1; i < n; ++i) {
+    minx = (std::min)(minx, pts[i][0]);
+    maxx = (std::max)(maxx, pts[i][0]);
+    miny = (std::min)(miny, pts[i][1]);
+    maxy = (std::max)(maxy, pts[i][1]);
+  }
+  const double dx = (std::max)(maxx - minx, 1e-6);
+  const double dy = (std::max)(maxy - miny, 1e-6);
+  const double m = (std::max)(dx, dy) * 4.0;
+  const int s0 = n;
+  const int s1 = n + 1;
+  const int s2 = n + 2;
+  std::vector<std::array<double, 2>> work = pts;
+  work.push_back({minx - m, miny - m});
+  work.push_back({minx + 2.0 * m, miny - m});
+  work.push_back({minx + 0.5 * m, miny + 2.0 * m});
+  std::vector<AgisMeshDelaunayTri> tris;
+  tris.push_back({s0, s1, s2});
+  for (int pi = 0; pi < n; ++pi) {
+    const auto& p = work[static_cast<size_t>(pi)];
+    std::vector<int> bad;
+    for (int ti = 0; ti < static_cast<int>(tris.size()); ++ti) {
+      const AgisMeshDelaunayTri& t = tris[static_cast<size_t>(ti)];
+      const auto& pa = work[static_cast<size_t>(t.a)];
+      const auto& pb = work[static_cast<size_t>(t.b)];
+      const auto& pc = work[static_cast<size_t>(t.c)];
+      if (AgisMeshInCircumcircleXY(pa[0], pa[1], pb[0], pb[1], pc[0], pc[1], p[0], p[1])) {
+        bad.push_back(ti);
+      }
+    }
+    if (bad.empty()) {
+      continue;
+    }
+    std::vector<std::pair<int, int>> edges;
+    auto addEdge = [&](int u, int v) {
+      if (u > v) {
+        std::swap(u, v);
+      }
+      edges.emplace_back(u, v);
+    };
+    for (int idx : bad) {
+      const AgisMeshDelaunayTri& t = tris[static_cast<size_t>(idx)];
+      addEdge(t.a, t.b);
+      addEdge(t.b, t.c);
+      addEdge(t.c, t.a);
+    }
+    std::sort(edges.begin(), edges.end());
+    std::vector<std::pair<int, int>> boundary;
+    for (size_t i = 0; i < edges.size(); ++i) {
+      size_t cnt = 1;
+      while (i + 1 < edges.size() && edges[i + 1] == edges[i]) {
+        ++cnt;
+        ++i;
+      }
+      if (cnt % 2 == 1) {
+        boundary.push_back(edges[i]);
+      }
+    }
+    std::vector<AgisMeshDelaunayTri> next;
+    for (int ti = 0; ti < static_cast<int>(tris.size()); ++ti) {
+      if (std::find(bad.begin(), bad.end(), ti) == bad.end()) {
+        next.push_back(tris[static_cast<size_t>(ti)]);
+      }
+    }
+    for (const auto& e : boundary) {
+      next.push_back({e.first, e.second, pi});
+    }
+    tris.swap(next);
+  }
+  for (const AgisMeshDelaunayTri& t : tris) {
+    if (t.a < n && t.b < n && t.c < n) {
+      out.push_back(t);
+    }
+  }
+  return out;
+}
+
+static std::uint32_t AgisObjFxHashPixel(std::uint32_t x, std::uint32_t y) {
+  std::uint32_t h = x * 374761393u + y * 668265263u;
+  h = (h ^ (h >> 13)) * 1274126177u;
+  return h ^ (h >> 16);
+}
+
+static void ApplyObjVisualEffectOnAlbedo(std::vector<unsigned char>* rgb, int texW, int texH, const std::wstring& effect,
+                                         double snowScale) {
+  if (!rgb || texW <= 0 || texH <= 0 ||
+      rgb->size() < static_cast<size_t>(texW) * static_cast<size_t>(texH) * 3) {
+    return;
+  }
+  if (_wcsicmp(effect.c_str(), L"none") == 0) {
+    return;
+  }
+  if (_wcsicmp(effect.c_str(), L"night") == 0) {
+    for (size_t i = 0; i + 2 < rgb->size(); i += 3) {
+      const int r = (*rgb)[i + 0];
+      const int g = (*rgb)[i + 1];
+      const int b = (*rgb)[i + 2];
+      (*rgb)[i + 0] = static_cast<unsigned char>((std::clamp)(static_cast<int>(r * 0.35 + 8), 0, 255));
+      (*rgb)[i + 1] = static_cast<unsigned char>((std::clamp)(static_cast<int>(g * 0.28 + 4), 0, 255));
+      (*rgb)[i + 2] = static_cast<unsigned char>((std::clamp)(static_cast<int>(b * 0.42 + 28), 0, 255));
+    }
+    return;
+  }
+  if (_wcsicmp(effect.c_str(), L"snow") == 0) {
+    const double invS = 1.0 / (std::max)(0.25, snowScale);
+    const std::uint32_t thresh = static_cast<std::uint32_t>((std::clamp)(60.0 * invS, 5.0, 120.0));
+    for (int y = 0; y < texH; ++y) {
+      for (int x = 0; x < texW; ++x) {
+        const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(texW) + static_cast<size_t>(x)) * 3;
+        std::uint32_t h = AgisObjFxHashPixel(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+        const bool flake = (h % 256u) < thresh;
+        int r = (*rgb)[i + 0];
+        int g = (*rgb)[i + 1];
+        int b = (*rgb)[i + 2];
+        const int lum = (r * 2126 + g * 7152 + b * 722) / 10000;
+        const int lift = flake ? 55 : (lum > 180 ? 35 : 12);
+        (*rgb)[i + 0] = static_cast<unsigned char>((std::clamp)(r + lift, 0, 255));
+        (*rgb)[i + 1] = static_cast<unsigned char>((std::clamp)(g + lift, 0, 255));
+        (*rgb)[i + 2] = static_cast<unsigned char>((std::clamp)(b + lift, 0, 255));
+      }
+    }
+  }
+}
+
+bool ModelSubtypeIsPointCloudW(const std::wstring& s);
+static int ConvertMeshObjToLasJob(const ConvertArgs& args);
+static std::wstring NormalizeTextureFmtExt(const std::wstring& fmt);
+
+/// GIS→模型 默认产出 OBJ；`--output-subtype pointcloud` 或输出扩展名为 .las/.laz 时产出点云。瓦片→模型仍为 OBJ；误将 .las/.laz 用于非点云模式时会改为 .obj。
 static void AgisCoerceModelOutputPathFromLasLazToObj(std::filesystem::path* path, const wchar_t* toolLabel) {
   if (!path || path->empty()) {
     return;
@@ -1594,22 +1995,70 @@ static void AgisCoerceModelOutputPathFromLasLazToObj(std::filesystem::path* path
 }
 
 int ConvertGisToModelImpl(const ConvertArgs& args) {
-  auto reportProgress = [](int pct, const wchar_t* text) {
-    const int p = (std::clamp)(pct, 0, 100);
+  int lastProgressPct = 0;
+  auto reportProgress = [&](int pct, const wchar_t* text) {
+    const int p = (std::max)(lastProgressPct, (std::clamp)(pct, 0, 100));
+    lastProgressPct = p;
     std::wcout << L"[PROGRESS " << p << L"] " << (text ? text : L"") << L"\n";
+  };
+  auto reportProgressMeta = [](const std::wstring& stage, int fileCur, int fileTotal, const std::wstring& io,
+                               const std::filesystem::path& filePath) {
+    std::wstring f = filePath.wstring();
+    for (auto& c : f) {
+      if (c == L'|') c = L'/';
+    }
+    std::wcout << L"[PROGRESS_META] stage=" << stage << L"|files=" << fileCur << L"/" << fileTotal << L"|io=" << io
+               << L"|file=" << f << L"\n";
   };
   reportProgress(3, L"初始化输出路径");
   std::filesystem::path outPath(args.output);
+  bool wantPointCloud = ModelSubtypeIsPointCloudW(args.output_subtype);
+  {
+    std::wstring ext0 = outPath.extension().wstring();
+    for (auto& c : ext0) {
+      c = static_cast<wchar_t>(std::towlower(c));
+    }
+    if (ext0 == L".las" || ext0 == L".laz") {
+      wantPointCloud = true;
+    }
+  }
   std::error_code ec;
   if (std::filesystem::is_directory(outPath, ec) || outPath.extension().empty()) {
     std::filesystem::create_directories(outPath, ec);
-    outPath /= L"model.obj";
-  } else {
+    if (wantPointCloud) {
+      outPath /= L"points.las";
+    } else {
+      outPath /= L"model.obj";
+    }
+  } else if (!wantPointCloud) {
     AgisCoerceModelOutputPathFromLasLazToObj(&outPath, L"GIS→模型");
   }
-  const std::wstring mtlName = outPath.stem().wstring() + L".mtl";
-  std::wcout << L"[OUT] model file: " << outPath.wstring() << L"\n";
-  std::wcout << L"[OUT] material file: " << (outPath.parent_path() / mtlName).wstring() << L"\n";
+  reportProgressMeta(L"初始化输出", 1, 1, L"write", outPath);
+
+  std::filesystem::path tmpPcDir;
+  std::filesystem::path meshWritePath = outPath;
+  if (wantPointCloud) {
+    std::error_code ecTmp;
+    std::filesystem::path tbase = std::filesystem::temp_directory_path(ecTmp);
+    if (ecTmp) {
+      tbase = outPath.parent_path();
+    }
+    tmpPcDir = tbase / (L"agis_gis2pc_" + std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(GetTickCount64()));
+    std::filesystem::create_directories(tmpPcDir, ecTmp);
+    if (ecTmp) {
+      std::wcerr << L"[ERROR] 无法创建 GIS→点云临时目录。\n";
+      return 6;
+    }
+    meshWritePath = tmpPcDir / L"stage.obj";
+  }
+
+  const std::wstring mtlName = meshWritePath.stem().wstring() + L".mtl";
+  if (wantPointCloud) {
+    std::wcout << L"[OUT] point cloud: " << outPath.wstring() << L" (mesh+texture sampling; staging OBJ in temp)\n";
+  } else {
+    std::wcout << L"[OUT] model file: " << outPath.wstring() << L"\n";
+    std::wcout << L"[OUT] material file: " << (meshWritePath.parent_path() / mtlName).wstring() << L"\n";
+  }
   // 真正转换：优先读取 .gis 内首个可用栅格图层，生成高程网格 + 真实纹理。
   GisDocInfo doc;
   RasterExtract raster;
@@ -1746,6 +2195,8 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   double meshTminY = 0.0;
   double meshTmaxY = 0.0;
   bool haveTargetMesh = false;
+  int meshJRowOffset = 0;
+  int meshNjFull = 0;
   double meshStepReqMeters = 0.0;
   double meshStepEffMeters = 0.0;
   double meshRasterCellMinMeters = 0.0;
@@ -1850,48 +2301,122 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     }
     std::wcout << L"[MESH] grid (ni x nj) " << ni << L" x " << nj << L" interior cells ~ 2:1, stepK ~ " << stepK
                << L"\n";
-    OGRCoordinateTransformationH targetToRasterMesh = OCTNewCoordinateTransformation(targetSr, rasterSr);
-    if (targetToRasterMesh) {
-      meshElevBuf.resize(static_cast<size_t>(ni) * nj);
-      meshRgbBuf.resize(static_cast<size_t>(ni) * nj * 3);
-      meshTminX = bminx;
-      meshTmaxX = bmaxx;
-      meshTminY = bminy;
-      meshTmaxY = bmaxy;
-      for (int j = 0; j < nj; ++j) {
-        const double fj = (nj > 1) ? static_cast<double>(j) / static_cast<double>(nj - 1) : 0.0;
-        const double tyv = meshTminY + fj * (meshTmaxY - meshTminY);
-        for (int i = 0; i < ni; ++i) {
-          const double fi = (ni > 1) ? static_cast<double>(i) / static_cast<double>(ni - 1) : 0.0;
-          const double txv = meshTminX + fi * (meshTmaxX - meshTminX);
-          double ox = txv;
-          double oy = tyv;
-          double oz = 0.0;
-          const size_t idx = static_cast<size_t>(j) * ni + i;
-          if (!OCTTransform(targetToRasterMesh, 1, &ox, &oy, &oz)) {
-            meshElevBuf[idx] = 0.f;
-            meshRgbBuf[idx * 3 + 0] = 128;
-            meshRgbBuf[idx * 3 + 1] = 128;
-            meshRgbBuf[idx * 3 + 2] = 128;
-            continue;
-          }
-          double col = 0.0;
-          double row = 0.0;
-          PixelFromGeo(raster.gt, ox, oy, &col, &row);
-          meshElevBuf[idx] = SampleBilinearF(raster.elev, rw, rh, col, row);
-          meshRgbBuf[idx * 3 + 0] = SampleBilinearRgb(raster.rgb, rw, rh, 0, col, row);
-          meshRgbBuf[idx * 3 + 1] = SampleBilinearRgb(raster.rgb, rw, rh, 1, col, row);
-          meshRgbBuf[idx * 3 + 2] = SampleBilinearRgb(raster.rgb, rw, rh, 2, col, row);
-        }
+    meshTminX = bminx;
+    meshTmaxX = bmaxx;
+    meshTminY = bminy;
+    meshTmaxY = bmaxy;
+    const int niFull = ni;
+    const int njFull = nj;
+    int texOutH = (std::max)(2, njFull);
+    int texOutW = 2 * texOutH;
+    constexpr int kTexMaxEst = 8192;
+    if (texOutW > kTexMaxEst) {
+      texOutW = kTexMaxEst;
+      texOutH = (std::max)(2, texOutW / 2);
+    }
+    const bool wantPbrEst = (_wcsicmp(args.obj_texture_mode.c_str(), L"pbr") == 0);
+    const std::int64_t budgetB = args.model_budget_mb * 1024LL * 1024LL;
+    const std::int64_t est = EstimateGisModelChunkBytes(args.model_budget_mode, niFull, njFull, texOutW, texOutH, wantPbrEst,
+                                                         _wcsicmp(args.obj_fp_type.c_str(), L"float") == 0);
+    int autoStripes = 1;
+    if (!wantPointCloud && _wcsicmp(args.coord_system.c_str(), L"cecf") != 0 && njFull >= 4 && est > budgetB) {
+      autoStripes = static_cast<int>(std::min<int64_t>(static_cast<int64_t>(njFull - 1),
+                                                        std::max<int64_t>(2LL, (est + budgetB - 1) / budgetB)));
+      std::wcout << L"[BUDGET] estimate ~" << est << L" B vs budget " << budgetB << L" B (" << args.model_budget_mode
+                 << L") -> auto stripes=" << autoStripes << L"\n";
+    } else if (est > budgetB) {
+      std::wcout << L"[BUDGET] estimate ~" << est << L" B exceeds budget " << budgetB << L" B (" << args.model_budget_mode
+                 << L"); single-file (cecf/pointcloud or small grid).\n";
+    }
+    int gisMeshStripeCount = (std::max)(1, (std::max)(args.gis_model_split_parts, autoStripes));
+    gisMeshStripeCount = (std::min)(gisMeshStripeCount, (std::max)(1, njFull - 1));
+    // 对 file 口径使用保守系数，避免 OBJ 文本体积估算偏小导致超预算明显。
+    const bool strictFileBudget = (_wcsicmp(args.model_budget_mode.c_str(), L"file") == 0);
+    const double budgetSafety = strictFileBudget ? 1.35 : 1.0;
+    auto estimateStripeWorstCaseBytes = [&](int stripes) -> std::int64_t {
+      stripes = (std::max)(1, stripes);
+      const int cellsTotalY = (std::max)(1, njFull - 1);
+      const int cellsPerStripe = (cellsTotalY + stripes - 1) / stripes;
+      const int njPartWorst = cellsPerStripe + 1;
+      int texPartH = (std::max)(2, njPartWorst);
+      int texPartW = 2 * texPartH;
+      constexpr int kTexMaxEstPart = 8192;
+      if (texPartW > kTexMaxEstPart) {
+        texPartW = kTexMaxEstPart;
+        texPartH = (std::max)(2, texPartW / 2);
       }
-      OCTDestroyCoordinateTransformation(targetToRasterMesh);
-      mw = ni;
-      mh = nj;
-      haveTargetMesh = true;
+      return EstimateGisModelChunkBytes(args.model_budget_mode, niFull, njPartWorst, texPartW, texPartH, wantPbrEst,
+                                        _wcsicmp(args.obj_fp_type.c_str(), L"float") == 0);
+    };
+    if (!wantPointCloud && _wcsicmp(args.coord_system.c_str(), L"cecf") != 0 && njFull >= 4) {
+      const std::int64_t targetBudget = static_cast<std::int64_t>(static_cast<double>(budgetB) / budgetSafety);
+      while (gisMeshStripeCount < (std::max)(1, njFull - 1) && estimateStripeWorstCaseBytes(gisMeshStripeCount) > targetBudget) {
+        ++gisMeshStripeCount;
+      }
+    }
+    if (gisMeshStripeCount > 1) {
+      std::wcout << L"[BUDGET] output split into " << gisMeshStripeCount << L" row-stripes (_partN.obj), worst-stripe est ~"
+                 << estimateStripeWorstCaseBytes(gisMeshStripeCount) << L" B.\n";
+    }
+    OGRCoordinateTransformationH holdTargetToRasterMesh = OCTNewCoordinateTransformation(targetSr, rasterSr);
+    for (int gisStripeIdx = 0; gisStripeIdx < gisMeshStripeCount; ++gisStripeIdx) {
+      if (holdTargetToRasterMesh) {
+        const int j0 = gisStripeIdx * (njFull - 1) / gisMeshStripeCount;
+        int j1 = (gisStripeIdx + 1) * (njFull - 1) / gisMeshStripeCount;
+        if (gisStripeIdx == gisMeshStripeCount - 1) {
+          j1 = njFull - 1;
+        }
+        const int njPart = j1 - j0 + 1;
+        meshElevBuf.assign(static_cast<size_t>(niFull) * static_cast<size_t>(njPart), 0.f);
+        meshRgbBuf.assign(static_cast<size_t>(niFull) * static_cast<size_t>(njPart) * 3, 0);
+        for (int jj = 0; jj < njPart; ++jj) {
+          if ((jj & 31) == 0 || jj + 1 == njPart) {
+            const int p = 30 + static_cast<int>((static_cast<double>(jj + 1) / static_cast<double>((std::max)(1, njPart))) * 20.0);
+            reportProgress(p, L"构建规则网格采样");
+          }
+          const int jGlobal = j0 + jj;
+          const double fj = (njFull > 1) ? static_cast<double>(jGlobal) / static_cast<double>(njFull - 1) : 0.0;
+          const double tyv = meshTminY + fj * (meshTmaxY - meshTminY);
+          for (int i = 0; i < niFull; ++i) {
+            const double fi = (niFull > 1) ? static_cast<double>(i) / static_cast<double>(niFull - 1) : 0.0;
+            const double txv = meshTminX + fi * (meshTmaxX - meshTminX);
+            double ox = txv;
+            double oy = tyv;
+            double oz = 0.0;
+            const size_t idx = static_cast<size_t>(jj) * static_cast<size_t>(niFull) + static_cast<size_t>(i);
+            if (!OCTTransform(holdTargetToRasterMesh, 1, &ox, &oy, &oz)) {
+              meshElevBuf[idx] = 0.f;
+              meshRgbBuf[idx * 3 + 0] = 128;
+              meshRgbBuf[idx * 3 + 1] = 128;
+              meshRgbBuf[idx * 3 + 2] = 128;
+              continue;
+            }
+            double col = 0.0;
+            double row = 0.0;
+            PixelFromGeo(raster.gt, ox, oy, &col, &row);
+            meshElevBuf[idx] = SampleDemElevForMesh(raster.elev, rw, rh, col, row, args.gis_dem_interp);
+            meshRgbBuf[idx * 3 + 0] = SampleBilinearRgb(raster.rgb, rw, rh, 0, col, row);
+            meshRgbBuf[idx * 3 + 1] = SampleBilinearRgb(raster.rgb, rw, rh, 1, col, row);
+            meshRgbBuf[idx * 3 + 2] = SampleBilinearRgb(raster.rgb, rw, rh, 2, col, row);
+          }
+        }
+        mw = niFull;
+        mh = njPart;
+        meshJRowOffset = j0;
+        meshNjFull = njFull;
+        haveTargetMesh = true;
+        if (gisMeshStripeCount > 1) {
+          const std::wstring stem = outPath.stem().wstring() + L"_part" + std::to_wstring(gisStripeIdx + 1);
+          meshWritePath = outPath.parent_path() / (stem + L".obj");
+        }
+      } else if (gisStripeIdx > 0) {
+        break;
+      }
     }
   }
 #endif
   reportProgress(62, L"写出几何与纹理坐标");
+  reportProgressMeta(L"写 OBJ 顶点", 1, 1, L"write", meshWritePath);
   const int w = mw;
   const int h = mh;
   const int gridW = w - 1;
@@ -2179,7 +2704,16 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
      << L"# coord_system: " << args.coord_system << L"\n"
      << L"# target_crs: " << (args.target_crs.empty() ? L"<auto>" : args.target_crs) << L"\n"
      << L"# output_unit: " << NormalizeOutputUnitW(args.output_unit) << L" (scale=" << unitS << L")\n"
-     << L"# mesh_spacing: " << args.mesh_spacing << L" (model units)\n";
+     << L"# mesh_spacing: " << args.mesh_spacing << L" (model units)\n"
+     << L"# obj_texture_mode: " << args.obj_texture_mode << L" (color=albedo only; pbr=normal/roughness/metallic/ao maps)\n"
+     << L"# obj_visual_effect: " << args.obj_visual_effect;
+  if (_wcsicmp(args.obj_visual_effect.c_str(), L"snow") == 0) {
+    ss << L" snow_scale=" << args.obj_snow_scale;
+  }
+  ss << L"\n"
+     << L"# gis_dem_interpolation: " << args.gis_dem_interp << L"\n"
+     << L"# gis_mesh_topology: " << args.gis_mesh_topology << L"\n"
+     << L"# model_budget: mode=" << args.model_budget_mode << L" limit_mb=" << args.model_budget_mb << L"\n";
   if (haveTargetMesh) {
     ss << L"# mesh_step_meters: requested=" << meshStepReqMeters << L" effective=" << meshStepEffMeters
        << L" raster_cell_min~=" << meshRasterCellMinMeters << L"\n";
@@ -2215,6 +2749,10 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
   }
 #endif
   for (int y = 0; y < h; ++y) {
+    if ((y & 31) == 0 || y + 1 == h) {
+      const int p = 62 + static_cast<int>((static_cast<double>(y + 1) / static_cast<double>((std::max)(1, h))) * 12.0);
+      reportProgress(p, L"生成顶点/纹理坐标");
+    }
     for (int x = 0; x < w; ++x) {
       const float fx = (gridW > 0) ? static_cast<float>(x) / static_cast<float>(gridW) : 0.0f;
       const float fy = (gridH > 0) ? static_cast<float>(y) / static_cast<float>(gridH) : 0.0f;
@@ -2300,7 +2838,7 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
         const double rowGeo = static_cast<double>(fy) * static_cast<double>((std::max)(1, srcH - 1));
         px = raster.gt[0] + colGeo * raster.gt[1] + rowGeo * raster.gt[2];
         py = raster.gt[3] + colGeo * raster.gt[4] + rowGeo * raster.gt[5];
-        pz = SampleBilinearF(raster.elev, rw, rh, colRead, rowRead);
+        pz = SampleDemElevForMesh(raster.elev, rw, rh, colRead, rowRead, args.gis_dem_interp);
       } else if (_wcsicmp(args.coord_system.c_str(), L"cecf") == 0 && cecfHasLonLatBBox) {
         const double fxC = cecfIsGlobalLike ? ((static_cast<double>(x) + 0.5) / static_cast<double>((std::max)(1, w)))
                                             : static_cast<double>(fx);
@@ -2404,7 +2942,8 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     const double e1 = abx * abx + aby * aby + abz * abz;
     const double e2 = acx * acx + acy * acy + acz * acz;
     const double maxE = (std::max)(e1, e2);
-    if (maxE <= 1e-30 || area2 <= maxE * 1e-12) {
+    // 不再按 area2 剔除：规则 DEM/TIN 网格上三角常近乎共面，area2 相对 maxE 极小会被误删，OBJ 呈破碎三角。
+    if (maxE <= 0.0 || !std::isfinite(maxE) || !std::isfinite(area2)) {
       return;
     }
     int ib = b;
@@ -2477,14 +3016,46 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
       emitTriIfValid(southPoleIdx, vid(x, h - 2), vid(x + 1, h - 2));
     }
   } else {
-    for (int y = 0; y < gridH; ++y) {
-      for (int x = 0; x < gridW; ++x) {
-        const int v00 = vid(x, y);
-        const int v10 = vid(x + 1, y);
-        const int v01 = vid(x, y + 1);
-        const int v11 = vid(x + 1, y + 1);
-        emitTriIfValid(v00, v10, v11);
-        emitTriIfValid(v00, v11, v01);
+    const int64_t nVert = static_cast<int64_t>(w) * static_cast<int64_t>(h);
+    const bool wantDelaunay = !isCecf && _wcsicmp(args.gis_mesh_topology.c_str(), L"delaunay") == 0 && gridW >= 1 &&
+                              gridH >= 1 && nVert >= 3 && nVert <= 8192;
+    if (_wcsicmp(args.gis_mesh_topology.c_str(), L"delaunay") == 0 && !wantDelaunay) {
+      if (isCecf) {
+        std::wcout << L"[MESH] delaunay: skipped (cecf uses structured grid).\n";
+      } else if (nVert > 8192) {
+        std::wcout << L"[MESH] delaunay: skipped (vertices " << nVert << L" > 8192), using grid.\n";
+      } else if (gridW < 1 || gridH < 1) {
+        std::wcout << L"[MESH] delaunay: skipped (degenerate grid).\n";
+      }
+    }
+    if (wantDelaunay) {
+      std::vector<std::array<double, 2>> pts2d;
+      pts2d.reserve(static_cast<size_t>(nVert));
+      for (int yi = 0; yi < h; ++yi) {
+        for (int xi = 0; xi < w; ++xi) {
+          const auto& v = gridVerts[static_cast<size_t>(vid(xi, yi) - 1)];
+          pts2d.push_back({v[0], v[1]});
+        }
+      }
+      const std::vector<AgisMeshDelaunayTri> dtris = AgisMeshDelaunayTriangulate2D(pts2d);
+      std::wcout << L"[MESH] delaunay: " << dtris.size() << L" triangles, " << nVert << L" vertices\n";
+      for (const auto& t : dtris) {
+        emitTriIfValid(t.a + 1, t.b + 1, t.c + 1);
+      }
+    } else {
+      for (int y = 0; y < gridH; ++y) {
+        if ((y & 31) == 0 || y + 1 == gridH) {
+          const int p = 74 + static_cast<int>((static_cast<double>(y + 1) / static_cast<double>((std::max)(1, gridH))) * 8.0);
+          reportProgress(p, L"生成网格三角面");
+        }
+        for (int x = 0; x < gridW; ++x) {
+          const int v00 = vid(x, y);
+          const int v10 = vid(x + 1, y);
+          const int v01 = vid(x, y + 1);
+          const int v11 = vid(x + 1, y + 1);
+          emitTriIfValid(v00, v10, v11);
+          emitTriIfValid(v00, v11, v01);
+        }
       }
     }
   }
@@ -2564,21 +3135,31 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
     targetSr = nullptr;
   }
 #endif
-  int rc = WriteTextFile(outPath, ss.str());
+  reportProgressMeta(L"写 OBJ 主文件", 1, 1, L"write", meshWritePath);
+  int rc = WriteTextFile(meshWritePath, ss.str());
   if (rc != 0) {
     return rc;
   }
-  reportProgress(85, L"生成 PBR 贴图");
-  const std::wstring texName = outPath.stem().wstring() + L"_albedo.png";
-  const std::wstring normalName = outPath.stem().wstring() + L"_normal.png";
-  const std::wstring roughName = outPath.stem().wstring() + L"_roughness.png";
-  const std::wstring metalName = outPath.stem().wstring() + L"_metallic.png";
-  const std::wstring aoName = outPath.stem().wstring() + L"_ao.png";
-  const std::filesystem::path texPath = outPath.parent_path() / texName;
-  const std::filesystem::path normalPath = outPath.parent_path() / normalName;
-  const std::filesystem::path roughPath = outPath.parent_path() / roughName;
-  const std::filesystem::path metalPath = outPath.parent_path() / metalName;
-  const std::filesystem::path aoPath = outPath.parent_path() / aoName;
+  const bool wantPbrTextures = !wantPointCloud && (_wcsicmp(args.obj_texture_mode.c_str(), L"pbr") == 0);
+  if (wantPointCloud) {
+    reportProgress(85, L"生成点云采样用 albedo 贴图");
+  } else if (wantPbrTextures) {
+    reportProgress(85, L"生成 albedo 与 PBR 贴图");
+  } else {
+    reportProgress(85, L"生成 albedo 贴图");
+  }
+  const std::wstring texExt = NormalizeTextureFmtExt(args.texture_format);
+  const std::wstring texName = meshWritePath.stem().wstring() + L"_albedo" + texExt;
+  const std::wstring normalName = meshWritePath.stem().wstring() + L"_normal" + texExt;
+  const std::wstring roughName = meshWritePath.stem().wstring() + L"_roughness" + texExt;
+  const std::wstring metalName = meshWritePath.stem().wstring() + L"_metallic" + texExt;
+  const std::wstring aoName = meshWritePath.stem().wstring() + L"_ao" + texExt;
+  const std::filesystem::path texPath = meshWritePath.parent_path() / texName;
+  const std::filesystem::path normalPath = meshWritePath.parent_path() / normalName;
+  const std::filesystem::path roughPath = meshWritePath.parent_path() / roughName;
+  const std::filesystem::path metalPath = meshWritePath.parent_path() / metalName;
+  const std::filesystem::path aoPath = meshWritePath.parent_path() / aoName;
+  reportProgressMeta(L"写贴图", 1, wantPbrTextures ? 5 : 1, L"write", texPath);
   int trc = 0;
 #if GIS_DESKTOP_HAVE_GDAL
   if (raster.ok) {
@@ -2610,54 +3191,109 @@ int ConvertGisToModelImpl(const ConvertArgs& args) {
       texForMaps.w = texOutW;
       texForMaps.h = texOutH;
     }
-    trc = WriteRgbPng(texPath, texForMaps.w, texForMaps.h, texForMaps.rgb);
-    if (trc == 0) {
+    ApplyObjVisualEffectOnAlbedo(&texForMaps.rgb, texForMaps.w, texForMaps.h, args.obj_visual_effect, args.obj_snow_scale);
+    trc = WriteRgbTextureFile(texPath, texForMaps.w, texForMaps.h, texForMaps.rgb, args.texture_format);
+    if (trc == 0 && wantPbrTextures) {
       const PbrMaps p = BuildPbrFromElevation(texForMaps);
-      if (!p.normalRgb.empty()) trc = WriteRgbPng(normalPath, texForMaps.w, texForMaps.h, p.normalRgb);
-      if (trc == 0 && !p.roughness.empty()) trc = WriteGrayPng(roughPath, texForMaps.w, texForMaps.h, p.roughness);
-      if (trc == 0 && !p.metallic.empty()) trc = WriteGrayPng(metalPath, texForMaps.w, texForMaps.h, p.metallic);
-      if (trc == 0 && !p.ao.empty()) trc = WriteGrayPng(aoPath, texForMaps.w, texForMaps.h, p.ao);
+      if (!p.normalRgb.empty()) {
+        reportProgressMeta(L"写贴图", 2, 5, L"write", normalPath);
+        trc = WriteRgbTextureFile(normalPath, texForMaps.w, texForMaps.h, p.normalRgb, args.texture_format);
+      }
+      std::vector<unsigned char> grayAsRgb;
+      auto writeGrayByTextureFormat = [&](const std::filesystem::path& outPath, const std::vector<unsigned char>& gray) -> int {
+        if (gray.empty()) {
+          return 0;
+        }
+        grayAsRgb.resize(gray.size() * 3);
+        for (size_t i = 0; i < gray.size(); ++i) {
+          const unsigned char g = gray[i];
+          grayAsRgb[i * 3 + 0] = g;
+          grayAsRgb[i * 3 + 1] = g;
+          grayAsRgb[i * 3 + 2] = g;
+        }
+        return WriteRgbTextureFile(outPath, texForMaps.w, texForMaps.h, grayAsRgb, args.texture_format);
+      };
+      if (trc == 0) {
+        reportProgressMeta(L"写贴图", 3, 5, L"write", roughPath);
+        trc = writeGrayByTextureFormat(roughPath, p.roughness);
+      }
+      if (trc == 0) {
+        reportProgressMeta(L"写贴图", 4, 5, L"write", metalPath);
+        trc = writeGrayByTextureFormat(metalPath, p.metallic);
+      }
+      if (trc == 0) {
+        reportProgressMeta(L"写贴图", 5, 5, L"write", aoPath);
+        trc = writeGrayByTextureFormat(aoPath, p.ao);
+      }
     }
   } else {
-    static const unsigned char kPng1x1Blue[] = {
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0x99, 0x63, 0x68, 0x78, 0xD8, 0x00,
-        0x00, 0x03, 0x32, 0x01, 0x6D, 0xD9, 0xD4, 0x03, 0x80, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-        0x44, 0xAE, 0x42, 0x60, 0x82};
-    trc = WriteBinaryFile(texPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-    if (trc == 0) trc = WriteBinaryFile(normalPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-    if (trc == 0) trc = WriteBinaryFile(roughPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-    if (trc == 0) trc = WriteBinaryFile(metalPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-    if (trc == 0) trc = WriteBinaryFile(aoPath, kPng1x1Blue, sizeof(kPng1x1Blue));
+    const std::vector<unsigned char> kFallbackRgb = {104, 120, 216};
+    trc = WriteRgbTextureFile(texPath, 1, 1, kFallbackRgb, args.texture_format);
+    if (trc == 0 && wantPbrTextures) {
+      if (trc == 0) trc = WriteRgbTextureFile(normalPath, 1, 1, kFallbackRgb, args.texture_format);
+      if (trc == 0) trc = WriteRgbTextureFile(roughPath, 1, 1, kFallbackRgb, args.texture_format);
+      if (trc == 0) trc = WriteRgbTextureFile(metalPath, 1, 1, kFallbackRgb, args.texture_format);
+      if (trc == 0) trc = WriteRgbTextureFile(aoPath, 1, 1, kFallbackRgb, args.texture_format);
+    }
   }
 #else
-  static const unsigned char kPng1x1Blue[] = {
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-      0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0x99, 0x63, 0x68, 0x78, 0xD8, 0x00,
-      0x00, 0x03, 0x32, 0x01, 0x6D, 0xD9, 0xD4, 0x03, 0x80, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-      0x44, 0xAE, 0x42, 0x60, 0x82};
-  trc = WriteBinaryFile(texPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-  if (trc == 0) trc = WriteBinaryFile(normalPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-  if (trc == 0) trc = WriteBinaryFile(roughPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-  if (trc == 0) trc = WriteBinaryFile(metalPath, kPng1x1Blue, sizeof(kPng1x1Blue));
-  if (trc == 0) trc = WriteBinaryFile(aoPath, kPng1x1Blue, sizeof(kPng1x1Blue));
+  const std::vector<unsigned char> kFallbackRgb = {104, 120, 216};
+  trc = WriteRgbTextureFile(texPath, 1, 1, kFallbackRgb, args.texture_format);
+  if (trc == 0 && wantPbrTextures) {
+    if (trc == 0) trc = WriteRgbTextureFile(normalPath, 1, 1, kFallbackRgb, args.texture_format);
+    if (trc == 0) trc = WriteRgbTextureFile(roughPath, 1, 1, kFallbackRgb, args.texture_format);
+    if (trc == 0) trc = WriteRgbTextureFile(metalPath, 1, 1, kFallbackRgb, args.texture_format);
+    if (trc == 0) trc = WriteRgbTextureFile(aoPath, 1, 1, kFallbackRgb, args.texture_format);
+  }
 #endif
   if (trc != 0) {
+    if (wantPointCloud && !tmpPcDir.empty()) {
+      std::error_code ex;
+      std::filesystem::remove_all(tmpPcDir, ex);
+    }
     return trc;
   }
+
+  if (wantPointCloud) {
+    const std::wstring mtlSlim = L"newmtl defaultMat\nKd 0.8 0.8 0.8\nmap_Kd " + texName + L"\n";
+    const int mtlPc = WriteTextFile(meshWritePath.parent_path() / mtlName, mtlSlim);
+    if (mtlPc != 0) {
+      if (!tmpPcDir.empty()) {
+        std::error_code ex;
+        std::filesystem::remove_all(tmpPcDir, ex);
+      }
+      return mtlPc;
+    }
+    reportProgress(92, L"按三角网与贴图像素采样，写出 LAS/LAZ");
+    ConvertArgs lasArgs = args;
+    lasArgs.input = meshWritePath.wstring();
+    lasArgs.output = outPath.wstring();
+    const int lasRc = ConvertMeshObjToLasJob(lasArgs);
+    if (!tmpPcDir.empty()) {
+      std::error_code ex;
+      std::filesystem::remove_all(tmpPcDir, ex);
+    }
+    if (lasRc == 0) {
+      reportProgress(100, L"点云转换完成");
+    }
+    return lasRc;
+  }
+
   const std::wstring mtlText =
-      L"newmtl defaultMat\n"
-      L"Kd 0.8 0.8 0.8\n"
-      L"Ka 0.1 0.1 0.1\n"
-      L"Ks 0.2 0.2 0.2\n"
-      L"map_Kd " + texName + L"\n"
-      L"map_Bump " + normalName + L"\n"
-      L"map_Pr " + roughName + L"\n"
-      L"map_Pm " + metalName + L"\n"
-      L"map_AO " + aoName + L"\n";
-  const int mtlRc = WriteTextFile(outPath.parent_path() / mtlName, mtlText);
+      wantPbrTextures ? (L"newmtl defaultMat\n"
+                         L"Kd 0.8 0.8 0.8\n"
+                         L"Ka 0.1 0.1 0.1\n"
+                         L"Ks 0.2 0.2 0.2\n"
+                         L"map_Kd " + texName + L"\n"
+                         L"map_Bump " + normalName + L"\n"
+                         L"map_Pr " + roughName + L"\n"
+                         L"map_Pm " + metalName + L"\n"
+                         L"map_AO " + aoName + L"\n")
+                      : (L"newmtl defaultMat\n"
+                         L"Kd 0.8 0.8 0.8\n"
+                         L"Ka 0.05 0.05 0.05\n"
+                         L"map_Kd " + texName + L"\n");
+  const int mtlRc = WriteTextFile(meshWritePath.parent_path() / mtlName, mtlText);
   if (mtlRc == 0) {
     reportProgress(100, L"转换完成");
   }

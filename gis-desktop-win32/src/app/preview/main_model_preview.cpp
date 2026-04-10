@@ -723,11 +723,7 @@ static bool BuildObjPreviewFromLasPoints(const std::vector<LasPointFltRaw>& pts,
   out->kdB = 0.6f;
 
   const float pxScale = (std::clamp)(pointScreenSizePx, 0.5f, 64.f) / 5.f;
-  size_t stride = 1;
-  constexpr size_t kMaxPointsBudget = kLasPreviewMaxOutputTriangles / 2;
-  if (pts.size() > kMaxPointsBudget) {
-    stride = (pts.size() + kMaxPointsBudget - 1) / kMaxPointsBudget;
-  }
+  const size_t stride = 1;
   /// XY 平面上的「半边长」，按包围范围与目标像素尺寸缩放，近似屏幕常量大小点斑（GPU 用三角面而非 PT_POINTS，兼容可调的屏幕像素感）。
   const float hx =
       (std::max)(out->extent * 1e-6f, out->extent * 0.0020f * pxScale);
@@ -2073,11 +2069,9 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   st->loadProgress = 8;
   st->loadedStats = ScanObjStats(st->path);
   if (st->loadedStats.faces > kPreviewObjFaceHardLimit) {
-    st->loadStage = 9;
-    st->loadProgress = 100;
-    PostMessageW(ctx->hwnd, kPreviewLoadedMsg, 3, 0);
-    delete ctx;
-    return 2;
+    std::wstring dbg = L"[PREVIEW] OBJ faces " + std::to_wstring(st->loadedStats.faces) + L" exceed soft limit " +
+                       std::to_wstring(kPreviewObjFaceHardLimit) + L", continue loading full geometry by request.\n";
+    OutputDebugStringW(dbg.c_str());
   }
   st->loadStage = 2;
   st->loadProgress = 5;
@@ -3109,17 +3103,25 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 void OpenModelPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingPreviewLoadAs3DTiles = false;
   g_pendingPreviewModelPath = path;
-  CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"模型数据预览",
-                  WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
-                  CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
+  HWND pw = CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"模型数据预览",
+                            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
+                            nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (pw) {
+    AgisCenterWindowInMonitorWorkArea(pw, owner ? owner : g_hwndMain);
+    ShowWindow(pw, SW_SHOW);
+  }
 }
 
 void OpenModelPreviewWindow3DTiles(HWND owner, const std::wstring& tilesetRootOrFile) {
   g_pendingPreviewLoadAs3DTiles = true;
   g_pendingPreviewModelPath = tilesetRootOrFile;
-  CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"3D Tiles 预览",
-                  WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
-                  CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
+  HWND pw = CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"3D Tiles 预览",
+                            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
+                            nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (pw) {
+    AgisCenterWindowInMonitorWorkArea(pw, owner ? owner : g_hwndMain);
+    ShowWindow(pw, SW_SHOW);
+  }
 }
 
 // --- 瓦片：平面四叉树 (slippy z/x/y) + 3D Tiles BVH/体积元数据（tileset.json 根 region）---
@@ -4158,8 +4160,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingTilePreviewRoot = path;
-  CreateWindowExW(WS_EX_TOOLWINDOW, kTilePreviewClass, L"瓦片预览 · 四叉树 / BVH 元数据",
-                  WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
-                  nullptr, GetModuleHandleW(nullptr), nullptr);
+  HWND tw = CreateWindowExW(WS_EX_TOOLWINDOW, kTilePreviewClass, L"瓦片预览 · 四叉树 / BVH 元数据",
+                            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
+                            nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (tw) {
+    AgisCenterWindowInMonitorWorkArea(tw, owner ? owner : g_hwndMain);
+    ShowWindow(tw, SW_SHOW);
+  }
 }
 

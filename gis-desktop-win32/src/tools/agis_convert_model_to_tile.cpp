@@ -15,7 +15,8 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
 void PrintHelp() {
   const bool zh = IsChineseOsUi();
   if (zh) {
-    std::wcout << L"用法:\n"
+    std::wcout << L"简介：以模型（OBJ/点云等）为纹理与高程来源，生成与 gis_to_tile 相同形态的瓦片集，用于把三维成果发布为二维瓦片服务。\n\n"
+               << L"用法:\n"
                << L"  agis_convert_model_to_tile --input <path> --output <dir|file> [options]\n\n"
                << L"  --output 形态取决于 --output-subtype：目录或单文件，与 gis_to_tile 相同。\n\n"
                << L"必填参数:\n"
@@ -40,8 +41,12 @@ void PrintHelp() {
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s（默认 png；KTX2 需 basis_universal）\n"
                << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n"
                << L"  --tile-levels <auto|1..23>   瓦片层数（默认 auto）\n";
+    PrintConvertCliIoSection(std::wcout, true,
+                             L"  --input：.obj 或 .las/.laz 等模型/点云路径。\n"
+                             L"  --output：与 gis_to_tile 相同（目录 或 .mbtiles / .gpkg）。\n");
   } else {
-    std::wcout << L"Usage:\n"
+    std::wcout << L"About: Rasterize a model (OBJ/point cloud, etc.) into the same tile products as gis_to_tile for 2D tile services.\n\n"
+               << L"Usage:\n"
                << L" agis_convert_model_to_tile --input <path> --output <dir|file> [options]\n\n"
                << L"  --output is a directory or single file depending on --output-subtype.\n\n"
                << L"Required:\n"
@@ -66,6 +71,9 @@ void PrintHelp() {
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s (default: png; KTX2 needs basis_universal)\n"
                << L"  --raster-max-dim <int>       0=native full read (default); 64..16384=cap\n"
                << L"  --tile-levels <auto|1..23>   tile levels (default: auto)\n";
+    PrintConvertCliIoSection(std::wcout, false,
+                             L"  --input: .obj or .las/.laz (model/point cloud).\n"
+                             L"  --output: same as gis_to_tile (directory or .mbtiles / .gpkg).\n");
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

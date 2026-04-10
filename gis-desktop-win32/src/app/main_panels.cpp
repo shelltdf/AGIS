@@ -668,6 +668,7 @@ void ShowLogDialog(HWND owner) {
                       WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX | WS_MINIMIZEBOX, CW_USEDEFAULT,
                       CW_USEDEFAULT, 640, 420, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
   if (g_hwndLogDlg) {
+    AgisCenterWindowInMonitorWorkArea(g_hwndLogDlg, owner ? owner : g_hwndMain);
     ShowWindow(g_hwndLogDlg, SW_SHOW);
   }
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <iosfwd>
 #include <string>
 
@@ -33,6 +34,28 @@ struct ConvertArgs {
   int tile_max_memory_mb = 512;
   /** OBJ 数值输出精度类型：`double`（默认）| `float`。 */
   std::wstring obj_fp_type = L"double";
+
+  /** GIS→模型：贴图输出。`color` 仅 albedo（map_Kd）；`pbr` 额外生成 normal/roughness/metallic/AO 并在 MTL 中引用。 */
+  std::wstring obj_texture_mode = L"color";
+  /** GIS→模型：视觉效果。`none` | `night` | `snow`（在写出 albedo 前处理 RGB）。 */
+  std::wstring obj_visual_effect = L"none";
+  /** `snow` 时雪花/颗粒尺度（越大斑块越大）；范围约 0.25–8。 */
+  double obj_snow_scale = 1.0;
+  /** DEM 高程采样：`bilinear` | `nearest` | `cell_avg` | `average` | `dem_avg` | `median`（3×3）| `bicubic`。 */
+  std::wstring gis_dem_interp = L"bilinear";
+  /** 网格拓扑：`grid` | `tin`（同 grid）| `delaunay`（XY Delaunay，顶点 ≤8192 且非 cecf）。 */
+  std::wstring gis_mesh_topology = L"grid";
+  /**
+   * 单组 OBJ+贴图预算模式（超过则按 J 向条带拆成多组 `_partN` 文件）：
+   * `memory` — 估算 CPU 侧顶点/索引/纹理解码缓冲；
+   * `file` — 估算未压缩 OBJ 文本 + 纹理按字节/像素的乐观上界；
+   * `vram` — 估算典型 GPU 上传（顶点 + 纹理 mip≈1.33 倍）。
+   */
+  std::wstring model_budget_mode = L"memory";
+  /** 与 `model_budget_mode` 对应的限额（MB），默认 4096。 */
+  std::int64_t model_budget_mb = 4096;
+  /** GIS→模型：强制沿网格 J 向拆成 N 份（每份独立 OBJ+贴图）；与预算自动拆分取较大者。默认 1。 */
+  int gis_model_split_parts = 1;
 };
 
 bool ParseConvertArgs(int argc, wchar_t** argv, ConvertArgs* out);
@@ -43,6 +66,8 @@ void EnableRealtimeConsoleFlush();
 void PrintConvertCliHelpGrouped(std::wostream& os, bool chinese, const wchar_t* input_type_lines,
                                 const wchar_t* input_subtype_lines, const wchar_t* output_type_lines,
                                 const wchar_t* output_subtype_lines);
+/// 各工具在 --help 末尾追加：输入/输出路径形态与推荐扩展名（多行，行首建议两个空格缩进）。
+void PrintConvertCliIoSection(std::wostream& os, bool chinese, const wchar_t* lines);
 int ConvertGisToModel(const ConvertArgs& args);
 int ConvertGisToTile(const ConvertArgs& args);
 int ConvertModelToGis(const ConvertArgs& args);

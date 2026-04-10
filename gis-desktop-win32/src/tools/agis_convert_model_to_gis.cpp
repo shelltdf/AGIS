@@ -15,7 +15,8 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
 void PrintHelp() {
   const bool zh = IsChineseOsUi();
   if (zh) {
-    std::wcout << L"用法:\n"
+    std::wcout << L"简介：将三维网格或点云摘要回 GIS 侧数据（如要素 GeoJSON），便于在二维地图或矢量流程中引用模型范围与几何。\n\n"
+               << L"用法:\n"
                << L"  agis_convert_model_to_gis --input <path> --output <path> [options]\n\n"
                << L"必填参数:\n"
                << L"  --input <path>               输入模型路径\n"
@@ -37,8 +38,12 @@ void PrintHelp() {
                << L"  --mesh-spacing <1..1000000>\n"
                << L"  --texture-format <png|tif|tga|bmp|ktx2|ktx2-etc1s>\n"
                << L"  --raster-max-dim <0|64..16384>  (0=默认不降采样)\n";
+    PrintConvertCliIoSection(std::wcout, true,
+                             L"  --input：网格/点云模型路径；常见 .obj；点云可为 .las/.laz（视构建是否启用 LASzip）。\n"
+                             L"  --output：GIS 产物路径；本工具常见为矢量 .geojson，或按实现导出 .gis/.tif 等（以实际后端为准）。\n");
   } else {
-    std::wcout << L"Usage:\n"
+    std::wcout << L"About: Turn a mesh or point sample into GIS-friendly output (e.g. GeoJSON features) for 2D maps and downstream geoprocessing.\n\n"
+               << L"Usage:\n"
                << L"  agis_convert_model_to_gis --input <path> --output <path> [options]\n\n"
                << L"Required:\n"
                << L"  --input <path>               Input model path\n"
@@ -60,6 +65,9 @@ void PrintHelp() {
                << L"  --mesh-spacing <1..1000000>\n"
                << L"  --texture-format <png|tif|tga|bmp|ktx2|ktx2-etc1s>\n"
                << L"  --raster-max-dim <0|64..16384>  (0=native default)\n";
+    PrintConvertCliIoSection(std::wcout, false,
+                             L"  --input: model path; commonly .obj; point cloud .las/.laz if supported by build.\n"
+                             L"  --output: GIS path; often .geojson vector export (see backend for .gis/.tif, etc.).\n");
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

@@ -577,8 +577,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
     UiGdiplusShutdown();
     return 1;
   }
-  (void)cmdShow;
-  ShowWindow(hwnd, SW_MAXIMIZE);
+  AgisCenterWindowInMonitorWorkArea(hwnd, nullptr);
+  ShowWindow(hwnd, cmdShow);
   UpdateWindow(hwnd);
   MSG msg{};
   while (GetMessageW(&msg, nullptr, 0, 0)) {

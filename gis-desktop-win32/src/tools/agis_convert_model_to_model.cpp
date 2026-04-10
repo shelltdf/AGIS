@@ -15,7 +15,8 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
 void PrintHelp() {
   const bool zh = IsChineseOsUi();
   if (zh) {
-    std::wcout << L"用法:\n"
+    std::wcout << L"简介：在三角网格（OBJ）与 LAS/LAZ 点云之间互转；网格→点云时按 UV 在贴图像素上采样颜色，与 `--mesh-spacing` 控制密度。\n\n"
+               << L"用法:\n"
                << L"  agis_convert_model_to_model --input <path> --output <path> [options]\n\n"
                << L"必填参数:\n"
                << L"  --input <path>               输入模型路径（OBJ/LAS）\n"
@@ -39,8 +40,12 @@ void PrintHelp() {
                << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n\n"
                << L"示例:\n"
                << L"  agis_convert_model_to_model --input in.obj --output out.las --input-subtype 3dmesh --output-subtype pointcloud\n";
+    PrintConvertCliIoSection(std::wcout, true,
+                             L"  --input / --output：由子类型决定容器；网格多为 .obj；点云为 .las 或 .laz（需构建编入 LASzip 才写出真 LAZ）。\n"
+                             L"  tin/dem/3dmesh 等标签描述语义，**真正格式**由路径扩展名与 pointcloud 等子类型共同决定。\n");
   } else {
-    std::wcout << L"Usage:\n"
+    std::wcout << L"About: Convert between Wavefront OBJ meshes and LAS/LAZ point clouds; mesh→cloud samples texture pixels through UVs, density from `--mesh-spacing`.\n\n"
+               << L"Usage:\n"
                << L"  agis_convert_model_to_model --input <path> --output <path> [options]\n\n"
                << L"Required:\n"
                << L"  --input <path>               Input model path (OBJ/LAS)\n"
@@ -64,6 +69,9 @@ void PrintHelp() {
                << L"  --raster-max-dim <int>       0=native (default); 64..16384=cap\n\n"
                << L"Example:\n"
                << L"  agis_convert_model_to_model --input in.obj --output out.las --input-subtype 3dmesh --output-subtype pointcloud\n";
+    PrintConvertCliIoSection(std::wcout, false,
+                             L"  --input / --output: container depends on subtype; mesh usually .obj; point cloud .las/.laz (real LAZ needs LASzip in build).\n"
+                             L"  tin/dem/3dmesh labels are semantic; actual format follows extension + pointcloud vs mesh subtype.\n");
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

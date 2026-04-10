@@ -15,7 +15,8 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
 void PrintHelp() {
   const bool zh = IsChineseOsUi();
   if (zh) {
-    std::wcout << L"用法:\n"
+    std::wcout << L"简介：把 GIS 工程或栅格裁成 Web Mercator 等瓦片金字塔，输出 XYZ/TMS/WMTS 目录、MBTiles、GeoPackage 或 3D Tiles 等，用于发布或离线浏览。\n\n"
+               << L"用法:\n"
                << L"  agis_convert_gis_to_tile --input <path> --output <dir|file> [options]\n\n"
                << L"  --output 形态取决于 --output-subtype：xyz/tms/wmts/3dtiles 为目录；mbtiles、gpkg 为单文件路径。\n\n"
                << L"必填参数:\n"
@@ -40,8 +41,12 @@ void PrintHelp() {
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s（默认 png；KTX2 需 basis_universal）\n"
                << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限控内存\n"
                << L"  --tile-levels <auto|1..23>   瓦片层数（默认 auto）\n";
+    PrintConvertCliIoSection(std::wcout, true,
+                             L"  --input：同 gis_to_model（.gis 或栅格/矢量路径）。\n"
+                             L"  --output：xyz/tms/wmts/3dtiles 为**目录**（内含 tileset.json、{z}/{x}/{y}.png 等）；mbtiles→*.mbtiles；gpkg→*.gpkg。\n");
   } else {
-    std::wcout << L"Usage:\n"
+    std::wcout << L"About: Slice GIS/raster into a Web Mercator (etc.) tile pyramid as XYZ/TMS/WMTS folders, MBTiles, GPKG, or 3D Tiles for serving or offline use.\n\n"
+               << L"Usage:\n"
                << L"  agis_convert_gis_to_tile --input <path> --output <dir|file> [options]\n\n"
                << L"  --output is a directory for xyz/tms/wmts/3dtiles, or a single file for mbtiles/gpkg.\n\n"
                << L"Required:\n"
@@ -66,6 +71,9 @@ void PrintHelp() {
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s (default: png; KTX2 needs basis_universal)\n"
                << L"  --raster-max-dim <int>       0=native full read (default); 64..16384=cap long side\n"
                << L"  --tile-levels <auto|1..23>   tile levels (default: auto)\n";
+    PrintConvertCliIoSection(std::wcout, false,
+                             L"  --input: same as gis_to_model (.gis or raster/vector paths).\n"
+                             L"  --output: xyz/tms/wmts/3dtiles = **directory** (tileset.json, z/x/y.png, ...); mbtiles = *.mbtiles; gpkg = *.gpkg.\n");
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

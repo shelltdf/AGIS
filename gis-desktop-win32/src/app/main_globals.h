@@ -53,3 +53,6 @@ extern const wchar_t kLogClass[];
 extern const wchar_t kConvertClass[];
 extern const wchar_t kModelPreviewClass[];
 extern const wchar_t kTilePreviewClass[];
+
+/// 将窗口移到 `refForMonitor` 所在显示器工作区内居中（ref 可为 nullptr，则用 hwnd 定显示器）。
+void AgisCenterWindowInMonitorWorkArea(HWND hwnd, HWND refForMonitor);

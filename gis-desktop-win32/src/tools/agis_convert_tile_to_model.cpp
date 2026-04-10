@@ -15,7 +15,8 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
 void PrintHelp() {
   const bool zh = IsChineseOsUi();
   if (zh) {
-    std::wcout << L"用法:\n"
+    std::wcout << L"简介：将影像瓦片拼成带纹理的规则网格 Wavefront OBJ（及 MTL），便于在 AGIS 或其它工具中做三维预览与再导出。\n\n"
+               << L"用法:\n"
                << L"  agis_convert_tile_to_model --input <dir|file> --output <path> [options]\n\n"
                << L"  --input：目录或单文件规则同 tile_to_gis。\n\n"
                << L"必填参数:\n"
@@ -40,8 +41,12 @@ void PrintHelp() {
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s（默认 png；KTX2 需 basis_universal）\n"
                << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n"
                << L"  --tile-max-memory-mb <int>   合并内存上限MB，64..131072（默认 512）\n";
+    PrintConvertCliIoSection(std::wcout, true,
+                             L"  --input：瓦片目录或 .mbtiles/.gpkg。\n"
+                             L"  --output：与 gis_to_model 相同，**仅 OBJ**（+.mtl+贴图）；不会因子类型写出 LAS/LAZ。\n");
   } else {
-    std::wcout << L"Usage:\n"
+    std::wcout << L"About: Stitch image tiles into a textured regular-grid Wavefront OBJ (+MTL) for 3D preview and further conversion.\n\n"
+               << L"Usage:\n"
                << L"  agis_convert_tile_to_model --input <dir|file> --output <path> [options]\n\n"
                << L"  --input: same directory vs file rules as tile_to_gis.\n\n"
                << L"Required:\n"
@@ -66,6 +71,9 @@ void PrintHelp() {
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s (default: png; KTX2 needs basis_universal)\n"
                << L"  --raster-max-dim <int>       0=native (default); 64..16384=cap\n"
                << L"  --tile-max-memory-mb <int>   merge memory cap in MB, 64..131072 (default: 512)\n";
+    PrintConvertCliIoSection(std::wcout, false,
+                             L"  --input: tile directory or .mbtiles/.gpkg.\n"
+                             L"  --output: OBJ only (+.mtl+texture), same as gis_to_model; no LAS/LAZ from this tool.\n");
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

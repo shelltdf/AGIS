@@ -1,5 +1,28 @@
 #include "main_globals.h"
 
+void AgisCenterWindowInMonitorWorkArea(HWND hwnd, HWND refForMonitor) {
+  if (!hwnd || !IsWindow(hwnd)) {
+    return;
+  }
+  RECT wr{};
+  if (!GetWindowRect(hwnd, &wr)) {
+    return;
+  }
+  const int ww = wr.right - wr.left;
+  const int wh = wr.bottom - wr.top;
+  HWND ref = (refForMonitor && IsWindow(refForMonitor)) ? refForMonitor : hwnd;
+  const HMONITOR mon = MonitorFromWindow(ref, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(mi);
+  if (!GetMonitorInfoW(mon, &mi)) {
+    return;
+  }
+  const RECT& wa = mi.rcWork;
+  const int x = wa.left + (wa.right - wa.left - ww) / 2;
+  const int y = wa.top + (wa.bottom - wa.top - wh) / 2;
+  SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 HWND g_hwndMain = nullptr;
 HWND g_hwndToolbar = nullptr;
 HWND g_hwndLayerStrip = nullptr;

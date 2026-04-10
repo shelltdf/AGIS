@@ -15,7 +15,8 @@ bool IsHelpRequestedLocal(int argc, wchar_t** argv) {
 void PrintHelp() {
   const bool zh = IsChineseOsUi();
   if (zh) {
-    std::wcout << L"用法:\n"
+    std::wcout << L"简介：从已落盘的瓦片目录或 MBTiles/GPKG 容器拼接、重投影并写出 GIS 栅格（如 GeoTIFF），用于归档或离线分析。\n\n"
+               << L"用法:\n"
                << L"  agis_convert_tile_to_gis --input <dir|file> --output <path> [options]\n\n"
                << L"  --input：xyz/tms/wmts/3dtiles 多为瓦片根目录；mbtiles、gpkg 为单文件。\n\n"
                << L"必填参数:\n"
@@ -39,8 +40,12 @@ void PrintHelp() {
                << L"  --mesh-spacing <int>         1..1000000（默认 1）\n"
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s（默认 png；KTX2 需 basis_universal）\n"
                << L"  --raster-max-dim <int>       0=源图全分辨率（默认）；64..16384=长边上限\n";
+    PrintConvertCliIoSection(std::wcout, true,
+                             L"  --input：瓦片根目录（xyz/tms/…）或单文件 .mbtiles / .gpkg。\n"
+                             L"  --output：GIS 路径；常见 .tif/.tiff（影像/栅格）或 .geojson 等，以后端实现为准。\n");
   } else {
-    std::wcout << L"Usage:\n"
+    std::wcout << L"About: Mosaic tiles from a folder or MBTiles/GPKG into a GIS raster (e.g. GeoTIFF) for archiving or analysis.\n\n"
+               << L"Usage:\n"
                << L"  agis_convert_tile_to_gis --input <dir|file> --output <path> [options]\n\n"
                << L"  --input: directory for xyz/tms/wmts/3dtiles; file for mbtiles/gpkg.\n\n"
                << L"Required:\n"
@@ -64,6 +69,9 @@ void PrintHelp() {
                << L"  --mesh-spacing <int>         1..1000000 (default: 1)\n"
                << L"  --texture-format <v>         png | tif | tga | bmp | ktx2 | ktx2-etc1s (default: png; KTX2 needs basis_universal)\n"
                << L"  --raster-max-dim <int>       0=native (default); 64..16384=cap\n";
+    PrintConvertCliIoSection(std::wcout, false,
+                             L"  --input: tile root directory or .mbtiles / .gpkg.\n"
+                             L"  --output: GIS path; often .tif/.tiff or .geojson (backend-dependent).\n");
   }
 }
 int RunDirect(const wchar_t* title, const ConvertArgs& args) {

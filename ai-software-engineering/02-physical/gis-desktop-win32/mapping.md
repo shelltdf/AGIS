@@ -24,9 +24,9 @@
 | 模型预览旧版 OpenGL（`#if !AGIS_USE_BGFX`，正式构建不启用） | `gis-desktop-win32/src/app/preview/main_model_preview.cpp` → `InitPreviewGl`、`DrawModelPreviewOpenGL` |
 | 模型预览旧版 DX11（同上） | `gis-desktop-win32/src/app/preview/main_model_preview.cpp` → `InitPreviewDx`、`DrawModelPreviewDx11` |
 | OBJ/MTL 解析 | `gis-desktop-win32/src/app/preview/main_model_preview.cpp` → `ParseObjModel`、`ParseMtlMaterials` |
-| 转换后端公共库 | `gis-desktop-win32/src/tools/convert_backend_common.cpp/.h` |
+| 转换后端公共库 | `gis-desktop-win32/src/tools/convert_backend_common.cpp/.h` → `PrintConvertCliHelpGrouped`、`PrintConvertCliIoSection`、`ConvertGisToModel` 等 |
 | KTX2 / Basis 编码（可选 `AGIS_HAVE_BASISU`） | `gis-desktop-win32/src/tools/ktx2_basis_encode.cpp/.h`、`cmake/AGISBundledBasisUniversal.cmake`、`3rdparty/basis_universal`（ZIP 安置，见 `3rdparty/README-BASIS-KTX2.md`） |
-| 六个转换命令行工具入口 | `gis-desktop-win32/src/tools/agis_convert_*.cpp` |
+| 七个转换命令行工具入口 | `gis-desktop-win32/src/tools/agis_convert_*.cpp` |
 | 菜单资源 ID | `gis-desktop-win32/src/app/resource.h` 与代码中 `#define` 一致 |
 | CMake 目标 | `gis-desktop-win32/CMakeLists.txt` → `add_executable(agis_desktop ...)` |
 
