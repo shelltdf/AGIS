@@ -21,6 +21,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #if !AGIS_USE_BGFX
 #include <GL/gl.h>
@@ -149,6 +150,7 @@ struct ModelPreviewState {
 };
 
 constexpr UINT kPreviewLoadedMsg = WM_APP + 201;
+constexpr UINT kPreviewRequestOpenMsg = WM_APP + 202;
 struct PreviewLoadCtx {
   HWND hwnd = nullptr;
   ModelPreviewState* st = nullptr;
@@ -836,50 +838,6 @@ AgisBgfxPbrTexturePaths BuildPbrTexturePaths(const ModelPreviewState& st) {
   return out;
 }
 
-struct PreviewHudButton {
-  RECT rc{};
-  const wchar_t* label = L"";
-  WPARAM key = 0;
-};
-
-std::vector<PreviewHudButton> BuildPreviewHudButtons(const RECT& vrc) {
-  std::vector<PreviewHudButton> out;
-  const int x0 = vrc.left + 10;
-  const int y0 = vrc.top + 112;
-  const int h = 24;
-  const int gap = 6;
-  int x = x0;
-  auto push = [&](const wchar_t* label, WPARAM key, int w) {
-    PreviewHudButton b{};
-    b.rc = RECT{x, y0, x + w, y0 + h};
-    b.label = label;
-    b.key = key;
-    out.push_back(b);
-    x += w + gap;
-  };
-  push(L"M", 'M', 26);
-  push(L"Cull", 'B', 46);
-  push(L"Grid", 'G', 44);
-  push(L"Tex", 'T', 40);
-  push(L"PBR", 'P', 42);
-  push(L"[", VK_OEM_4, 24);
-  push(L"]", VK_OEM_6, 24);
-  push(L"Fit", 'F', 36);
-  push(L"Reset", 'R', 48);
-  return out;
-}
-
-bool DispatchPreviewHudClick(HWND hwnd, const RECT& vrc, const POINT& pt) {
-  const auto buttons = BuildPreviewHudButtons(vrc);
-  for (const auto& b : buttons) {
-    if (PtInRect(&b.rc, pt)) {
-      PostMessageW(hwnd, WM_KEYDOWN, b.key, 0);
-      return true;
-    }
-  }
-  return false;
-}
-
 void DrawAxisOverlay(HDC hdc, const RECT& vrc, const ModelPreviewState& st) {
   const int ox = vrc.left + 28;
   const int oy = vrc.bottom - 28;
@@ -945,77 +903,6 @@ void DrawAxisImGuiOverlay(const RECT& vrc, float rotX, float rotY) {
 }
 }  // namespace
 #endif
-
-void DrawRuntimeHud(HDC hdc, const RECT& vrc, const ModelPreviewState& st) {
-  const RECT panel{vrc.left + 10, vrc.top + 10, vrc.left + 560, vrc.top + 108};
-  HBRUSH bg = CreateSolidBrush(RGB(250, 250, 250));
-  FillRect(hdc, &panel, bg);
-  DeleteObject(bg);
-  FrameRect(hdc, &panel, reinterpret_cast<HBRUSH>(GetStockObject(GRAY_BRUSH)));
-  SetBkMode(hdc, TRANSPARENT);
-  SetTextColor(hdc, RGB(32, 42, 64));
-  const std::wstring spark = BuildFrameMsSparkline(st);
-  wchar_t line1[320]{};
-  swprintf_s(line1, L"FPS %.1f | 帧时 %.2f ms | 瓶颈 %s", st.fps, st.lastFrameMs, st.runtimeBottleneck.c_str());
-  TextOutW(hdc, panel.left + 8, panel.top + 6, line1, static_cast<int>(wcslen(line1)));
-  wchar_t line2[320]{};
-  swprintf_s(line2, L"曲线 %s", spark.c_str());
-  TextOutW(hdc, panel.left + 8, panel.top + 30, line2, static_cast<int>(wcslen(line2)));
-  const wchar_t* rendererText = L"D3D11";
-#if AGIS_USE_BGFX
-  rendererText = st.bgfxRenderer == AgisBgfxRendererKind::kOpenGL ? L"OpenGL" : L"D3D11";
-#else
-  rendererText = st.backend == PreviewRenderBackend::kOpenGL ? L"OpenGL" : L"D3D11";
-#endif
-  const wchar_t* texLayer = L"(none)";
-  if (st.currentTextureLayer >= 0 && st.currentTextureLayer < static_cast<int>(st.textureLayers.size())) {
-    texLayer = st.textureLayers[st.currentTextureLayer].first.c_str();
-  }
-  const wchar_t* pbrViewText = L"PBRLit";
-  switch (st.pbrViewMode) {
-    case AgisBgfxPbrViewMode::kAlbedo: pbrViewText = L"Albedo"; break;
-    case AgisBgfxPbrViewMode::kNormal: pbrViewText = L"Normal"; break;
-    case AgisBgfxPbrViewMode::kRoughness: pbrViewText = L"Roughness"; break;
-    case AgisBgfxPbrViewMode::kMetallic: pbrViewText = L"Metallic"; break;
-    case AgisBgfxPbrViewMode::kAo: pbrViewText = L"AO"; break;
-    case AgisBgfxPbrViewMode::kPbrLit:
-    default: break;
-  }
-  wchar_t line3[640]{};
-  swprintf_s(line3, L"Renderer:%s | Solid:%s | Cull:%s | Grid:%s | Texture:%s | Render:%s | Layer:%s", rendererText,
-             st.solid ? L"on" : L"off", st.backfaceCulling ? L"on" : L"off", st.showGrid ? L"on" : L"off",
-             st.useTexture ? L"on" : L"off", pbrViewText, texLayer);
-  TextOutW(hdc, panel.left + 8, panel.top + 54, line3, static_cast<int>(wcslen(line3)));
-  const int vh = (std::max)(1L, vrc.bottom - vrc.top);
-  const float unitsPerPx = (2.0f / (std::max)(0.05f, st.zoom)) / static_cast<float>((std::max)(1, vh));
-  const float scale100 = unitsPerPx * 100.0f;
-  wchar_t line4[320]{};
-  swprintf_s(line4, L"缩放倍数: x%.2f | 比例尺: 100px≈%.4f 模型单位 | 网格总长: 2.0 模型单位", st.zoom, scale100);
-  TextOutW(hdc, panel.left + 8, panel.top + 78, line4, static_cast<int>(wcslen(line4)));
-  const auto buttons = BuildPreviewHudButtons(vrc);
-  HBRUSH bbg = CreateSolidBrush(RGB(236, 242, 250));
-  HBRUSH bOn = CreateSolidBrush(RGB(208, 228, 255));
-  HBRUSH oldBrush = reinterpret_cast<HBRUSH>(SelectObject(hdc, bbg));
-  HPEN border = CreatePen(PS_SOLID, 1, RGB(120, 138, 168));
-  HPEN oldPen = reinterpret_cast<HPEN>(SelectObject(hdc, border));
-  SetTextColor(hdc, RGB(28, 40, 62));
-  SetBkMode(hdc, TRANSPARENT);
-  for (const auto& b : buttons) {
-    bool on = false;
-    if (b.key == 'G') on = st.showGrid;
-    if (b.key == 'T') on = st.useTexture;
-    if (b.key == 'P') on = st.pseudoPbrMode;
-    if (b.key == 'B') on = st.backfaceCulling;
-    FillRect(hdc, &b.rc, on ? bOn : bbg);
-    Rectangle(hdc, b.rc.left, b.rc.top, b.rc.right, b.rc.bottom);
-    TextOutW(hdc, b.rc.left + 6, b.rc.top + 5, b.label, static_cast<int>(wcslen(b.label)));
-  }
-  SelectObject(hdc, oldPen);
-  DeleteObject(border);
-  SelectObject(hdc, oldBrush);
-  DeleteObject(bOn);
-  DeleteObject(bbg);
-}
 
 #if !AGIS_USE_BGFX
 template <typename T>
@@ -1929,6 +1816,95 @@ void FitPreviewCamera(ModelPreviewState* st) {
   st->zoom = 2.8f;
 }
 
+// 前置声明：供“打开模型并异步重载”辅助函数使用。
+static void ShowPreviewCopyableMessage(HWND owner, const wchar_t* title, const wchar_t* body);
+DWORD WINAPI PreviewLoadThreadProc(LPVOID param);
+
+static bool PromptOpenModelPreviewPath(HWND owner, std::wstring* pathOut, bool* as3dTilesOut) {
+  if (!pathOut || !as3dTilesOut) return false;
+  wchar_t fileBuf[32768]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = owner;
+  ofn.lpstrFile = fileBuf;
+  ofn.nMaxFile = static_cast<DWORD>(std::size(fileBuf));
+  ofn.lpstrFilter =
+      L"模型/点云/3D Tiles\0*.obj;*.las;*.laz;*.json\0"
+      L"OBJ 模型 (*.obj)\0*.obj\0"
+      L"LAS/LAZ 点云 (*.las;*.laz)\0*.las;*.laz\0"
+      L"3D Tiles JSON (*.json)\0*.json\0"
+      L"所有文件 (*.*)\0*.*\0\0";
+  ofn.nFilterIndex = 1;
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_HIDEREADONLY;
+  if (!GetOpenFileNameW(&ofn)) return false;
+
+  std::filesystem::path p(fileBuf);
+  std::wstring ext = p.extension().wstring();
+  for (auto& ch : ext) ch = static_cast<wchar_t>(std::towlower(ch));
+  std::wstring filename = p.filename().wstring();
+  for (auto& ch : filename) ch = static_cast<wchar_t>(std::towlower(ch));
+
+  *pathOut = fileBuf;
+  *as3dTilesOut = (ext == L".json") || (filename == L"tileset.json");
+  return true;
+}
+
+static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const std::wstring& path, bool as3dTiles) {
+  if (!st) return false;
+  // 允许首次启动时进入（构造态 loading 可能为 true），仅阻止已有活动线程时重复触发。
+  if (st->loading && st->loadThread) return false;
+  if (st->loadThread) {
+    WaitForSingleObject(st->loadThread, 5000);
+    CloseHandle(st->loadThread);
+    st->loadThread = nullptr;
+  }
+#if AGIS_USE_BGFX
+  if (st->imguiReady) {
+    imguiDestroy();
+    st->imguiReady = false;
+  }
+  if (st->bgfxCtx) {
+    agis_bgfx_preview_shutdown(hwnd, st->bgfxCtx);
+    st->bgfxCtx = nullptr;
+  }
+#endif
+  st->path = path;
+  st->loadAs3DTiles = as3dTiles;
+  st->sourceIs3DTiles = false;
+  st->loadFailed = false;
+  st->loading = true;
+  st->loadProgress = 0;
+  st->loadStage = 0;
+  st->model = ObjPreviewModel{};
+  st->loadedModel = ObjPreviewModel{};
+  st->stats = ObjPreviewStats{};
+  st->loadedStats = ObjPreviewStats{};
+  st->textureLayers.clear();
+  st->currentTextureLayer = 0;
+  st->lasSourcePointCount = 0;
+  st->lasPointCache.clear();
+  st->lazPreviewDiag.clear();
+  st->tilesLoadDiag.clear();
+  st->infoPanelText = path.empty() ? L"空场景（未传入模型路径）" : L"模型正在后台加载，请稍候...";
+
+  auto* loadCtx = new (std::nothrow) PreviewLoadCtx{hwnd, st};
+  if (!loadCtx) {
+    st->loading = false;
+    ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法启动模型后台加载。");
+    return false;
+  }
+  st->loadThread = CreateThread(nullptr, 0, PreviewLoadThreadProc, loadCtx, 0, nullptr);
+  if (!st->loadThread) {
+    delete loadCtx;
+    st->loading = false;
+    ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法启动模型加载线程。");
+    return false;
+  }
+  RECT vrc = GetPreviewViewportRect(hwnd);
+  InvalidateRect(hwnd, &vrc, FALSE);
+  return true;
+}
+
 DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   auto* ctx = reinterpret_cast<PreviewLoadCtx*>(param);
   if (!ctx || !ctx->st) return 1;
@@ -2281,15 +2257,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       FitPreviewCamera(st);
       SetFocus(hwnd);
       SetTimer(hwnd, 1, 33, nullptr);
-      auto* loadCtx = new (std::nothrow) PreviewLoadCtx{hwnd, st};
-      if (!loadCtx) {
-        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法启动模型后台加载。");
-        return -1;
-      }
-      st->loadThread = CreateThread(nullptr, 0, PreviewLoadThreadProc, loadCtx, 0, nullptr);
-      if (!st->loadThread) {
-        delete loadCtx;
-        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法启动模型加载线程。");
+      if (!StartModelPreviewAsyncLoad(hwnd, st, st->path, st->loadAs3DTiles)) {
         return -1;
       }
       return 0;
@@ -2403,6 +2371,9 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           st->rotY = 0.0f;
           st->zoom = 2.2f;
           break;
+        case 'O':
+          PostMessageW(hwnd, kPreviewRequestOpenMsg, 0, 0);
+          break;
         case VK_OEM_4:  // [
         case VK_OEM_6:  // ]
           if (!st->textureLayers.empty()) {
@@ -2508,16 +2479,10 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       st->loadStage = 4;
       st->infoPanelText = BuildModelPreviewInfoText(*st);
 #if AGIS_USE_BGFX
-      const bool hasRenderableMesh = !st->model.vertices.empty() && !st->model.faces.empty();
-      if (hasRenderableMesh) {
-        if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model)) {
-          ShowPreviewCopyableMessage(hwnd, L"模型预览",
-                                     L"3D 预览初始化失败：bgfx 或网格数据无效（请确认 OBJ/点云网格有效）。");
-          DestroyWindow(hwnd);
-          return 0;
-        }
-      } else {
-        st->bgfxCtx = nullptr;
+      if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model)) {
+        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"3D 预览初始化失败：bgfx 上下文初始化失败。");
+        DestroyWindow(hwnd);
+        return 0;
       }
       if (st->bgfxCtx && !st->textureLayers.empty()) {
         agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[0].second);
@@ -2531,6 +2496,16 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       }
 #endif
       InvalidateRect(hwnd, nullptr, FALSE);
+      return 0;
+    }
+    case kPreviewRequestOpenMsg: {
+      auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      if (!st || st->loading) return 0;
+      std::wstring path;
+      bool as3dTiles = false;
+      if (PromptOpenModelPreviewPath(hwnd, &path, &as3dTiles)) {
+        StartModelPreviewAsyncLoad(hwnd, st, path, as3dTiles);
+      }
       return 0;
     }
     case WM_TIMER:
@@ -2551,9 +2526,6 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       RECT vrc = GetPreviewViewportRect(hwnd);
       const POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
       if (PtInRect(&vrc, pt)) {
-        if (DispatchPreviewHudClick(hwnd, vrc, pt)) {
-          return 0;
-        }
         if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
           st->dragging = true;
           st->lastPt = pt;
@@ -2781,6 +2753,9 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             st->rotY = 0.0f;
             st->zoom = 2.2f;
           }
+          if (ImGui::Button("Open Model...")) {
+            PostMessageW(hwnd, kPreviewRequestOpenMsg, 0, 0);
+          }
           const int vhud = (std::max)(1, vh);
           const float unitsPerPxHud = (2.0f / (std::max)(0.05f, st->zoom)) / static_cast<float>(vhud);
           ImGui::Text("FPS %.1f | Frame %.2f ms", st->fps, st->lastFrameMs);
@@ -2876,9 +2851,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 #else
         DrawAxisOverlay(hdc, vrc, *st);
 #endif
-        if (!st->imguiReady) {
-          DrawRuntimeHud(hdc, vrc, *st);
-        }
+        // 后备 HUD 已禁用：不再绘制 GDI 顶部控制面板。
         st->inPaint = false;
       }
       FrameRect(hdc, &vrc, reinterpret_cast<HBRUSH>(GetStockObject(GRAY_BRUSH)));
@@ -3533,7 +3506,6 @@ struct TilePreviewState {
   std::wstring samplePath;
   std::wstring hint;
   std::wstring bvHint;
-  HWND hintEdit = nullptr;
   std::unique_ptr<Gdiplus::Bitmap> bmp;
   Mode mode = Mode::kSingleRaster;
   std::unordered_map<uint64_t, std::wstring> slippyPaths;
@@ -3552,6 +3524,7 @@ struct TilePreviewState {
 };
 
 static constexpr size_t kTilePreviewBitmapCacheMax = 160;
+static constexpr UINT kTilePreviewRequestOpenMsg = WM_APP + 301;
 
 static std::wstring g_pendingTilePreviewRoot;
 
@@ -3651,28 +3624,117 @@ static void TileZoomSlippy(TilePreviewState* st, RECT clientCr, const POINT* cur
   TilePruneBitmapCacheNotAtZ(st, newZ);
 }
 
-static void TilePreviewLayoutHintEdit(HWND hwnd, TilePreviewState* st) {
-  if (!st || !st->hintEdit || !IsWindow(st->hintEdit)) {
-    return;
-  }
-  RECT cr{};
-  GetClientRect(hwnd, &cr);
-  const int hintH = (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) ? 240 : 100;
-  MoveWindow(st->hintEdit, 12, 10, (std::max)(40, static_cast<int>(cr.right) - 24), hintH, TRUE);
+static RECT TileOpenButtonRect(RECT cr) {
+  return RECT{cr.left + 12, cr.top + 10, cr.left + 92, cr.top + 34};
 }
 
-static void TilePreviewCreateHintEdit(HWND hwnd, TilePreviewState* st) {
-  if (!st || st->hintEdit) {
-    return;
+static bool PromptOpenTilePreviewPath(HWND owner, std::wstring* pathOut) {
+  if (!pathOut) return false;
+  wchar_t fileBuf[32768]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = owner;
+  ofn.lpstrFile = fileBuf;
+  ofn.nMaxFile = static_cast<DWORD>(std::size(fileBuf));
+  ofn.lpstrFilter =
+      L"瓦片/栅格/容器\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.mbtiles;*.gpkg;*.json\0"
+      L"3D Tiles JSON (*.json)\0*.json\0"
+      L"栅格图像 (*.png;*.jpg;*.jpeg;*.webp;*.bmp)\0*.png;*.jpg;*.jpeg;*.webp;*.bmp\0"
+      L"瓦片容器 (*.mbtiles;*.gpkg)\0*.mbtiles;*.gpkg\0"
+      L"所有文件 (*.*)\0*.*\0\0";
+  ofn.nFilterIndex = 1;
+  ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_HIDEREADONLY;
+  if (!GetOpenFileNameW(&ofn)) return false;
+  *pathOut = fileBuf;
+  return true;
+}
+
+static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::wstring& path) {
+  if (!st) return;
+  st->rootPath = path;
+  st->samplePath.clear();
+  st->hint.clear();
+  st->bvHint.clear();
+  st->bmp.reset();
+  st->mode = TilePreviewState::Mode::kSingleRaster;
+  st->slippyPaths.clear();
+  st->tileTexLru.clear();
+  st->tileTexCache.clear();
+  st->indexMaxZ = 0;
+  st->tileCount = 0;
+  st->viewZ = 0;
+  st->centerTx = 0.5;
+  st->centerTy = 0.5;
+  st->pixelsPerTile = 256.f;
+  st->dragging = false;
+
+  std::error_code ecPath;
+  const std::filesystem::path rootFs(st->rootPath);
+#if GIS_DESKTOP_HAVE_GDAL
+  if (std::filesystem::is_regular_file(rootFs, ecPath)) {
+    const std::wstring ext = rootFs.extension().wstring();
+    if (_wcsicmp(ext.c_str(), L".mbtiles") == 0 || _wcsicmp(ext.c_str(), L".gpkg") == 0) {
+      std::wstring gdalDiag;
+      if (auto bm = TryLoadGdalRasterTileContainerPreview(st->rootPath, &gdalDiag)) {
+        st->bmp = std::move(bm);
+        st->mode = TilePreviewState::Mode::kSingleRaster;
+        std::wostringstream hs;
+        hs << L"【MBTiles / GeoPackage】GDAL 栅格缩略预览（全球拼图下采样至 <=2048px）。\n路径：\n"
+           << st->rootPath;
+        if (!gdalDiag.empty()) hs << L"\n" << gdalDiag;
+        st->hint = hs.str();
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+      }
+      st->hint = L"【MBTiles / GeoPackage】GDAL 预览失败：\n" + gdalDiag +
+                 L"\n请检查 GDAL/PROJ/gdal_data 配置，或导出 XYZ 目录后再预览。";
+      InvalidateRect(hwnd, nullptr, FALSE);
+      return;
+    }
   }
-  st->hintEdit = CreateWindowExW(
-      WS_EX_CLIENTEDGE, L"EDIT", st->hint.c_str(),
-      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL, 0, 0, 10,
-      10, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-  if (st->hintEdit && UiGetAppFont()) {
-    SendMessageW(st->hintEdit, WM_SETFONT, reinterpret_cast<WPARAM>(UiGetAppFont()), TRUE);
+#endif
+
+  const std::optional<std::wstring> tilesetPathOpt = FindTilesetJsonPath(st->rootPath);
+  std::wstring bvForTileset;
+  if (tilesetPathOpt.has_value()) {
+    bvForTileset = RoughTilesetBvHintForFile(*tilesetPathOpt);
   }
-  TilePreviewLayoutHintEdit(hwnd, st);
+  st->bvHint = bvForTileset;
+  bool tmsFlip = false;
+  if (std::filesystem::is_directory(rootFs, ecPath)) {
+    tmsFlip = DetectTmsTileLayoutOnDisk(rootFs);
+  }
+  st->tileCount = IndexSlippyQuadtree(st->rootPath, tmsFlip, &st->slippyPaths, &st->indexMaxZ);
+  if (st->tileCount >= 1) {
+    st->mode = TilePreviewState::Mode::kSlippyQuadtree;
+    st->viewZ = (std::min)(st->indexMaxZ, 6);
+    const double sz = double(1u << st->viewZ);
+    st->centerTx = sz * 0.5;
+    st->centerTy = sz * 0.5;
+    std::wostringstream hs;
+    hs << L"【平面四叉树 / XYZ】已索引 " << st->tileCount << L" 个图块。拖拽平移，滚轮换级，Ctrl+滚轮改片元尺度。";
+    st->hint = hs.str();
+  } else if (tilesetPathOpt.has_value()) {
+    st->mode = TilePreviewState::Mode::kThreeDTilesMeta;
+    st->hint = BuildThreeDTilesDashboard(st->rootPath, *tilesetPathOpt, bvForTileset);
+  } else {
+    const TileFindResult found = FindSampleTileRaster(st->rootPath);
+    if (found.code == TileSampleResult::kContainerUnsupported) {
+      st->hint = L"单文件 MBTiles / GeoPackage 不能直接解码为交互瓦片。\n请系统默认打开或导出 XYZ 后预览。";
+    } else if (found.code == TileSampleResult::kOk && !found.path.empty()) {
+      st->samplePath = found.path;
+      auto loaded = std::make_unique<Gdiplus::Bitmap>(st->samplePath.c_str());
+      if (loaded && loaded->GetLastStatus() == Gdiplus::Ok) {
+        st->bmp = std::move(loaded);
+        st->hint = L"单图采样预览：\n" + st->samplePath;
+      } else {
+        st->hint = L"无法加载栅格文件：\n" + st->samplePath;
+      }
+    } else {
+      st->hint = L"未找到可预览的 PNG/JPG 栅格或 z/x/y 目录结构。";
+    }
+  }
+  InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 static void TilePaintSlippy(HDC hdc, RECT cr, TilePreviewState* st) {
@@ -3753,108 +3815,21 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       st->rootPath = g_pendingTilePreviewRoot;
       g_pendingTilePreviewRoot.clear();
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
-      std::error_code ecPath;
-      const std::filesystem::path rootFs(st->rootPath);
-#if GIS_DESKTOP_HAVE_GDAL
-      if (std::filesystem::is_regular_file(rootFs, ecPath)) {
-        const std::wstring ext = rootFs.extension().wstring();
-        if (_wcsicmp(ext.c_str(), L".mbtiles") == 0 || _wcsicmp(ext.c_str(), L".gpkg") == 0) {
-          std::wstring gdalDiag;
-          if (auto bm = TryLoadGdalRasterTileContainerPreview(st->rootPath, &gdalDiag)) {
-            st->bmp = std::move(bm);
-            st->mode = TilePreviewState::Mode::kSingleRaster;
-            std::wostringstream hs;
-            hs << L"【MBTiles / GeoPackage】GDAL 栅格缩略预览（全球拼图下采样至 ≤2048px，非 z/x/y 交互瓦片）。\n路径：\n"
-               << st->rootPath << L"\n\n纯矢量 GPKG 或无栅格层时会打开失败。";
-            if (!gdalDiag.empty()) {
-              hs << L"\n" << gdalDiag;
-            }
-            st->hint = hs.str();
-            TilePreviewCreateHintEdit(hwnd, st);
-            return 0;
-          }
-          st->hint = L"【MBTiles / GeoPackage】GDAL 预览失败：\n" + gdalDiag +
-                     L"\n\n请检查：构建已启用 GDAL、MBTiles/GPKG 驱动、PROJ 与 gdal_data；或「系统默认打开」/ 导出 XYZ 目录再预览。";
-          TilePreviewCreateHintEdit(hwnd, st);
-          return 0;
-        }
-      }
-#endif
-      const std::optional<std::wstring> tilesetPathOpt = FindTilesetJsonPath(st->rootPath);
-      std::wstring bvForTileset;
-      if (tilesetPathOpt.has_value()) {
-        bvForTileset = RoughTilesetBvHintForFile(*tilesetPathOpt);
-      }
-      st->bvHint = bvForTileset;
-      bool tmsFlip = false;
-      if (std::filesystem::is_directory(rootFs, ecPath)) {
-        tmsFlip = DetectTmsTileLayoutOnDisk(rootFs);
-      }
-      st->tileCount = IndexSlippyQuadtree(st->rootPath, tmsFlip, &st->slippyPaths, &st->indexMaxZ);
-      if (st->tileCount >= 1) {
-        st->mode = TilePreviewState::Mode::kSlippyQuadtree;
-        st->viewZ = (std::min)(st->indexMaxZ, 6);
-        if (st->viewZ < st->indexMaxZ && st->tileCount < 4) {
-          st->viewZ = st->indexMaxZ;
-        }
-        const double sz = double(1u << st->viewZ);
-        st->centerTx = sz * 0.5;
-        st->centerTy = sz * 0.5;
-        std::wostringstream hs;
-        hs << L"【平面四叉树 / XYZ 显示】已索引 " << st->tileCount << L" 个 z/x/y 图块（最多扫描 12000 文件）。\n";
-        if (tmsFlip) {
-          hs << L"已识别 TMS（存在 tms.xml 或 README 中 protocol=tms）：磁盘行号文件已按 XYZ（北在上）映射。\n";
-        } else {
-          hs << L"坐标系：与常见 XYZ 目录一致（行号 y 向南递增）。若仍颠倒，可能是非标准导出，可对照外部地图。\n";
-        }
-        if (!st->bvHint.empty()) {
-          hs << st->bvHint << L"\n";
-        }
-        st->hint = hs.str();
-      } else if (tilesetPathOpt.has_value()) {
-        st->mode = TilePreviewState::Mode::kThreeDTilesMeta;
-        st->hint = BuildThreeDTilesDashboard(st->rootPath, *tilesetPathOpt, bvForTileset);
-      } else {
-        const TileFindResult found = FindSampleTileRaster(st->rootPath);
-        if (found.code == TileSampleResult::kContainerUnsupported) {
-          st->hint = L"单文件 MBTiles / GeoPackage 无法用此窗口直接解码栅格图块。\n请使用「系统默认打开」，或先导出为含 "
-                     L"PNG/JPG 的 XYZ/TMS 目录后再预览。";
-        } else if (found.code == TileSampleResult::kOk && !found.path.empty()) {
-          st->samplePath = found.path;
-          auto loaded = std::make_unique<Gdiplus::Bitmap>(st->samplePath.c_str());
-          if (loaded && loaded->GetLastStatus() == Gdiplus::Ok) {
-            st->bmp = std::move(loaded);
-            std::wostringstream hs;
-            hs << L"单图采样（目录未识别 z/x/y 四叉结构）：\n" << st->samplePath;
-            if (!st->bvHint.empty()) {
-              hs << L"\n\n" << st->bvHint;
-            }
-            st->hint = hs.str();
-          } else {
-            st->hint = L"无法加载栅格文件：\n" + st->samplePath;
-          }
-        } else {
-          std::wostringstream hs;
-          hs << L"未在目录内找到 PNG/JPG 栅格（或未识别 z/x/y 路径）。\n";
-          if (!st->bvHint.empty()) {
-            hs << L"\n" << st->bvHint;
-          } else {
-            hs << L"\n3DTiles 请用 Cesium 或「系统默认打开」。";
-          }
-          st->hint = hs.str();
-        }
-      }
-      TilePreviewCreateHintEdit(hwnd, st);
+      TilePreviewLoadFromPath(hwnd, st, st->rootPath);
       return 0;
     }
-    case WM_SIZE: {
-      if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-        TilePreviewLayoutHintEdit(hwnd, st);
-      }
+    case WM_SIZE:
       return 0;
-    }
     case WM_LBUTTONDOWN: {
       if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+        RECT cr{};
+        GetClientRect(hwnd, &cr);
+        const POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        const RECT openRc = TileOpenButtonRect(cr);
+        if (PtInRect(&openRc, pt)) {
+          PostMessageW(hwnd, kTilePreviewRequestOpenMsg, 0, 0);
+          return 0;
+        }
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
           st->dragging = true;
           st->lastDragPt.x = GET_X_LPARAM(lParam);
@@ -3916,6 +3891,15 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       }
       break;
     }
+    case kTilePreviewRequestOpenMsg: {
+      auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      if (!st) return 0;
+      std::wstring path;
+      if (PromptOpenTilePreviewPath(hwnd, &path)) {
+        TilePreviewLoadFromPath(hwnd, st, path);
+      }
+      return 0;
+    }
     case WM_PAINT: {
       PAINTSTRUCT ps{};
       HDC hdcWnd = BeginPaint(hwnd, &ps);
@@ -3935,6 +3919,14 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(32, 42, 64));
+        RECT openRc = TileOpenButtonRect(cr);
+        HBRUSH btnBg = CreateSolidBrush(RGB(232, 240, 252));
+        FillRect(hdc, &openRc, btnBg);
+        DeleteObject(btnBg);
+        Rectangle(hdc, openRc.left, openRc.top, openRc.right, openRc.bottom);
+        DrawTextW(hdc, L"Open...", -1, &openRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        RECT hintRc{openRc.right + 10, 10, cr.right - 12, (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) ? 250 : 110};
+        DrawTextW(hdc, st->hint.c_str(), -1, &hintRc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
           TilePaintSlippy(hdc, cr, st);
         } else if (st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok) {

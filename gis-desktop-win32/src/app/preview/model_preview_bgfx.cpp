@@ -317,7 +317,8 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
   verts->clear();
   triIdx->clear();
   lineIdx->clear();
-  if (model.vertices.empty() || model.faces.empty()) return false;
+  // 允许空场景：无网格时仅渲染背景/网格/ImGui，不视为初始化失败。
+  if (model.vertices.empty() || model.faces.empty()) return true;
   const float inv = 1.0f / (std::max)(0.001f, model.extent);
   bool likelySpherical = false;
   {
@@ -606,7 +607,7 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
     lineIdx->push_back(base + 2);
     lineIdx->push_back(base);
   }
-  return !verts->empty() && !triIdx->empty();
+  return true;
 }
 
 static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
@@ -620,6 +621,11 @@ static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
     return false;
   }
   DestroyMesh(c);
+  if (verts.empty() || triIdx.empty()) {
+    c->triCount = 0;
+    c->lineCount = 0;
+    return true;
+  }
   const bgfx::Memory* vmem = bgfx::copy(verts.data(), static_cast<uint32_t>(verts.size() * sizeof(PosTexColorVertex)));
   c->vbh = bgfx::createVertexBuffer(vmem, PosTexColorVertex::Layout());
   const bgfx::Memory* tmem = bgfx::copy(triIdx.data(), static_cast<uint32_t>(triIdx.size() * sizeof(uint32_t)));
@@ -628,7 +634,7 @@ static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
   c->ibhLine = bgfx::createIndexBuffer(lmem, BGFX_BUFFER_INDEX32);
   c->triCount = static_cast<uint32_t>(triIdx.size());
   c->lineCount = static_cast<uint32_t>(lineIdx.size());
-  return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine) && c->triCount > 0;
+  return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
 }
 
 }  // namespace
@@ -787,22 +793,24 @@ void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& 
   bx::mtxMul(mod, rx, t1);
   bgfx::setTransform(mod);
 
-  bgfx::setVertexBuffer(0, impl->vbh);
-  if (bgfx::isValid(impl->texture) && bgfx::isValid(impl->s_texColor)) {
-    bgfx::setTexture(0, impl->s_texColor, impl->texture);
-  }
   constexpr uint64_t kWrite = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
   const uint64_t cullState = backfaceCulling ? BGFX_STATE_CULL_CCW : 0ULL;
-  if (solid && impl->triCount > 0) {
-    bgfx::setState(kWrite | cullState | BGFX_STATE_MSAA);
-    bgfx::setIndexBuffer(impl->ibhTri, 0, impl->triCount);
-    bgfx::submit(0, impl->program);
-  }
-  // 实体模式不再叠加线框，避免“脏脏的”观感；仅线框模式显示边线。
-  if (!solid && impl->lineCount > 0) {
-    bgfx::setState(kWrite | BGFX_STATE_PT_LINES | BGFX_STATE_MSAA);
-    bgfx::setIndexBuffer(impl->ibhLine, 0, impl->lineCount);
-    bgfx::submit(0, impl->program);
+  if (bgfx::isValid(impl->vbh)) {
+    bgfx::setVertexBuffer(0, impl->vbh);
+    if (bgfx::isValid(impl->texture) && bgfx::isValid(impl->s_texColor)) {
+      bgfx::setTexture(0, impl->s_texColor, impl->texture);
+    }
+    if (solid && impl->triCount > 0 && bgfx::isValid(impl->ibhTri)) {
+      bgfx::setState(kWrite | cullState | BGFX_STATE_MSAA);
+      bgfx::setIndexBuffer(impl->ibhTri, 0, impl->triCount);
+      bgfx::submit(0, impl->program);
+    }
+    // 实体模式不再叠加线框，避免“脏脏的”观感；仅线框模式显示边线。
+    if (!solid && impl->lineCount > 0 && bgfx::isValid(impl->ibhLine)) {
+      bgfx::setState(kWrite | BGFX_STATE_PT_LINES | BGFX_STATE_MSAA);
+      bgfx::setIndexBuffer(impl->ibhLine, 0, impl->lineCount);
+      bgfx::submit(0, impl->program);
+    }
   }
   if (showGrid) {
     constexpr int kHalf = 10;

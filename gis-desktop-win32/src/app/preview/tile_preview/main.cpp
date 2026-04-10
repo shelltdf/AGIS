@@ -7,6 +7,7 @@
 #include "common/app_core/main_app.h"
 #include "common/app_core/main_globals.h"
 #include "common/ui/ui_font.h"
+#include "common/ui/ui_debug_pick.h"
 #include "ui_engine/gdiplus_ui.h"
 
 static bool RegisterTilePreviewClass(HINSTANCE inst) {
@@ -36,12 +37,17 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
   if (argv) LocalFree(argv);
 
   OpenTileRasterPreviewWindow(nullptr, path);
+  AgisUiDebugPickInit(hInst);
   const HWND previewWnd = FindWindowW(kTilePreviewClass, nullptr);
   MSG msg{};
   while (previewWnd && IsWindow(previewWnd) && GetMessageW(&msg, nullptr, 0, 0)) {
+    if (AgisUiDebugPickHandleMessage(&msg)) {
+      continue;
+    }
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
+  AgisUiDebugPickShutdown();
   UiFontShutdown();
   UiGdiplusShutdown();
   return static_cast<int>(msg.wParam);
