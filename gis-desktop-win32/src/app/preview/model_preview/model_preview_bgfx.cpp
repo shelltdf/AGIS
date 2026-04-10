@@ -1,4 +1,4 @@
-#include "app/preview/model_preview_bgfx.h"
+#include "app/preview/model_preview/model_preview_bgfx.h"
 
 #include <algorithm>
 #include <cmath>

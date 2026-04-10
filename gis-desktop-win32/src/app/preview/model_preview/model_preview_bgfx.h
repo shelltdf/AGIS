@@ -4,7 +4,7 @@
 #include <vector>
 #include <windows.h>
 
-#include "app/preview/model_preview_types.h"
+#include "app/preview/model_preview/model_preview_types.h"
 
 struct AgisBgfxPreviewContext;
 struct AgisBgfxRuntimeStats {

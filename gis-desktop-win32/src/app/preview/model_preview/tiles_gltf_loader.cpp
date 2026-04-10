@@ -1,6 +1,6 @@
-#include "app/preview/tiles_gltf_loader.h"
+#include "app/preview/model_preview/tiles_gltf_loader.h"
 
-#include "app/preview/model_preview_types.h"
+#include "app/preview/model_preview/model_preview_types.h"
 
 #include <Windows.h>
 
