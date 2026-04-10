@@ -656,6 +656,9 @@ struct TilePreviewState {
   /// 底部单行状态（客户区坐标、经纬度/像素等），在 WM_PAINT 中绘制。
   std::wstring tilePointerStatusLine;
   bool tileMouseTrackingLeave = false;
+  /// 非拖拽时用于节流 WM_PAINT：仅当光标落入新格（2^3 像素）才整窗刷新，避免每像素触发整屏 GDI+。
+  int lastPointerQuantX = INT_MIN;
+  int lastPointerQuantY = INT_MIN;
 };
 
 static constexpr size_t kTilePreviewBitmapCacheMax = 160;
@@ -891,6 +894,22 @@ static Gdiplus::Bitmap* TileBitmapCacheGet(TilePreviewState* st, uint64_t key, c
   return raw;
 }
 
+/// 仅查找已缓存位图，不调整 LRU（供 HUD 读尺寸，避免与瓦片绘制 pass 重复 Touch 同键）。
+static Gdiplus::Bitmap* TileBitmapCachePeek(TilePreviewState* st, uint64_t key) {
+  if (!st) {
+    return nullptr;
+  }
+  auto it = st->tileTexCache.find(key);
+  if (it == st->tileTexCache.end()) {
+    return nullptr;
+  }
+  Gdiplus::Bitmap* bm = it->second.second.get();
+  if (bm && bm->GetLastStatus() == Gdiplus::Ok) {
+    return bm;
+  }
+  return nullptr;
+}
+
 /// 以焦点（地图坐标归一化 nu,nv 保持不变）对齐切换缩放级，类似在线地图滚轮缩放。
 static void TileZoomSlippy(TilePreviewState* st, RECT clientCr, const POINT* cursorClient, int dz) {
   if (!st || dz == 0) {
@@ -1010,6 +1029,8 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   st->pointerGeoValid = false;
   st->tilePointerStatusLine = L"移动鼠标查看坐标";
   st->tileMouseTrackingLeave = false;
+  st->lastPointerQuantX = INT_MIN;
+  st->lastPointerQuantY = INT_MIN;
 
   if (st->rootPath.empty()) {
     st->hint = L"【操作提示】地图模式：滚轮切换 Z（光标中心；Shift+滚轮以视口中心）；Ctrl+滚轮调整片元像素尺寸；拖拽平移。";
@@ -1170,6 +1191,9 @@ static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippy
   const RECT& imgArea = lay.imgArea;
   Gdiplus::Graphics g(hdc);
   g.SetInterpolationMode(Gdiplus::InterpolationModeLowQuality);
+  g.SetSmoothingMode(Gdiplus::SmoothingModeNone);
+  g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+  g.SetCompositingQuality(Gdiplus::CompositingQualityHighSpeed);
   Gdiplus::SolidBrush miss(Gdiplus::Color(255, 238, 240, 245));
   for (int ty = lay.ty0; ty <= lay.ty1; ++ty) {
     for (int tx = lay.tx0; tx <= lay.tx1; ++tx) {
@@ -1186,7 +1210,13 @@ static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippy
       }
       Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second);
       if (bm) {
-        g.DrawImage(bm, sx, sy, sw, sw);
+        const int iw = bm->GetWidth();
+        const int ih = bm->GetHeight();
+        if (iw > 0 && ih > 0 && std::abs(iw - sw) <= 1 && std::abs(ih - sw) <= 1) {
+          g.DrawImage(bm, sx, sy);
+        } else {
+          g.DrawImage(bm, sx, sy, sw, sw);
+        }
       } else {
         g.FillRectangle(&miss, sx, sy, sw, sw);
       }
@@ -1245,7 +1275,7 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
         int bw = static_cast<int>(std::lround(st->pixelsPerTile));
         int bh = bw;
         if (pit != st->slippyPaths.end()) {
-          if (Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second)) {
+          if (Gdiplus::Bitmap* bm = TileBitmapCachePeek(st, key)) {
             bw = bm->GetWidth();
             bh = bm->GetHeight();
             if (bw < 1) {
@@ -1336,7 +1366,20 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           }
         }
         TilePreviewUpdatePointerGeo(st, hwnd, POINT{x, y});
-        InvalidateRect(hwnd, nullptr, FALSE);
+        const bool draggingMap =
+            (st->mode == TilePreviewState::Mode::kSlippyQuadtree && st->dragging);
+        if (draggingMap) {
+          InvalidateRect(hwnd, nullptr, FALSE);
+        } else {
+          constexpr int kQuantShift = 3;
+          const int qx = x >> kQuantShift;
+          const int qy = y >> kQuantShift;
+          if (qx != st->lastPointerQuantX || qy != st->lastPointerQuantY) {
+            st->lastPointerQuantX = qx;
+            st->lastPointerQuantY = qy;
+            InvalidateRect(hwnd, nullptr, FALSE);
+          }
+        }
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree && st->dragging) {
           const double dx = static_cast<double>(x - st->lastDragPt.x);
           const double dy = static_cast<double>(y - st->lastDragPt.y);
@@ -1356,6 +1399,8 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         st->tileMouseTrackingLeave = false;
         st->pointerOverImage = false;
         st->pointerGeoValid = false;
+        st->lastPointerQuantX = INT_MIN;
+        st->lastPointerQuantY = INT_MIN;
         st->tilePointerStatusLine = L"鼠标已离开窗口";
         InvalidateRect(hwnd, nullptr, FALSE);
       }
