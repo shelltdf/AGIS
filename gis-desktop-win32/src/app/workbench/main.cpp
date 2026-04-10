@@ -583,12 +583,30 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
   UpdateWindow(hwnd);
   AgisUiDebugPickInit(hInst);
   MSG msg{};
-  while (GetMessageW(&msg, nullptr, 0, 0)) {
-    if (AgisUiDebugPickHandleMessage(&msg)) {
-      continue;
+  msg.wParam = 0;
+  bool quit = false;
+  while (!quit) {
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      if (msg.message == WM_QUIT) {
+        quit = true;
+        break;
+      }
+      if (AgisUiDebugPickHandleMessage(&msg)) {
+        continue;
+      }
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
     }
-    TranslateMessage(&msg);
-    DispatchMessageW(&msg);
+    if (quit) {
+      break;
+    }
+    HWND pw = FindWindowW(kModelPreviewClass, nullptr);
+    if (pw && IsWindow(pw)) {
+      ModelPreviewFrameStep(pw);
+    }
+    if (!PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
+      WaitMessage();
+    }
   }
   AgisUiDebugPickShutdown();
   UiGdiplusShutdown();

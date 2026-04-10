@@ -76,6 +76,8 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 void OpenModelPreviewWindow(HWND owner, const std::wstring& path);
 void OpenModelPreviewWindow3DTiles(HWND owner, const std::wstring& tilesetRootOrFile);
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+/// 模型预览：每帧在消息泵空闲时调用（`bgfx::frame` 不在 WM_PAINT 内）。加载中仅 Invalidate 以刷新 GDI 进度条。
+void ModelPreviewFrameStep(HWND hwnd);
 
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path);
 LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

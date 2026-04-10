@@ -95,6 +95,8 @@ struct ModelPreviewState {
   AgisBgfxRendererKind bgfxRenderer = AgisBgfxRendererKind::kD3D11;
   AgisBgfxPreviewContext* bgfxCtx = nullptr;
   bool imguiReady = false;
+  /// 加载完成后在 kPreviewLoadedMsg 中同步创建 ImGui（含中文字体合并）；渲染由主循环 ModelPreviewFrameStep 驱动。
+  bool pendingImguiInit = false;
   int imguiScroll = 0;
 #else
   PreviewRenderBackend backend = PreviewRenderBackend::kOpenGL;
@@ -117,6 +119,8 @@ struct ModelPreviewState {
   UINT d3dVbCap = 0;
 #endif
   DWORD lastFpsTick = 0;
+  /// 加载态 GDI 进度条：限制 Invalidate 频率，避免主循环每帧刷 PAINT 导致闪烁。
+  DWORD lastLoadingInvalidateTick = 0;
   int frameCounter = 0;
   float fps = 0.0f;
   float lastFrameMs = 0.0f;
@@ -148,14 +152,24 @@ struct ModelPreviewState {
   bool sourceIs3DTiles = false;
   std::wstring tilesLoadDiag;
 #if AGIS_USE_BGFX
-  /// 工作线程上 `agis_bgfx_preview_build_mesh_on_cpu` 的产物；`kPreviewLoadedMsg` 里上传 GPU 后清空。
-  AgisBgfxCpuBuiltMesh cpuBuiltMesh;
-  bool hasCpuBuiltMesh = false;
+  /// 工作线程：`prepare_on_worker`（读盘解码贴图 + 建 mesh），主线程只上传 GPU。
+  AgisBgfxPreviewWorkerPackage workerPackage;
+  bool hasWorkerPackage = false;
+  /// 命令行传入的路径：先完成空场景 + ImGui（含 Open Model 按钮）显示，再自动加载；与 Open Model 共用 `StartModelPreviewAsyncLoad`。
+  std::wstring pendingCliAutoLoadPath;
+  bool pendingCliAutoLoadAs3DTiles = false;
 #endif
 };
 
 constexpr UINT kPreviewLoadedMsg = WM_APP + 201;
 constexpr UINT kPreviewRequestOpenMsg = WM_APP + 202;
+/// 从「打开文件」对话框返回后：先拆 GPU/ImGui，再投递 kPreviewStartLoadThreadMsg，避免与 D3D 消息泵同帧死锁。
+constexpr UINT kPreviewDeferredReloadMsg = WM_APP + 203;
+constexpr UINT kPreviewStartLoadThreadMsg = WM_APP + 204;
+/// 空场景 + ImGui 就绪后，自动加载命令行指定的模型。
+constexpr UINT kPreviewCliAutoLoadMsg = WM_APP + 205;
+/// 从 ImGui/bgfx 帧内 Post 的「打开文件」改为下一拍处理，避免与公用对话框消息泵同栈嵌套卡死。
+constexpr UINT kPreviewDeferredFilePickMsg = WM_APP + 206;
 struct PreviewLoadCtx {
   HWND hwnd = nullptr;
   ModelPreviewState* st = nullptr;
@@ -844,23 +858,23 @@ AgisBgfxPbrTexturePaths BuildPbrTexturePaths(const ModelPreviewState& st) {
 }
 
 #if AGIS_USE_BGFX
-static bool PreviewThreadBuildCpuMesh(ModelPreviewState* st) {
+static bool PreviewThreadPreparePackage(ModelPreviewState* st) {
   if (!st) {
     return false;
   }
-  st->cpuBuiltMesh = {};
-  st->hasCpuBuiltMesh = false;
+  st->workerPackage = {};
+  st->hasWorkerPackage = false;
   if (st->loadedModel.vertices.empty() || st->loadedModel.faces.empty()) {
     return true;
   }
   st->loadStage = 5;
   st->loadProgress = 0;
   const AgisBgfxPbrTexturePaths pbr = BuildPbrTexturePaths(*st);
-  if (!agis_bgfx_preview_build_mesh_on_cpu(st->loadedModel, st->pseudoPbrMode, st->pbrViewMode, pbr, &st->loadProgress,
-                                          &st->cpuBuiltMesh)) {
+  if (!agis_bgfx_preview_prepare_on_worker(st->loadedModel, st->pseudoPbrMode, st->pbrViewMode, pbr, &st->loadProgress,
+                                          &st->workerPackage)) {
     return false;
   }
-  st->hasCpuBuiltMesh = !st->cpuBuiltMesh.vertices.empty();
+  st->hasWorkerPackage = true;
   st->loadProgress = 100;
   st->loadStage = 4;
   return true;
@@ -1292,10 +1306,17 @@ std::wstring EvaluatePreviewBottleneck(const ModelPreviewState& st, float cpuFra
 
 ObjPreviewStats ScanObjStats(const std::wstring& path) {
   ObjPreviewStats s{};
+  if (path.empty()) {
+    return s;
+  }
   std::error_code ec;
   s.fileBytes = std::filesystem::file_size(path, ec);
+  if (ec) {
+    s.fileBytes = 0;
+  }
   std::wifstream ifs(path);
   if (!ifs.is_open()) {
+    s.fileBytes = 0;
     return s;
   }
   std::set<std::wstring> mats;
@@ -1873,6 +1894,9 @@ static std::wstring BuildModelPreviewInfoText(const ModelPreviewState& st) {
        << L"（已按上限下采样；颜色：LAS/经 LASzip 读的 LAZ 取 PDRF 2/3/5/7 的 RGB；经 GDAL 的 LAZ 依赖属性字段）\r\n";
     return ss.str();
   }
+  if (st.path.empty()) {
+    return L"空场景\r\n请使用「Open Model...」选择 OBJ / LAS / 3D Tiles JSON。";
+  }
   return BuildObjInfoText(st.path);
 }
 
@@ -1892,7 +1916,10 @@ static bool PromptOpenModelPreviewPath(HWND owner, std::wstring* pathOut, bool* 
   wchar_t fileBuf[32768]{};
   OPENFILENAMEW ofn{};
   ofn.lStructSize = sizeof(ofn);
-  ofn.hwndOwner = owner;
+  // 预览窗口由 bgfx/D3D11 绘制时，若将其设为 OFN 父窗口，在部分系统上公用对话框与 D3D
+  // 消息泵会互相等待，表现为「Open Model」后整窗卡死。改用无 owner 的应用模态对话框，
+  // 关闭后再把焦点还回预览窗口。
+  ofn.hwndOwner = nullptr;
   ofn.lpstrFile = fileBuf;
   ofn.nMaxFile = static_cast<DWORD>(std::size(fileBuf));
   ofn.lpstrFilter =
@@ -1903,7 +1930,15 @@ static bool PromptOpenModelPreviewPath(HWND owner, std::wstring* pathOut, bool* 
       L"所有文件 (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_HIDEREADONLY;
-  if (!GetOpenFileNameW(&ofn)) return false;
+#if defined(OFN_LONGPATHS)
+  ofn.Flags |= OFN_LONGPATHS;
+#endif
+  const BOOL picked = GetOpenFileNameW(&ofn);
+  if (owner && IsWindow(owner)) {
+    SetForegroundWindow(owner);
+    BringWindowToTop(owner);
+  }
+  if (!picked) return false;
 
   std::filesystem::path p(fileBuf);
   std::wstring ext = p.extension().wstring();
@@ -1916,18 +1951,34 @@ static bool PromptOpenModelPreviewPath(HWND owner, std::wstring* pathOut, bool* 
   return true;
 }
 
-// 命令行启动（WM_CREATE 里 st->path）与 ImGui「Open Model...」（kPreviewRequestOpenMsg）共用此入口：
-// 同一线程模型 PreviewLoadThreadProc、同一套 WM_PAINT 加载进度条与 loadProgress/loadStage。
-static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const std::wstring& path, bool as3dTiles) {
-  if (!st) return false;
-  // 允许首次启动时进入（构造态 loading 可能为 true），仅阻止已有活动线程时重复触发。
-  if (st->loading && st->loadThread) return false;
-  if (st->loadThread) {
-    WaitForSingleObject(st->loadThread, 5000);
-    CloseHandle(st->loadThread);
-    st->loadThread = nullptr;
+static void PreviewWaitAndCloseLoadThread(ModelPreviewState* st) {
+  if (!st || !st->loadThread) {
+    return;
+  }
+  WaitForSingleObject(st->loadThread, 5000);
+  CloseHandle(st->loadThread);
+  st->loadThread = nullptr;
+}
+
+// 进入加载态后强制同步画一帧 GDI 进度壳，再拆 GPU；否则 INVALIDATE 仅入队，teardown 期间若派发 PAINT 仍可能走错分支。
+static void PreviewSyncPaintLoadingShell(HWND hwnd, const ModelPreviewState* st) {
+  RECT vrc = GetPreviewViewportRect(hwnd);
+  InvalidateRect(hwnd, &vrc, FALSE);
+#if AGIS_USE_BGFX
+  if (st && (st->imguiReady || st->bgfxCtx)) {
+    UpdateWindow(hwnd);
+  }
+#endif
+}
+
+// 仅拆掉 bgfx/ImGui（主线程）。调用方须已 Wait 并关闭 loadThread；且应先令 st->loading=true 并 Invalidate，
+// 否则 WM_PAINT 仍走 ImGui+bgfx 路径，与半销毁状态交叠会卡死、进度条与鼠标也全部失效。
+static void PreviewTeardownBeforeReload(ModelPreviewState* st, HWND hwnd) {
+  if (!st) {
+    return;
   }
 #if AGIS_USE_BGFX
+  st->pendingImguiInit = false;
   if (st->imguiReady) {
     imguiDestroy();
     st->imguiReady = false;
@@ -1937,6 +1988,13 @@ static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const s
     st->bgfxCtx = nullptr;
   }
 #endif
+}
+
+// 在 GPU 已拆除、无活动 loadThread 的前提下，重置状态并启动 PreviewLoadThreadProc。
+static bool PreviewLaunchLoadThreadOnly(HWND hwnd, ModelPreviewState* st, const std::wstring& path, bool as3dTiles) {
+  if (!st) {
+    return false;
+  }
   st->path = path;
   st->loadAs3DTiles = as3dTiles;
   st->sourceIs3DTiles = false;
@@ -1944,6 +2002,7 @@ static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const s
   st->loading = true;
   st->loadProgress = 0;
   st->loadStage = 0;
+  st->lastLoadingInvalidateTick = 0;
   st->model = ObjPreviewModel{};
   st->loadedModel = ObjPreviewModel{};
   st->stats = ObjPreviewStats{};
@@ -1955,8 +2014,8 @@ static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const s
   st->lazPreviewDiag.clear();
   st->tilesLoadDiag.clear();
 #if AGIS_USE_BGFX
-  st->cpuBuiltMesh = {};
-  st->hasCpuBuiltMesh = false;
+  st->workerPackage = {};
+  st->hasWorkerPackage = false;
 #endif
   st->infoPanelText = path.empty() ? L"空场景（未传入模型路径）" : L"模型正在后台加载，请稍候...";
 
@@ -1976,6 +2035,30 @@ static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const s
   RECT vrc = GetPreviewViewportRect(hwnd);
   InvalidateRect(hwnd, &vrc, FALSE);
   return true;
+}
+
+// 命令行启动（WM_CREATE）与内部重载共用：同帧完成 teardown + 起线程。
+// 「Open Model」走 kPreviewDeferredReloadMsg：先 PostMessage 脱出对话框栈，再分两消息 teardown / 起线程。
+static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const std::wstring& path, bool as3dTiles) {
+  if (!st) {
+    return false;
+  }
+  if (st->loading && st->loadThread) {
+    return false;
+  }
+  PreviewWaitAndCloseLoadThread(st);
+
+  st->loading = true;
+  st->loadProgress = 0;
+  st->loadStage = 0;
+  st->loadFailed = false;
+  st->path = path;
+  st->loadAs3DTiles = as3dTiles;
+  st->infoPanelText = path.empty() ? L"空场景（未传入模型路径）" : L"模型正在后台加载，请稍候...";
+  PreviewSyncPaintLoadingShell(hwnd, st);
+
+  PreviewTeardownBeforeReload(st, hwnd);
+  return PreviewLaunchLoadThreadOnly(hwnd, st, path, as3dTiles);
 }
 
 DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
@@ -2028,7 +2111,7 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
     st->textureLayers = DetectTextureLayers(st->loadedModel);
     st->sourceIs3DTiles = true;
 #if AGIS_USE_BGFX
-    if (!PreviewThreadBuildCpuMesh(st)) {
+    if (!PreviewThreadPreparePackage(st)) {
       st->loadFailed = true;
       st->tilesLoadDiag = L"预览网格构建失败。";
       st->loadStage = 9;
@@ -2135,7 +2218,7 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
     st->lasPointCache = std::move(pts);
     st->textureLayers.clear();
 #if AGIS_USE_BGFX
-    if (!PreviewThreadBuildCpuMesh(st)) {
+    if (!PreviewThreadPreparePackage(st)) {
       st->loadFailed = true;
       st->loadStage = 9;
       st->loadProgress = 100;
@@ -2183,7 +2266,7 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
     OutputDebugStringW(dbg.c_str());
   }
 #if AGIS_USE_BGFX
-  if (!PreviewThreadBuildCpuMesh(st)) {
+  if (!PreviewThreadPreparePackage(st)) {
     st->loadFailed = true;
     st->loadStage = 9;
     st->loadProgress = 100;
@@ -2348,6 +2431,216 @@ static void ShowPreviewCopyableMessage(HWND owner, const wchar_t* title, const w
   }
 }
 
+#if AGIS_USE_BGFX
+void ModelPreviewFrameStep(HWND hwnd) {
+  auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (!st) {
+    return;
+  }
+  RECT vrc = GetPreviewViewportRect(hwnd);
+  if (st->loading) {
+    const DWORD now = GetTickCount();
+    if (st->lastLoadingInvalidateTick == 0 || now - st->lastLoadingInvalidateTick >= 50u) {
+      st->lastLoadingInvalidateTick = now;
+      InvalidateRect(hwnd, &vrc, FALSE);
+    }
+    return;
+  }
+  if (!st->bgfxCtx) {
+    return;
+  }
+
+  const double t0 = NowPerfMs();
+  if (st->imguiReady) {
+    POINT pt{};
+    GetCursorPos(&pt);
+    ScreenToClient(hwnd, &pt);
+    uint8_t mbut = 0;
+    if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) mbut |= IMGUI_MBUT_LEFT;
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) mbut |= IMGUI_MBUT_RIGHT;
+    if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) mbut |= IMGUI_MBUT_MIDDLE;
+    const int vw = (std::max)(1L, vrc.right - vrc.left);
+    const int vh = (std::max)(1L, vrc.bottom - vrc.top);
+    imguiBeginFrame(pt.x, pt.y, mbut, st->imguiScroll, static_cast<uint16_t>(vw), static_cast<uint16_t>(vh), -1, 254);
+    st->imguiScroll = 0;
+    ImGui::SetNextWindowBgAlpha(0.86f);
+    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(vrc.left + 10), static_cast<float>(vrc.top + 10)), ImGuiCond_Always);
+    ImGui::Begin("Preview Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    int rendererSel = (st->bgfxRenderer == AgisBgfxRendererKind::kOpenGL) ? 1 : 0;
+    const char* rendererItems[] = {"D3D11", "OpenGL"};
+    if (ImGui::Combo("Renderer", &rendererSel, rendererItems, 2)) {
+      PostMessageW(hwnd, WM_KEYDOWN, 'M', 0);
+    }
+    if (ImGui::Checkbox("Solid", &st->solid)) {}
+    if (ImGui::Checkbox("Backface Culling", &st->backfaceCulling)) {}
+    if (ImGui::Checkbox("Grid", &st->showGrid)) {}
+    if (ImGui::Checkbox("Texture", &st->useTexture)) {
+      if (st->bgfxCtx) {
+        if (st->useTexture && st->currentTextureLayer < static_cast<int>(st->textureLayers.size())) {
+          agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[st->currentTextureLayer].second);
+        } else {
+          agis_bgfx_preview_set_texture(st->bgfxCtx, L"");
+        }
+      }
+    }
+    int renderMode = 0;
+    if (!st->pseudoPbrMode) {
+      renderMode = static_cast<int>(st->pbrViewMode);
+      if (renderMode <= 0) renderMode = 2;
+    }
+    const char* renderItems[] = {"Full PBR", "Albedo", "Normal", "Roughness", "Metallic", "AO"};
+    if (ImGui::Combo("Render Output", &renderMode, renderItems, 6)) {
+      if (renderMode == 0) {
+        st->pseudoPbrMode = true;
+        st->pbrViewMode = AgisBgfxPbrViewMode::kPbrLit;
+      } else {
+        st->pseudoPbrMode = false;
+        st->pbrViewMode = static_cast<AgisBgfxPbrViewMode>(renderMode);
+      }
+      if (st->bgfxCtx) {
+        agis_bgfx_preview_set_pseudo_pbr(st->bgfxCtx, st->pseudoPbrMode);
+        agis_bgfx_preview_set_pbr_view_mode(st->bgfxCtx, st->pbrViewMode);
+      }
+    }
+    if (st->lasSourcePointCount > 0 && !st->lasPointCache.empty()) {
+      float pxSz = st->lasPointScreenPx;
+      if (ImGui::SliderFloat("点大小(像素)", &pxSz, 1.f, 32.f, "%.0f")) {
+        st->lasPointScreenPx = pxSz;
+        BuildObjPreviewFromLasPoints(st->lasPointCache, st->lasPointScreenPx, &st->model);
+        if (st->bgfxCtx) {
+          agis_bgfx_preview_reload_model(st->bgfxCtx, st->model);
+        }
+        st->stats.faces = st->model.faces.size();
+        st->infoPanelText = BuildModelPreviewInfoText(*st);
+      }
+    }
+    ImGui::Separator();
+    ImGui::Text("Info");
+    std::string infoUtf8 = PreviewWideToUtf8(st->infoPanelText);
+    if (infoUtf8.empty()) {
+      infoUtf8 = "No model info.";
+    }
+    ImGui::BeginChild("model-info", ImVec2(420.0f, 170.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::TextUnformatted(infoUtf8.c_str());
+    ImGui::EndChild();
+    if (!st->textureLayers.empty()) {
+      std::string layerPreview;
+      for (wchar_t ch : st->textureLayers[st->currentTextureLayer].first) {
+        layerPreview.push_back((ch >= 32 && ch < 127) ? static_cast<char>(ch) : '?');
+      }
+      if (ImGui::BeginCombo("Layer", layerPreview.c_str())) {
+        for (int i = 0; i < static_cast<int>(st->textureLayers.size()); ++i) {
+          bool sel = (i == st->currentTextureLayer);
+          std::string label;
+          for (wchar_t ch : st->textureLayers[i].first) {
+            label.push_back((ch >= 32 && ch < 127) ? static_cast<char>(ch) : '?');
+          }
+          if (ImGui::Selectable(label.c_str(), sel)) {
+            st->currentTextureLayer = i;
+            if (st->bgfxCtx && st->useTexture) {
+              agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[i].second);
+            }
+          }
+          if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
+    }
+    if (ImGui::Button("Fit")) {
+      FitPreviewCamera(st);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset")) {
+      st->rotX = 0.0f;
+      st->rotY = 0.0f;
+      st->zoom = 2.2f;
+    }
+    if (ImGui::Button("Open Model...")) {
+      PostMessageW(hwnd, kPreviewRequestOpenMsg, 0, 0);
+    }
+    const int vhud = (std::max)(1, vh);
+    const float unitsPerPxHud = (2.0f / (std::max)(0.05f, st->zoom)) / static_cast<float>(vhud);
+    ImGui::Text("FPS %.1f | Frame %.2f ms", st->fps, st->lastFrameMs);
+    ImGui::Text("Scale: 100px ~= %.4f units | Grid length: 2.0 units", unitsPerPxHud * 100.0f);
+    const std::wstring sparkNow = BuildFrameMsSparkline(*st);
+    float cpuMsHud = st->lastFrameMs;
+    float gpuMsHud = 0.0f;
+    float waitSubmitMsHud = 0.0f;
+    float waitRenderMsHud = 0.0f;
+    uint32_t drawCallsHud = static_cast<uint32_t>(st->stats.faces);
+    AgisBgfxRuntimeStats bgfxHud{};
+    if (agis_bgfx_preview_get_runtime_stats(st->bgfxCtx, &bgfxHud)) {
+      cpuMsHud = (std::max)(cpuMsHud, bgfxHud.cpuFrameMs);
+      gpuMsHud = bgfxHud.gpuFrameMs;
+      waitSubmitMsHud = bgfxHud.waitSubmitMs;
+      waitRenderMsHud = bgfxHud.waitRenderMs;
+      drawCallsHud = bgfxHud.drawCalls;
+    }
+    const std::wstring bottleneckNow =
+        EvaluatePreviewBottleneck(*st, cpuMsHud, gpuMsHud, drawCallsHud, waitSubmitMsHud, waitRenderMsHud);
+    ImGui::Separator();
+    ImGui::Text("CPU %.2f ms | GPU %.2f ms | Draw %u", cpuMsHud, gpuMsHud, drawCallsHud);
+    ImGui::Text("瓶颈: %s", PreviewWideToUtf8(bottleneckNow).c_str());
+    ImGui::Text("曲线: %s", PreviewWideToUtf8(sparkNow).c_str());
+    ImGui::End();
+    DrawAxisImGuiOverlay(vrc, st->rotX, st->rotY);
+    imguiEndFrame();
+  }
+  agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid, st->showGrid,
+                         st->backfaceCulling);
+
+  const double t1 = NowPerfMs();
+  st->lastFrameMs = static_cast<float>((std::max)(0.0, t1 - t0));
+  const int cap = static_cast<int>(st->frameMsHistory.size());
+  st->frameMsHistory[st->frameMsHistoryPos] = st->lastFrameMs;
+  st->frameMsHistoryPos = (st->frameMsHistoryPos + 1) % cap;
+  if (st->frameMsHistoryCount < cap) {
+    st->frameMsHistoryCount += 1;
+  }
+  st->frameCounter += 1;
+  const DWORD now = GetTickCount();
+  const DWORD dt = now - st->lastFpsTick;
+  if (dt >= 500) {
+    st->fps = (st->frameCounter * 1000.0f) / static_cast<float>(dt);
+    st->frameCounter = 0;
+    st->lastFpsTick = now;
+    float cpuFrameMs = st->lastFrameMs;
+    float gpuFrameMs = 0.0f;
+    float waitSubmitMs = 0.0f;
+    float waitRenderMs = 0.0f;
+    uint32_t drawCalls = static_cast<uint32_t>(st->stats.faces);
+    AgisBgfxRuntimeStats bgfxStats{};
+    if (agis_bgfx_preview_get_runtime_stats(st->bgfxCtx, &bgfxStats)) {
+      cpuFrameMs = (std::max)(cpuFrameMs, bgfxStats.cpuFrameMs);
+      gpuFrameMs = bgfxStats.gpuFrameMs;
+      waitSubmitMs = bgfxStats.waitSubmitMs;
+      waitRenderMs = bgfxStats.waitRenderMs;
+      drawCalls = bgfxStats.drawCalls;
+    }
+    const std::wstring bottleneck =
+        EvaluatePreviewBottleneck(*st, cpuFrameMs, gpuFrameMs, drawCalls, waitSubmitMs, waitRenderMs);
+    st->runtimeBottleneck = bottleneck;
+    const std::wstring spark = BuildFrameMsSparkline(*st);
+    wchar_t line[384]{};
+    swprintf_s(line,
+               L"FPS: %.1f | 帧时: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | 瓶颈: %s | 曲线:%s",
+               st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), spark.c_str());
+    st->runtimeHudText = line;
+  }
+  if (!st->imguiReady) {
+    HDC hdcAxis = GetDC(hwnd);
+    if (hdcAxis) {
+      DrawAxisOverlay(hdcAxis, vrc, *st);
+      ReleaseDC(hwnd, hdcAxis);
+    }
+  }
+}
+#else
+void ModelPreviewFrameStep(HWND hwnd) {
+  (void)hwnd;
+}
+#endif
+
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_CREATE: {
@@ -2361,7 +2654,16 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       st->runtimeHudText = L"FPS: -- | 帧时: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | 瓶颈: -- | 曲线: --";
       FitPreviewCamera(st);
       SetFocus(hwnd);
-      SetTimer(hwnd, 1, 33, nullptr);
+#if AGIS_USE_BGFX
+      // 先起空场景 + 进度条 → kPreviewLoadedMsg → ImGui 同步创建后 PostMessage kPreviewCliAutoLoadMsg；渲染由主循环 ModelPreviewFrameStep 驱动。
+      // 与「Open Model」一样走主线程 teardown + 工作线程读盘，避免首帧直接卡在读盘/GPU 上。
+      if (!st->path.empty()) {
+        st->pendingCliAutoLoadPath = std::move(st->path);
+        st->pendingCliAutoLoadAs3DTiles = st->loadAs3DTiles;
+        st->path.clear();
+        st->loadAs3DTiles = false;
+      }
+#endif
       if (!StartModelPreviewAsyncLoad(hwnd, st, st->path, st->loadAs3DTiles)) {
         return -1;
       }
@@ -2385,7 +2687,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             agis_bgfx_preview_shutdown(hwnd, st->bgfxCtx);
             st->bgfxCtx = nullptr;
           }
-          agis_bgfx_preview_init(hwnd, &st->bgfxCtx, st->bgfxRenderer, st->model, nullptr);
+          agis_bgfx_preview_init(hwnd, &st->bgfxCtx, st->bgfxRenderer, st->model, nullptr, st->pseudoPbrMode, st->pbrViewMode);
           if (st->bgfxCtx && st->useTexture && st->currentTextureLayer < static_cast<int>(st->textureLayers.size())) {
             agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[st->currentTextureLayer].second);
           }
@@ -2586,62 +2888,136 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       st->loadProgress = 100;
       st->infoPanelText = BuildModelPreviewInfoText(*st);
 #if AGIS_USE_BGFX
-      // bgfx::RebuildMeshBuffers / BuildMesh 在主线程执行，大 OBJ 可能长达数秒；保持 loading 并先刷一帧加载面板。
+      // 大模型 mesh/贴图已在工作线程准备；主线程仅上传 GPU，先刷一帧加载面板。
       {
         RECT vrcGpu = GetPreviewViewportRect(hwnd);
         InvalidateRect(hwnd, &vrcGpu, FALSE);
         UpdateWindow(hwnd);
       }
+      const bool fromWorker = st->hasWorkerPackage;
       if (!agis_bgfx_preview_init(hwnd, &st->bgfxCtx, AgisBgfxRendererKind::kD3D11, st->model,
-                                  st->hasCpuBuiltMesh ? &st->cpuBuiltMesh : nullptr)) {
+                                  fromWorker ? &st->workerPackage : nullptr, st->pseudoPbrMode, st->pbrViewMode)) {
         st->loading = false;
-        st->cpuBuiltMesh = {};
-        st->hasCpuBuiltMesh = false;
+        st->workerPackage = {};
+        st->hasWorkerPackage = false;
         ShowPreviewCopyableMessage(hwnd, L"模型预览", L"3D 预览初始化失败：bgfx 上下文初始化失败。");
         DestroyWindow(hwnd);
         return 0;
       }
-      st->cpuBuiltMesh = {};
-      st->hasCpuBuiltMesh = false;
-      if (st->bgfxCtx && !st->textureLayers.empty()) {
+      st->workerPackage = {};
+      st->hasWorkerPackage = false;
+      if (st->bgfxCtx && !fromWorker && !st->textureLayers.empty()) {
         agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[0].second);
       }
       if (st->bgfxCtx) {
-        agis_bgfx_preview_set_pbr_textures(st->bgfxCtx, BuildPbrTexturePaths(*st));
+        if (!fromWorker) {
+          agis_bgfx_preview_set_pbr_textures(st->bgfxCtx, BuildPbrTexturePaths(*st));
+        }
         agis_bgfx_preview_set_pseudo_pbr(st->bgfxCtx, st->pseudoPbrMode);
         agis_bgfx_preview_set_pbr_view_mode(st->bgfxCtx, st->pbrViewMode);
-        imguiCreate(16.0f, nullptr);
-        AgisModelPreviewMergeImGuiChinese(16.0f);
-        st->imguiReady = true;
       }
 #endif
       st->loading = false;
+#if AGIS_USE_BGFX
+      // 必须在首帧 WM_PAINT 调用 bgfx 之前完成 ImGui：否则会出现仅有清屏色+一条网格线、
+      // 控件永不出现；若 frame/present 在 PAINT 内阻塞，WM_TIMER 无法触发，整窗假死。
+      if (st->bgfxCtx) {
+        st->pendingImguiInit = false;
+        imguiCreate(16.0f, nullptr);
+        AgisModelPreviewMergeImGuiChinese(16.0f);
+        st->imguiReady = true;
+        if (!st->pendingCliAutoLoadPath.empty()) {
+          (void)PostMessageW(hwnd, kPreviewCliAutoLoadMsg, 0, 0);
+        }
+      }
+#endif
       InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
     }
     case kPreviewRequestOpenMsg: {
       auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
       if (!st || st->loading) return 0;
+      (void)PostMessageW(hwnd, kPreviewDeferredFilePickMsg, 0, 0);
+      return 0;
+    }
+    case kPreviewDeferredFilePickMsg: {
+      auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      if (!st || st->loading) return 0;
+#if AGIS_USE_BGFX
+      st->pendingCliAutoLoadPath.clear();
+      st->pendingCliAutoLoadAs3DTiles = false;
+#endif
       std::wstring path;
       bool as3dTiles = false;
       if (PromptOpenModelPreviewPath(hwnd, &path, &as3dTiles)) {
-        StartModelPreviewAsyncLoad(hwnd, st, path, as3dTiles);
+        auto* heapPath = new (std::nothrow) std::wstring(std::move(path));
+        if (!heapPath) {
+          ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法排队打开模型。");
+          return 0;
+        }
+        if (!PostMessageW(hwnd, kPreviewDeferredReloadMsg, as3dTiles ? 1u : 0u, reinterpret_cast<LPARAM>(heapPath))) {
+          delete heapPath;
+          ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法排队重新加载（PostMessage 失败）。");
+        }
       }
       return 0;
     }
-    case WM_TIMER:
-      if (wParam == 1) {
-        if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-          RECT vrc = GetPreviewViewportRect(hwnd);
-          if (st->loading) {
-            InvalidateRect(hwnd, &vrc, FALSE);
-          } else if (!st->inPaint) {
-            InvalidateRect(hwnd, &vrc, FALSE);
-          }
-        }
+    case kPreviewDeferredReloadMsg: {
+      auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      std::unique_ptr<std::wstring> pathPtr(reinterpret_cast<std::wstring*>(lParam));
+      if (!st || !pathPtr) {
         return 0;
       }
-      break;
+      PreviewWaitAndCloseLoadThread(st);
+      const bool as3dTiles = (wParam != 0);
+      st->path = *pathPtr;
+      st->loadAs3DTiles = as3dTiles;
+      st->loading = true;
+      st->loadProgress = 0;
+      st->loadStage = 0;
+      st->loadFailed = false;
+      st->infoPanelText = L"模型正在后台加载，请稍候...";
+      PreviewSyncPaintLoadingShell(hwnd, st);
+      PreviewTeardownBeforeReload(st, hwnd);
+      auto* heapPath = new (std::nothrow) std::wstring(std::move(*pathPtr));
+      if (!heapPath) {
+        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法启动模型加载。");
+        return 0;
+      }
+      if (!PostMessageW(hwnd, kPreviewStartLoadThreadMsg, as3dTiles ? 1u : 0u, reinterpret_cast<LPARAM>(heapPath))) {
+        delete heapPath;
+        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法启动加载阶段二（PostMessage 失败）。");
+      }
+      return 0;
+    }
+    case kPreviewStartLoadThreadMsg: {
+      auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      std::unique_ptr<std::wstring> pathPtr(reinterpret_cast<std::wstring*>(lParam));
+      if (!st || !pathPtr) {
+        return 0;
+      }
+      const bool as3dTiles = (wParam != 0);
+      (void)PreviewLaunchLoadThreadOnly(hwnd, st, *pathPtr, as3dTiles);
+      return 0;
+    }
+#if AGIS_USE_BGFX
+    case kPreviewCliAutoLoadMsg: {
+      auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      if (!st || st->pendingCliAutoLoadPath.empty()) {
+        return 0;
+      }
+      if (st->loadThread) {
+        st->pendingCliAutoLoadPath.clear();
+        st->pendingCliAutoLoadAs3DTiles = false;
+        return 0;
+      }
+      const bool as3d = st->pendingCliAutoLoadAs3DTiles;
+      std::wstring path = std::move(st->pendingCliAutoLoadPath);
+      st->pendingCliAutoLoadAs3DTiles = false;
+      (void)StartModelPreviewAsyncLoad(hwnd, st, path, as3d);
+      return 0;
+    }
+#endif
     case WM_LBUTTONDOWN: {
       if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
         if (st->loading) return 0;
@@ -2785,163 +3161,17 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           EndPaint(hwnd, &ps);
           return 0;
         }
-        const double t0 = NowPerfMs();
 #if AGIS_USE_BGFX
-        if (st->imguiReady) {
-          POINT pt{};
-          GetCursorPos(&pt);
-          ScreenToClient(hwnd, &pt);
-          uint8_t mbut = 0;
-          if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) mbut |= IMGUI_MBUT_LEFT;
-          if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) mbut |= IMGUI_MBUT_RIGHT;
-          if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) mbut |= IMGUI_MBUT_MIDDLE;
-          const int vw = (std::max)(1L, vrc.right - vrc.left);
-          const int vh = (std::max)(1L, vrc.bottom - vrc.top);
-          imguiBeginFrame(pt.x, pt.y, mbut, st->imguiScroll, static_cast<uint16_t>(vw), static_cast<uint16_t>(vh), -1, 254);
-          st->imguiScroll = 0;
-          ImGui::SetNextWindowBgAlpha(0.86f);
-          ImGui::SetNextWindowPos(ImVec2(static_cast<float>(vrc.left + 10), static_cast<float>(vrc.top + 10)), ImGuiCond_Always);
-          ImGui::Begin("Preview Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-          int rendererSel = (st->bgfxRenderer == AgisBgfxRendererKind::kOpenGL) ? 1 : 0;
-          const char* rendererItems[] = {"D3D11", "OpenGL"};
-          if (ImGui::Combo("Renderer", &rendererSel, rendererItems, 2)) {
-            PostMessageW(hwnd, WM_KEYDOWN, 'M', 0);
-          }
-          if (ImGui::Checkbox("Solid", &st->solid)) {}
-          if (ImGui::Checkbox("Backface Culling", &st->backfaceCulling)) {}
-          if (ImGui::Checkbox("Grid", &st->showGrid)) {}
-          if (ImGui::Checkbox("Texture", &st->useTexture)) {
-            if (st->bgfxCtx) {
-              if (st->useTexture && st->currentTextureLayer < static_cast<int>(st->textureLayers.size())) {
-                agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[st->currentTextureLayer].second);
-              } else {
-                agis_bgfx_preview_set_texture(st->bgfxCtx, L"");
-              }
-            }
-          }
-          int renderMode = 0;
-          if (!st->pseudoPbrMode) {
-            renderMode = static_cast<int>(st->pbrViewMode);
-            if (renderMode <= 0) renderMode = 2;
-          }
-          const char* renderItems[] = {"Full PBR", "Albedo", "Normal", "Roughness", "Metallic", "AO"};
-          if (ImGui::Combo("Render Output", &renderMode, renderItems, 6)) {
-            if (renderMode == 0) {
-              st->pseudoPbrMode = true;
-              st->pbrViewMode = AgisBgfxPbrViewMode::kPbrLit;
-            } else {
-              st->pseudoPbrMode = false;
-              st->pbrViewMode = static_cast<AgisBgfxPbrViewMode>(renderMode);
-            }
-            if (st->bgfxCtx) {
-              agis_bgfx_preview_set_pseudo_pbr(st->bgfxCtx, st->pseudoPbrMode);
-              agis_bgfx_preview_set_pbr_view_mode(st->bgfxCtx, st->pbrViewMode);
-            }
-          }
-          if (st->lasSourcePointCount > 0 && !st->lasPointCache.empty()) {
-            float pxSz = st->lasPointScreenPx;
-            if (ImGui::SliderFloat("点大小(像素)", &pxSz, 1.f, 32.f, "%.0f")) {
-              st->lasPointScreenPx = pxSz;
-              BuildObjPreviewFromLasPoints(st->lasPointCache, st->lasPointScreenPx, &st->model);
-              if (st->bgfxCtx) {
-                agis_bgfx_preview_reload_model(st->bgfxCtx, st->model);
-              }
-              st->stats.faces = st->model.faces.size();
-              st->infoPanelText = BuildModelPreviewInfoText(*st);
-            }
-          }
-          ImGui::Separator();
-          ImGui::Text("Info");
-          std::string infoUtf8 = PreviewWideToUtf8(st->infoPanelText);
-          if (infoUtf8.empty()) {
-            infoUtf8 = "No model info.";
-          }
-          ImGui::BeginChild("model-info", ImVec2(420.0f, 170.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
-          ImGui::TextUnformatted(infoUtf8.c_str());
-          ImGui::EndChild();
-          if (!st->textureLayers.empty()) {
-            std::string layerPreview;
-            for (wchar_t ch : st->textureLayers[st->currentTextureLayer].first) {
-              layerPreview.push_back((ch >= 32 && ch < 127) ? static_cast<char>(ch) : '?');
-            }
-            if (ImGui::BeginCombo("Layer", layerPreview.c_str())) {
-              for (int i = 0; i < static_cast<int>(st->textureLayers.size()); ++i) {
-                bool sel = (i == st->currentTextureLayer);
-                std::string label;
-                for (wchar_t ch : st->textureLayers[i].first) {
-                  label.push_back((ch >= 32 && ch < 127) ? static_cast<char>(ch) : '?');
-                }
-                if (ImGui::Selectable(label.c_str(), sel)) {
-                  st->currentTextureLayer = i;
-                  if (st->bgfxCtx && st->useTexture) {
-                    agis_bgfx_preview_set_texture(st->bgfxCtx, st->textureLayers[i].second);
-                  }
-                }
-                if (sel) ImGui::SetItemDefaultFocus();
-              }
-              ImGui::EndCombo();
-            }
-          }
-          if (ImGui::Button("Fit")) {
-            FitPreviewCamera(st);
-          }
-          ImGui::SameLine();
-          if (ImGui::Button("Reset")) {
-            st->rotX = 0.0f;
-            st->rotY = 0.0f;
-            st->zoom = 2.2f;
-          }
-          if (ImGui::Button("Open Model...")) {
-            PostMessageW(hwnd, kPreviewRequestOpenMsg, 0, 0);
-          }
-          const int vhud = (std::max)(1, vh);
-          const float unitsPerPxHud = (2.0f / (std::max)(0.05f, st->zoom)) / static_cast<float>(vhud);
-          ImGui::Text("FPS %.1f | Frame %.2f ms", st->fps, st->lastFrameMs);
-          ImGui::Text("Scale: 100px ~= %.4f units | Grid length: 2.0 units", unitsPerPxHud * 100.0f);
-          const std::wstring sparkNow = BuildFrameMsSparkline(*st);
-          float cpuMsHud = st->lastFrameMs;
-          float gpuMsHud = 0.0f;
-          float waitSubmitMsHud = 0.0f;
-          float waitRenderMsHud = 0.0f;
-          uint32_t drawCallsHud = static_cast<uint32_t>(st->stats.faces);
-          AgisBgfxRuntimeStats bgfxHud{};
-          if (agis_bgfx_preview_get_runtime_stats(st->bgfxCtx, &bgfxHud)) {
-            cpuMsHud = (std::max)(cpuMsHud, bgfxHud.cpuFrameMs);
-            gpuMsHud = bgfxHud.gpuFrameMs;
-            waitSubmitMsHud = bgfxHud.waitSubmitMs;
-            waitRenderMsHud = bgfxHud.waitRenderMs;
-            drawCallsHud = bgfxHud.drawCalls;
-          }
-          const std::wstring bottleneckNow =
-              EvaluatePreviewBottleneck(*st, cpuMsHud, gpuMsHud, drawCallsHud, waitSubmitMsHud, waitRenderMsHud);
-          ImGui::Separator();
-          ImGui::Text("CPU %.2f ms | GPU %.2f ms | Draw %u", cpuMsHud, gpuMsHud, drawCallsHud);
-          ImGui::Text("瓶颈: %s", PreviewWideToUtf8(bottleneckNow).c_str());
-          ImGui::Text("曲线: %s", PreviewWideToUtf8(sparkNow).c_str());
-          ImGui::End();
-          DrawAxisImGuiOverlay(vrc, st->rotX, st->rotY);
-          imguiEndFrame();
-        }
-        if (st->bgfxCtx) {
-          agis_bgfx_preview_draw(st->bgfxCtx, hwnd, vrc, st->rotX, st->rotY, st->zoom, st->solid, st->showGrid,
-                                 st->backfaceCulling);
-        } else {
-          HBRUSH bg = CreateSolidBrush(RGB(188, 200, 218));
-          FillRect(hdc, &vrc, bg);
-          DeleteObject(bg);
-          SetBkMode(hdc, TRANSPARENT);
-          SetTextColor(hdc, RGB(84, 84, 84));
-          const wchar_t* tip = L"空场景（未传入模型路径）";
-          TextOutW(hdc, vrc.left + 12, vrc.top + 12, tip, static_cast<int>(wcslen(tip)));
-        }
+        // 3D/ImGui 由主循环 ModelPreviewFrameStep 提交；此处仅消费 PAINT 区域，避免与 bgfx 双次 present。
+        ValidateRect(hwnd, &vrc);
 #else
+        const double t0 = NowPerfMs();
         if (st->backend == PreviewRenderBackend::kOpenGL) {
           InitPreviewGl(hwnd, st);
           DrawModelPreviewOpenGL(hwnd, vrc, *st);
         } else {
           DrawModelPreviewDx11(hwnd, vrc, st);
         }
-#endif
         const double t1 = NowPerfMs();
         st->lastFrameMs = static_cast<float>((std::max)(0.0, t1 - t0));
         const int cap = static_cast<int>(st->frameMsHistory.size());
@@ -2962,16 +3192,6 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           float waitSubmitMs = 0.0f;
           float waitRenderMs = 0.0f;
           uint32_t drawCalls = static_cast<uint32_t>(st->stats.faces);
-#if AGIS_USE_BGFX
-          AgisBgfxRuntimeStats bgfxStats{};
-          if (agis_bgfx_preview_get_runtime_stats(st->bgfxCtx, &bgfxStats)) {
-            cpuFrameMs = (std::max)(cpuFrameMs, bgfxStats.cpuFrameMs);
-            gpuFrameMs = bgfxStats.gpuFrameMs;
-            waitSubmitMs = bgfxStats.waitSubmitMs;
-            waitRenderMs = bgfxStats.waitRenderMs;
-            drawCalls = bgfxStats.drawCalls;
-          }
-#endif
           const std::wstring bottleneck =
               EvaluatePreviewBottleneck(*st, cpuFrameMs, gpuFrameMs, drawCalls, waitSubmitMs, waitRenderMs);
           st->runtimeBottleneck = bottleneck;
@@ -2982,11 +3202,6 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                      st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), spark.c_str());
           st->runtimeHudText = line;
         }
-#if AGIS_USE_BGFX
-        if (!st->imguiReady) {
-          DrawAxisOverlay(hdc, vrc, *st);
-        }
-#else
         DrawAxisOverlay(hdc, vrc, *st);
 #endif
         // 后备 HUD 已禁用：不再绘制 GDI 顶部控制面板。
@@ -3001,7 +3216,6 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       return 0;
     case WM_DESTROY:
       if (auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
-        KillTimer(hwnd, 1);
         if (st->loadThread) {
           WaitForSingleObject(st->loadThread, 5000);
           CloseHandle(st->loadThread);

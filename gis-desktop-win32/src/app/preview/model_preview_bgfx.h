@@ -50,14 +50,36 @@ struct AgisBgfxCpuBuiltMesh {
   std::vector<uint32_t> lineIndices;
 };
 
-/// 在**无 bgfx 调用**的工作线程中构建展开网格；`progressPct` 可选，写入 0–100。
-bool agis_bgfx_preview_build_mesh_on_cpu(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
-                                         const AgisBgfxPbrTexturePaths& pbrPaths, int* progressPct,
-                                         AgisBgfxCpuBuiltMesh* out);
+/// 工作线程解码的 2D 贴图像素（无 bgfx）；主线程据此 `bgfx::createTexture2D`。
+struct AgisBgfxCpuImage2D {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t bpp = 0;
+  bool bgra = false;
+  std::vector<uint8_t> pixels;
+};
 
-/// `prebuiltMesh` 非空且含顶点时跳过主线程上的 `BuildMesh`，仅上传 GPU（大幅减轻 UI 卡顿）。
+/// 工作线程产出：mesh + 贴图 CPU 数据，一次性交给主线程上传 GPU。
+struct AgisBgfxPreviewWorkerPackage {
+  AgisBgfxCpuBuiltMesh mesh;
+  AgisBgfxCpuImage2D baseColor;
+  AgisBgfxCpuImage2D normalMap;
+  AgisBgfxCpuImage2D roughnessMap;
+  AgisBgfxCpuImage2D metallicMap;
+  AgisBgfxCpuImage2D aoMap;
+};
+
+/// 工作线程（无 bgfx）：① OBJ/瓦片等已在加载线程解析进 `model`；② 解码 PBR 贴图到 CPU（顶点烘焙依赖）；
+/// ③ 展开 BuildMesh；④ 解码 baseColor(map_Kd)。`progressPct` 可选 0–100。
+bool agis_bgfx_preview_prepare_on_worker(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
+                                         const AgisBgfxPbrTexturePaths& pbrPaths, int* progressPct,
+                                         AgisBgfxPreviewWorkerPackage* out);
+
+/// 主线程仅：bgfx init、用 `bgfx::makeRef` 把包内像素/索引交给 GPU（避免巨型 `bgfx::copy` 卡死 UI）、渲染。
+/// 若传入 `workerPackage` 非空，init 会 **std::move 吞掉** 其内容；调用后 `*workerPackage` 被清空。传 `nullptr` 时从磁盘重建（如切换 Renderer）。
 bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRendererKind renderer, const ObjPreviewModel& model,
-                            const AgisBgfxCpuBuiltMesh* prebuiltMesh = nullptr);
+                            AgisBgfxPreviewWorkerPackage* workerPackage = nullptr, bool pseudoPbr = true,
+                            AgisBgfxPbrViewMode pbrViewMode = AgisBgfxPbrViewMode::kPbrLit);
 void agis_bgfx_preview_shutdown(HWND hwnd, AgisBgfxPreviewContext* ctx);
 void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& viewportPx, float rotX, float rotY, float zoom,
                             bool solid, bool showGrid, bool backfaceCulling);

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <vector>
 
 #include <bgfx/bgfx.h>
@@ -30,7 +31,24 @@ struct CpuImage2D {
   uint32_t bpp = 0;
   bool bgra = false;
   std::vector<uint8_t> pixels;
+  /// 非空时像素只读引用 `workerPayloadKeep` 内缓冲区，避免主线程再拷贝一份贴图。
+  const uint8_t* borrowData = nullptr;
 };
+
+static const uint8_t* CpuImageBytesPtr(const CpuImage2D& img) {
+  if (img.borrowData) {
+    return img.borrowData;
+  }
+  return img.pixels.empty() ? nullptr : img.pixels.data();
+}
+
+static bool CpuImageHasPixelData(const CpuImage2D& img) {
+  return img.width > 0 && img.height > 0 && img.bpp > 0 && CpuImageBytesPtr(img) != nullptr;
+}
+
+static size_t CpuImageByteSize(const CpuImage2D& img) {
+  return static_cast<size_t>(img.width) * static_cast<size_t>(img.height) * static_cast<size_t>(img.bpp);
+}
 
 struct CpuPbrMaps {
   CpuImage2D normal;
@@ -96,6 +114,8 @@ struct AgisBgfxPreviewContextImpl {
   bool pseudoPbrEnabled = true;
   CpuPbrMaps cpuMaps{};
   AgisBgfxPbrViewMode pbrViewMode = AgisBgfxPbrViewMode::kPbrLit;
+  /// 由 `agis_bgfx_preview_init` 从 worker 包 move 入；供 `makeRef` 指向的 CPU 内存活到 `shutdown`。
+  std::unique_ptr<AgisBgfxPreviewWorkerPackage> workerPayloadKeep;
 };
 
 static bgfx::RendererType::Enum ToBgfxType(AgisBgfxRendererKind k) {
@@ -161,11 +181,11 @@ static bgfx::TextureHandle LoadMapKdTexture(const std::wstring& path) {
       imageContainer->m_numLayers, bgfx::TextureFormat::Enum(imageContainer->m_format), 0, mem);
 }
 
-static bool LoadCpuImage2D(const std::wstring& path, CpuImage2D* out) {
+static bool DecodeFileToCpuImage2D(const std::wstring& path, AgisBgfxCpuImage2D* out) {
   if (!out) {
     return false;
   }
-  *out = CpuImage2D{};
+  *out = AgisBgfxCpuImage2D{};
   if (path.empty()) {
     return false;
   }
@@ -211,24 +231,103 @@ static bool LoadCpuImage2D(const std::wstring& path, CpuImage2D* out) {
   return true;
 }
 
+static bool LoadCpuImage2D(const std::wstring& path, CpuImage2D* out) {
+  if (!out) {
+    return false;
+  }
+  *out = CpuImage2D{};
+  AgisBgfxCpuImage2D tmp{};
+  if (!DecodeFileToCpuImage2D(path, &tmp)) {
+    return false;
+  }
+  out->width = tmp.width;
+  out->height = tmp.height;
+  out->bpp = tmp.bpp;
+  out->bgra = tmp.bgra;
+  out->pixels = std::move(tmp.pixels);
+  return true;
+}
+
+/// 将 PBR 贴图元数据挂到 `CpuImage2D`，像素指针借用 `AgisBgfxCpuImage2D::pixels`（须由 worker 包或同等生命周期保证有效）。
+static void AttachBorrowCpuMap(CpuImage2D* dst, const AgisBgfxCpuImage2D& src) {
+  if (!dst) {
+    return;
+  }
+  *dst = CpuImage2D{};
+  if (src.width == 0 || src.height == 0 || src.bpp == 0 || src.pixels.empty()) {
+    return;
+  }
+  dst->width = src.width;
+  dst->height = src.height;
+  dst->bpp = src.bpp;
+  dst->bgra = src.bgra;
+  dst->borrowData = src.pixels.data();
+}
+
+static bgfx::TextureHandle CreateBgfxTextureFromCpuImageCopy(const AgisBgfxCpuImage2D& img) {
+  if (img.width == 0 || img.height == 0 || img.pixels.empty() || img.bpp == 0) {
+    return BGFX_INVALID_HANDLE;
+  }
+  bgfx::TextureFormat::Enum fmt = bgfx::TextureFormat::RGBA8;
+  if (img.bpp == 4 && img.bgra) {
+    fmt = bgfx::TextureFormat::BGRA8;
+  } else if (img.bpp == 4) {
+    fmt = bgfx::TextureFormat::RGBA8;
+  } else if (img.bpp == 3) {
+    fmt = bgfx::TextureFormat::RGB8;
+  } else if (img.bpp == 1) {
+    fmt = bgfx::TextureFormat::R8;
+  } else {
+    return BGFX_INVALID_HANDLE;
+  }
+  const bgfx::Memory* mem = bgfx::copy(img.pixels.data(), static_cast<uint32_t>(img.pixels.size()));
+  return bgfx::createTexture2D(static_cast<uint16_t>(img.width), static_cast<uint16_t>(img.height), false, 1, fmt, 0,
+                               mem);
+}
+
+/// 引用外部像素缓冲区（须由 `workerPayloadKeep` 等保证在 destroy 纹理前有效）。
+static bgfx::TextureHandle CreateBgfxTextureFromCpuImageRef(const AgisBgfxCpuImage2D& img) {
+  if (img.width == 0 || img.height == 0 || img.pixels.empty() || img.bpp == 0) {
+    return BGFX_INVALID_HANDLE;
+  }
+  bgfx::TextureFormat::Enum fmt = bgfx::TextureFormat::RGBA8;
+  if (img.bpp == 4 && img.bgra) {
+    fmt = bgfx::TextureFormat::BGRA8;
+  } else if (img.bpp == 4) {
+    fmt = bgfx::TextureFormat::RGBA8;
+  } else if (img.bpp == 3) {
+    fmt = bgfx::TextureFormat::RGB8;
+  } else if (img.bpp == 1) {
+    fmt = bgfx::TextureFormat::R8;
+  } else {
+    return BGFX_INVALID_HANDLE;
+  }
+  const bgfx::Memory* mem =
+      bgfx::makeRef(img.pixels.data(), static_cast<uint32_t>(img.pixels.size()), nullptr, nullptr);
+  return bgfx::createTexture2D(static_cast<uint16_t>(img.width), static_cast<uint16_t>(img.height), false, 1, fmt, 0,
+                               mem);
+}
+
 static float SampleImageGray01(const CpuImage2D& img, float u, float v) {
-  if (img.width == 0 || img.height == 0 || img.bpp == 0 || img.pixels.empty()) {
+  if (!CpuImageHasPixelData(img)) {
     return 1.0f;
   }
+  const uint8_t* data = CpuImageBytesPtr(img);
+  const size_t nbytes = CpuImageByteSize(img);
   const float uu = u - std::floor(u);
   const float vv = v - std::floor(v);
   const uint32_t x = (std::min)(img.width - 1, static_cast<uint32_t>(uu * static_cast<float>(img.width)));
   const uint32_t y = (std::min)(img.height - 1, static_cast<uint32_t>(vv * static_cast<float>(img.height)));
   const size_t idx = (static_cast<size_t>(y) * img.width + x) * img.bpp;
-  if (idx + img.bpp > img.pixels.size()) {
+  if (idx + img.bpp > nbytes) {
     return 1.0f;
   }
   if (img.bpp == 1) {
-    return static_cast<float>(img.pixels[idx]) / 255.0f;
+    return static_cast<float>(data[idx]) / 255.0f;
   }
-  const uint8_t c0 = img.pixels[idx + 0];
-  const uint8_t c1 = img.pixels[idx + 1];
-  const uint8_t c2 = img.pixels[idx + 2];
+  const uint8_t c0 = data[idx + 0];
+  const uint8_t c1 = data[idx + 1];
+  const uint8_t c2 = data[idx + 2];
   uint8_t r = c0, g = c1, b = c2;
   if (img.bgra) {
     r = c2;
@@ -245,20 +344,22 @@ static void SampleImageRgb01(const CpuImage2D& img, float u, float v, float* r, 
   *r = 0.5f;
   *g = 0.5f;
   *b = 1.0f;
-  if (img.width == 0 || img.height == 0 || img.bpp < 3 || img.pixels.empty()) {
+  if (!CpuImageHasPixelData(img) || img.bpp < 3) {
     return;
   }
+  const uint8_t* data = CpuImageBytesPtr(img);
+  const size_t nbytes = CpuImageByteSize(img);
   const float uu = u - std::floor(u);
   const float vv = v - std::floor(v);
   const uint32_t x = (std::min)(img.width - 1, static_cast<uint32_t>(uu * static_cast<float>(img.width)));
   const uint32_t y = (std::min)(img.height - 1, static_cast<uint32_t>(vv * static_cast<float>(img.height)));
   const size_t idx = (static_cast<size_t>(y) * img.width + x) * img.bpp;
-  if (idx + img.bpp > img.pixels.size()) {
+  if (idx + img.bpp > nbytes) {
     return;
   }
-  uint8_t c0 = img.pixels[idx + 0];
-  uint8_t c1 = img.pixels[idx + 1];
-  uint8_t c2 = img.pixels[idx + 2];
+  uint8_t c0 = data[idx + 0];
+  uint8_t c1 = data[idx + 1];
+  uint8_t c2 = data[idx + 2];
   if (img.bgra) {
     std::swap(c0, c2);
   }
@@ -649,7 +750,8 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
   return true;
 }
 
-static bool UploadPrebuiltMesh(AgisBgfxPreviewContextImpl* c, const AgisBgfxCpuBuiltMesh& mesh) {
+/// 主线程 `bgfx::copy` 整块 mesh（非 worker 路径 / reload）。
+static bool UploadPrebuiltMeshCopy(AgisBgfxPreviewContextImpl* c, const AgisBgfxCpuBuiltMesh& mesh) {
   static_assert(sizeof(AgisBgfxInterleavedVertex) == sizeof(PosTexColorVertex), "vertex layout mismatch");
   DestroyMesh(c);
   if (mesh.vertices.empty() || mesh.triIndices.empty()) {
@@ -665,6 +767,32 @@ static bool UploadPrebuiltMesh(AgisBgfxPreviewContextImpl* c, const AgisBgfxCpuB
   c->ibhTri = bgfx::createIndexBuffer(tmem, BGFX_BUFFER_INDEX32);
   const bgfx::Memory* lmem =
       bgfx::copy(mesh.lineIndices.data(), static_cast<uint32_t>(mesh.lineIndices.size() * sizeof(uint32_t)));
+  c->ibhLine = bgfx::createIndexBuffer(lmem, BGFX_BUFFER_INDEX32);
+  c->triCount = static_cast<uint32_t>(mesh.triIndices.size());
+  c->lineCount = static_cast<uint32_t>(mesh.lineIndices.size());
+  return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
+}
+
+/// worker 包已移入 `workerPayloadKeep`：引用 CPU 缓冲，避免主线程巨型 memcpy。
+static bool UploadPrebuiltMeshRef(AgisBgfxPreviewContextImpl* c, const AgisBgfxCpuBuiltMesh& mesh) {
+  static_assert(sizeof(AgisBgfxInterleavedVertex) == sizeof(PosTexColorVertex), "vertex layout mismatch");
+  DestroyMesh(c);
+  if (mesh.vertices.empty() || mesh.triIndices.empty()) {
+    c->triCount = 0;
+    c->lineCount = 0;
+    return true;
+  }
+  const bgfx::Memory* vmem = bgfx::makeRef(mesh.vertices.data(),
+                                           static_cast<uint32_t>(mesh.vertices.size() * sizeof(PosTexColorVertex)),
+                                           nullptr, nullptr);
+  c->vbh = bgfx::createVertexBuffer(vmem, PosTexColorVertex::Layout());
+  const bgfx::Memory* tmem = bgfx::makeRef(mesh.triIndices.data(),
+                                          static_cast<uint32_t>(mesh.triIndices.size() * sizeof(uint32_t)), nullptr,
+                                          nullptr);
+  c->ibhTri = bgfx::createIndexBuffer(tmem, BGFX_BUFFER_INDEX32);
+  const bgfx::Memory* lmem = bgfx::makeRef(mesh.lineIndices.data(),
+                                           static_cast<uint32_t>(mesh.lineIndices.size() * sizeof(uint32_t)), nullptr,
+                                           nullptr);
   c->ibhLine = bgfx::createIndexBuffer(lmem, BGFX_BUFFER_INDEX32);
   c->triCount = static_cast<uint32_t>(mesh.triIndices.size());
   c->lineCount = static_cast<uint32_t>(mesh.lineIndices.size());
@@ -698,8 +826,8 @@ static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
   return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
 }
 
-static bool BuildMeshOnCpuImpl(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
-                               const AgisBgfxPbrTexturePaths& pbrPaths, int* progressPct, AgisBgfxCpuBuiltMesh* out) {
+static bool BuildMeshOnCpuFromMaps(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
+                                   const CpuPbrMaps& maps, int* progressPct, AgisBgfxCpuBuiltMesh* out) {
   static_assert(sizeof(AgisBgfxInterleavedVertex) == sizeof(PosTexColorVertex), "vertex layout mismatch");
   if (!out) {
     return false;
@@ -714,8 +842,6 @@ static bool BuildMeshOnCpuImpl(const ObjPreviewModel& model, bool pseudoPbr, Agi
   int localPct = 0;
   int* prog = progressPct ? progressPct : &localPct;
   *prog = 0;
-  CpuPbrMaps maps{};
-  LoadCpuPbrMapsFromPaths(pbrPaths, &maps);
   std::vector<PosTexColorVertex> verts;
   std::vector<uint32_t> triIdx;
   std::vector<uint32_t> lineIdx;
@@ -734,20 +860,132 @@ static bool BuildMeshOnCpuImpl(const ObjPreviewModel& model, bool pseudoPbr, Agi
   return true;
 }
 
+static bool PrepareOnWorkerImpl(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
+                                const AgisBgfxPbrTexturePaths& paths, int* progressPct,
+                                AgisBgfxPreviewWorkerPackage* out) {
+  if (!out) {
+    return false;
+  }
+  *out = AgisBgfxPreviewWorkerPackage{};
+  auto setp = [&](int p) {
+    if (progressPct) {
+      *progressPct = p;
+    }
+  };
+  setp(3);
+  if (!model.primaryMapKdPath.empty()) {
+    (void)DecodeFileToCpuImage2D(model.primaryMapKdPath, &out->baseColor);
+  }
+  setp(12);
+  if (!paths.normalPath.empty()) {
+    (void)DecodeFileToCpuImage2D(paths.normalPath, &out->normalMap);
+  }
+  setp(20);
+  if (!paths.roughnessPath.empty()) {
+    (void)DecodeFileToCpuImage2D(paths.roughnessPath, &out->roughnessMap);
+  }
+  setp(26);
+  if (!paths.metallicPath.empty()) {
+    (void)DecodeFileToCpuImage2D(paths.metallicPath, &out->metallicMap);
+  }
+  setp(32);
+  if (!paths.aoPath.empty()) {
+    (void)DecodeFileToCpuImage2D(paths.aoPath, &out->aoMap);
+  }
+  setp(38);
+  if (model.vertices.empty() || model.faces.empty()) {
+    setp(100);
+    return true;
+  }
+  CpuPbrMaps maps{};
+  AttachBorrowCpuMap(&maps.normal, out->normalMap);
+  AttachBorrowCpuMap(&maps.roughness, out->roughnessMap);
+  AttachBorrowCpuMap(&maps.metallic, out->metallicMap);
+  AttachBorrowCpuMap(&maps.ao, out->aoMap);
+  return BuildMeshOnCpuFromMaps(model, pseudoPbr, mode, maps, progressPct, &out->mesh);
+}
+
+/// 主线程：白底纹理已建好、program/uniform 已就绪之后，从 worker 包或磁盘填充 GPU 纹理与网格。
+static bool UploadPreviewTexturesAndMesh(AgisBgfxPreviewContextImpl* c, const ObjPreviewModel& model,
+                                         const AgisBgfxPreviewWorkerPackage* workerPkg) {
+  c->texture = CreateWhiteTexture2D();
+  if (!bgfx::isValid(c->texture)) {
+    return false;
+  }
+
+  if (workerPkg) {
+    auto tryBaseFromPackage = [&]() -> bool {
+      if (workerPkg->baseColor.pixels.empty()) {
+        return false;
+      }
+      const bgfx::TextureHandle t0 = CreateBgfxTextureFromCpuImageRef(workerPkg->baseColor);
+      const bgfx::TextureHandle t1 = CreateBgfxTextureFromCpuImageRef(workerPkg->baseColor);
+      if (bgfx::isValid(t0) && bgfx::isValid(t1)) {
+        bgfx::destroy(c->texture);
+        c->texture = t0;
+        c->texBaseColor = t1;
+        return true;
+      }
+      if (bgfx::isValid(t0)) {
+        bgfx::destroy(t0);
+      }
+      if (bgfx::isValid(t1)) {
+        bgfx::destroy(t1);
+      }
+      return false;
+    };
+    if (!tryBaseFromPackage() && !model.primaryMapKdPath.empty()) {
+      const bgfx::TextureHandle mapTex = LoadMapKdTexture(model.primaryMapKdPath);
+      if (bgfx::isValid(mapTex)) {
+        bgfx::destroy(c->texture);
+        c->texture = mapTex;
+        c->texBaseColor = LoadMapKdTexture(model.primaryMapKdPath);
+      }
+    }
+    c->cpuMaps = CpuPbrMaps{};
+    auto slot = [&](CpuImage2D* cpu, bgfx::TextureHandle* gpu, const AgisBgfxCpuImage2D& img) {
+      if (img.pixels.empty()) {
+        return;
+      }
+      AttachBorrowCpuMap(cpu, img);
+      *gpu = CreateBgfxTextureFromCpuImageRef(img);
+    };
+    slot(&c->cpuMaps.normal, &c->texNormal, workerPkg->normalMap);
+    slot(&c->cpuMaps.roughness, &c->texRoughness, workerPkg->roughnessMap);
+    slot(&c->cpuMaps.metallic, &c->texMetallic, workerPkg->metallicMap);
+    slot(&c->cpuMaps.ao, &c->texAo, workerPkg->aoMap);
+
+    if (!workerPkg->mesh.vertices.empty()) {
+      return UploadPrebuiltMeshRef(c, workerPkg->mesh);
+    }
+    return RebuildMeshBuffers(c);
+  }
+
+  if (!model.primaryMapKdPath.empty()) {
+    const bgfx::TextureHandle mapTex = LoadMapKdTexture(model.primaryMapKdPath);
+    if (bgfx::isValid(mapTex)) {
+      bgfx::destroy(c->texture);
+      c->texture = mapTex;
+      c->texBaseColor = LoadMapKdTexture(model.primaryMapKdPath);
+    }
+  }
+  return RebuildMeshBuffers(c);
+}
+
 }  // namespace
 
 static AgisBgfxPreviewContextImpl* AsImpl(AgisBgfxPreviewContext* p) {
   return reinterpret_cast<AgisBgfxPreviewContextImpl*>(p);
 }
 
-bool agis_bgfx_preview_build_mesh_on_cpu(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
+bool agis_bgfx_preview_prepare_on_worker(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
                                          const AgisBgfxPbrTexturePaths& pbrPaths, int* progressPct,
-                                         AgisBgfxCpuBuiltMesh* out) {
-  return BuildMeshOnCpuImpl(model, pseudoPbr, mode, pbrPaths, progressPct, out);
+                                         AgisBgfxPreviewWorkerPackage* out) {
+  return PrepareOnWorkerImpl(model, pseudoPbr, mode, pbrPaths, progressPct, out);
 }
 
 bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRendererKind renderer, const ObjPreviewModel& model,
-                            const AgisBgfxCpuBuiltMesh* prebuiltMesh) {
+                            AgisBgfxPreviewWorkerPackage* workerPkg, bool pseudoPbr, AgisBgfxPbrViewMode pbrViewMode) {
   if (!ctx || !hwnd) return false;
   if (*ctx) {
     agis_bgfx_preview_shutdown(hwnd, *ctx);
@@ -760,6 +998,8 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
 
   auto* c = new AgisBgfxPreviewContextImpl();
   c->cachedModel = model;
+  c->pseudoPbrEnabled = pseudoPbr;
+  c->pbrViewMode = pbrViewMode;
   c->renderer = ToBgfxType(renderer);
   // 部分驱动下 OpenGL + VSync 可能出现交互停滞，默认关闭 OpenGL 的 VSync。
   c->resetFlags = (c->renderer == bgfx::RendererType::OpenGL) ? BGFX_RESET_NONE : BGFX_RESET_VSYNC;
@@ -808,34 +1048,13 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
     return false;
   }
 
-  c->texture = CreateWhiteTexture2D();
-  if (!bgfx::isValid(c->texture)) {
-    DestroyTextureResources(c);
-    bgfx::destroy(c->program);
-    c->program = BGFX_INVALID_HANDLE;
-    bgfx::shutdown();
-    delete c;
-    return false;
+  if (workerPkg) {
+    c->workerPayloadKeep = std::make_unique<AgisBgfxPreviewWorkerPackage>(std::move(*workerPkg));
+    *workerPkg = AgisBgfxPreviewWorkerPackage{};
   }
-  if (!model.primaryMapKdPath.empty()) {
-    const bgfx::TextureHandle mapTex = LoadMapKdTexture(model.primaryMapKdPath);
-    if (bgfx::isValid(mapTex)) {
-      bgfx::destroy(c->texture);
-      c->texture = mapTex;
-      c->texBaseColor = LoadMapKdTexture(model.primaryMapKdPath);
-    }
-  }
-
-  if (prebuiltMesh && !prebuiltMesh->vertices.empty()) {
-    if (!UploadPrebuiltMesh(c, *prebuiltMesh)) {
-      DestroyTextureResources(c);
-      bgfx::destroy(c->program);
-      c->program = BGFX_INVALID_HANDLE;
-      bgfx::shutdown();
-      delete c;
-      return false;
-    }
-  } else if (!RebuildMeshBuffers(c)) {
+  const AgisBgfxPreviewWorkerPackage* pkgForUpload = c->workerPayloadKeep ? c->workerPayloadKeep.get() : nullptr;
+  if (!UploadPreviewTexturesAndMesh(c, model, pkgForUpload)) {
+    c->workerPayloadKeep.reset();
     DestroyTextureResources(c);
     bgfx::destroy(c->program);
     c->program = BGFX_INVALID_HANDLE;
@@ -859,6 +1078,7 @@ void agis_bgfx_preview_shutdown(HWND hwnd, AgisBgfxPreviewContext* ctx) {
   if (bgfx::isValid(c->program)) bgfx::destroy(c->program);
   c->program = BGFX_INVALID_HANDLE;
   bgfx::shutdown();
+  c->workerPayloadKeep.reset();
   delete c;
 }
 
