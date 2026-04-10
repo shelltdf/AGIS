@@ -286,6 +286,7 @@ add_executable(agis_desktop WIN32
   src/app/main_chrome.cpp
   src/app/main_panels.cpp
   src/app/main_convert.cpp
+  src/app/ui_layout.cpp
   src/app/ui_debug_pick.cpp
   src/app/preview/main_model_preview.cpp
   src/app/preview/tiles_gltf_loader.cpp
@@ -384,6 +385,7 @@ endif()
 add_executable(agis_convert_gui WIN32
   src/app/main_convert_standalone.cpp
   src/app/main_convert.cpp
+  src/app/ui_layout.cpp
   src/app/main_globals.cpp
   src/app/ui_debug_pick.cpp
   src/app/gis_document/main_gis_xml.cpp

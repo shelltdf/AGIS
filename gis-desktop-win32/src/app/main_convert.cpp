@@ -35,6 +35,7 @@
 #endif
 
 #include "app/resource.h"
+#include "app/ui_layout.h"
 #include "app/ui_font.h"
 #include "app/ui_theme.h"
 #include "main_app.h"
@@ -74,9 +75,19 @@ ConvertRuntimeInfo g_convertRuntimeInfo;
 std::unordered_set<int> g_convertMutedParamLabelIds;
 
 LRESULT CALLBACK ConvertPanelForwardSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
-  if (msg == WM_COMMAND) {
+  if (msg == WM_ERASEBKGND) {
+    HDC hdc = reinterpret_cast<HDC>(wParam);
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    const COLORREF bg = AgisEffectiveUiDark() ? RGB(40, 42, 48) : RGB(245, 248, 252);
+    HBRUSH brush = CreateSolidBrush(bg);
+    FillRect(hdc, &rc, brush);
+    DeleteObject(brush);
+    return 1;
+  }
+  if (msg == WM_COMMAND || msg == WM_VSCROLL || msg == WM_HSCROLL) {
     if (HWND parent = GetParent(hwnd)) {
-      PostMessageW(parent, WM_COMMAND, wParam, lParam);
+      PostMessageW(parent, msg, wParam, lParam);
       return 0;
     }
   }
@@ -87,11 +98,30 @@ HWND FindConvertCtrl(HWND hwnd, int id) {
   if (HWND c = GetDlgItem(hwnd, id)) {
     return c;
   }
-  for (int pid : {IDC_CONV_GRP_INPUT_PANEL, IDC_CONV_GRP_OUTPUT_PANEL, IDC_CONV_GRP_TASK_PANEL, IDC_CONV_PANEL_LOG, IDC_CONV_PANEL_MID}) {
+  auto findByEnum = [&](HWND root) -> HWND {
+    if (!root || !IsWindow(root)) return nullptr;
+    struct EnumCtx {
+      int targetId = 0;
+      HWND found = nullptr;
+    } ctx{ id, nullptr };
+    EnumChildWindows(
+        root,
+        [](HWND child, LPARAM lp) -> BOOL {
+          auto* c = reinterpret_cast<EnumCtx*>(lp);
+          if (!c || c->found) return FALSE;
+          if (GetDlgCtrlID(child) == c->targetId) {
+            c->found = child;
+            return FALSE;
+          }
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&ctx));
+    return ctx.found;
+  };
+  for (int pid : {IDC_CONV_GRP_INPUT_PANEL, IDC_CONV_GRP_OUTPUT_PANEL, IDC_CONV_GRP_TASK_PANEL, IDC_CONV_PANEL_LOG, IDC_CONV_PANEL_MID,
+                  IDC_CONV_GRP_IN_TYPE, IDC_CONV_GRP_IN_SUB, IDC_CONV_GRP_OUT_TYPE, IDC_CONV_GRP_OUT_SUB}) {
     if (HWND p = GetDlgItem(hwnd, pid)) {
-      if (HWND c = GetDlgItem(p, id)) {
-        return c;
-      }
+      if (HWND c = findByEnum(p)) return c;
     }
   }
   return nullptr;
@@ -423,6 +453,7 @@ void PollConvertPipeToLog(HWND hwnd) {
 }
 
 struct ConvertUiVisibility {
+  bool pair_supported = true;
   bool show_g1_vector = false;
   bool show_g1_elev = false;
   bool show_coord_g1 = false;
@@ -448,6 +479,61 @@ struct ConvertUiVisibility {
   bool en_gis_model_adv = false;
 };
 
+struct ConvertPairRule {
+  const wchar_t* inType;
+  const wchar_t* inSub;
+  const wchar_t* outType;
+  const wchar_t* outSub;
+  bool allow;
+  const wchar_t* reason;
+};
+
+static bool MatchRuleToken(const wchar_t* ruleToken, const std::wstring& value) {
+  if (!ruleToken || ruleToken[0] == L'\0') return false;
+  if (wcscmp(ruleToken, L"*") == 0) return true;
+  return value == ruleToken;
+}
+
+static bool MatchConvertPairRule(const ConvertPairRule& r, const std::wstring& inType, const std::wstring& inSub,
+                                 const std::wstring& outType, const std::wstring& outSub) {
+  return MatchRuleToken(r.inType, inType) && MatchRuleToken(r.inSub, inSub) && MatchRuleToken(r.outType, outType) &&
+         MatchRuleToken(r.outSub, outSub);
+}
+
+static bool EvaluateConvertPairSupport(const std::wstring& inType, const std::wstring& inSub, const std::wstring& outType,
+                                       const std::wstring& outSub, std::wstring* reason) {
+  // 规则按顺序匹配：越具体越靠前；最后必须有兜底规则。
+  static const ConvertPairRule kRules[] = {
+      {L"model", L"3dmesh", L"model", L"pointcloud", true, L""},
+      {L"model", L"pointcloud", L"model", L"3dmesh", true, L""},
+      {L"model", L"*", L"model", L"*", false, L"model→model 仅支持 Mesh 与点云互转（不能同类直转）。"},
+      {L"gis", L"*", L"gis", L"*", false, L"当前不支持 gis→gis 同类型转换。"},
+      {L"tile", L"*", L"tile", L"*", false, L"当前不支持 tile→tile 同类型转换。"},
+      {L"*", L"*", L"*", L"*", true, L""},
+  };
+  for (const ConvertPairRule& r : kRules) {
+    if (!MatchConvertPairRule(r, inType, inSub, outType, outSub)) {
+      continue;
+    }
+    if (reason) {
+      *reason = (r.reason ? r.reason : L"");
+    }
+    return r.allow;
+  }
+  if (reason) {
+    *reason = L"当前输入/输出组合不支持。";
+  }
+  return false;
+}
+
+static bool IsConvertPairSupportedBySubtype(HWND hwnd, std::wstring* reason) {
+  const std::wstring inType = GetConvertMajorTypeArg(hwnd, true);
+  const std::wstring outType = GetConvertMajorTypeArg(hwnd, false);
+  const std::wstring inSub = GetConvertSubtypeArg(hwnd, true);
+  const std::wstring outSub = GetConvertSubtypeArg(hwnd, false);
+  return EvaluateConvertPairSupport(inType, inSub, outType, outSub, reason);
+}
+
 static void ComputeConvertUiVisibility(HWND hwnd, ConvertUiVisibility* v) {
   if (!v) {
     return;
@@ -459,12 +545,19 @@ static void ComputeConvertUiVisibility(HWND hwnd, ConvertUiVisibility* v) {
   const bool inIsModel = inType == L"model";
   const bool inIsTile = inType == L"tile";
   const bool outIsModel = outType == L"model";
+  const bool outIsGis = outType == L"gis";
   const bool gisToModel = inIsGis && outIsModel;
   const bool outIsTile = outType == L"tile";
   const bool anyModel = inIsModel || outIsModel;
   const bool anyGis = inIsGis || outType == L"gis";
   const bool anyTile = inIsTile || outIsTile;
   const bool enModelCoord = outIsModel || (inIsGis && outIsTile);
+
+  // 子类型级精确支持性判断（与运行前校验一致）
+  v->pair_supported = IsConvertPairSupportedBySubtype(hwnd, nullptr);
+  if (!v->pair_supported) {
+    return;
+  }
 
   v->en_vector = anyGis;
   v->en_elev = anyGis || anyModel;
@@ -507,15 +600,13 @@ static int LayoutParamGroup(HWND hwnd, HWND grpBox, int x, int y0, int colW, con
   const int gap = 6;
   int local = padTop;
   int cnt = 0;
-  const int vpTop = g_convertMidViewportY;
-  const int vpBottom = g_convertMidViewportY + g_convertMidViewportH;
-  auto rowVisible = [&](int top, int h) {
-    const int bottom = top + h;
-    return !(bottom <= vpTop || top >= vpBottom);
-  };
   for (const ParamRowSpec& r : rows) {
     HWND hl = FindConvertCtrl(hwnd, r.labelId);
     HWND hc = FindConvertCtrl(hwnd, r.ctrlId);
+    if (grpBox) {
+      if (hl && GetParent(hl) != grpBox) SetParent(hl, grpBox);
+      if (hc && GetParent(hc) != grpBox) SetParent(hc, grpBox);
+    }
     if (!r.show) {
       if (hl) {
         ShowWindow(hl, SW_HIDE);
@@ -527,18 +618,18 @@ static int LayoutParamGroup(HWND hwnd, HWND grpBox, int x, int y0, int colW, con
     }
     cnt++;
     const int rowTop = y0 + local;
-    const bool vis = rowVisible(rowTop, rowH);
+    const bool vis = true;  // 通过父容器裁剪 + 滚动位移显示，避免控件被永久隐藏
     if (hl) {
       ShowWindow(hl, vis ? SW_SHOW : SW_HIDE);
       if (vis) {
-        MoveWindow(hl, x + padX, rowTop, lblW, 18, TRUE);
+        MoveWindow(hl, padX, local, lblW, 18, TRUE);
       }
     }
     if (hc) {
       ShowWindow(hc, vis ? SW_SHOW : SW_HIDE);
       const int ctrlW = (std::max)(72, colW - 2 * padX - lblW - 4);
       if (vis) {
-        MoveWindow(hc, x + padX + lblW + 4, rowTop - 2, ctrlW, rowH, TRUE);
+        MoveWindow(hc, padX + lblW + 4, local - 2, ctrlW, rowH, TRUE);
       }
       EnableWindow(hc, r.enable ? TRUE : FALSE);
     }
@@ -552,11 +643,8 @@ static int LayoutParamGroup(HWND hwnd, HWND grpBox, int x, int y0, int colW, con
   }
   const int gh = local + 8;
   if (grpBox) {
-    const bool gvis = rowVisible(y0, gh);
-    ShowWindow(grpBox, gvis ? SW_SHOW : SW_HIDE);
-    if (gvis) {
-      MoveWindow(grpBox, x, y0, colW, gh, TRUE);
-    }
+    ShowWindow(grpBox, SW_SHOW);
+    MoveWindow(grpBox, x, y0, colW, gh, TRUE);
   }
   return y0 + gh + 6;
 }
@@ -578,64 +666,75 @@ void LayoutConvertMidColumn(HWND hwnd, int midColX, int colW, int m, int /*topH*
   }
   ConvertUiVisibility v;
   ComputeConvertUiVisibility(hwnd, &v);
+  if (!v.pair_supported) {
+    // 不支持组合：隐藏四组参数，显示中间提示。
+    for (int id :
+         {IDC_CONV_VECTOR_MODE_LBL,       IDC_CONV_VECTOR_MODE,       IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO,
+          IDC_CONV_MODEL_COORD_LBL,       IDC_CONV_MODEL_COORD,       IDC_CONV_RASTER_MAX_LBL, IDC_CONV_RASTER_MAX,
+          IDC_CONV_TARGET_CRS_LBL,        IDC_CONV_TARGET_CRS,        IDC_CONV_OUTPUT_UNIT_LBL, IDC_CONV_OUTPUT_UNIT,
+          IDC_CONV_MESH_SPACING_LBL,      IDC_CONV_MESH_SPACING,      IDC_CONV_TEXTURE_FMT_LBL, IDC_CONV_TEXTURE_FORMAT,
+          IDC_CONV_OBJ_FP_TYPE_LBL,       IDC_CONV_OBJ_FP_TYPE,       IDC_CONV_TILE_LEVELS_LBL, IDC_CONV_TILE_LEVELS,
+          IDC_CONV_OBJ_TEX_MODE_LBL,      IDC_CONV_OBJ_TEX_MODE,      IDC_CONV_OBJ_VIS_EFFECT_LBL, IDC_CONV_OBJ_VIS_EFFECT,
+          IDC_CONV_OBJ_SNOW_SCALE_LBL,    IDC_CONV_OBJ_SNOW_SCALE,    IDC_CONV_GIS_DEM_INTERP_LBL, IDC_CONV_GIS_DEM_INTERP,
+          IDC_CONV_GIS_MESH_TOPO_LBL,     IDC_CONV_GIS_MESH_TOPO,     IDC_CONV_MODEL_BUDGET_MODE_LBL, IDC_CONV_MODEL_BUDGET_MODE,
+          IDC_CONV_MODEL_BUDGET_MB_LBL,   IDC_CONV_MODEL_BUDGET_MB,   IDC_CONV_GRP_IN_TYPE, IDC_CONV_GRP_IN_SUB,
+          IDC_CONV_GRP_OUT_TYPE, IDC_CONV_GRP_OUT_SUB}) {
+      if (HWND h = FindConvertCtrl(hwnd, id)) ShowWindow(h, SW_HIDE);
+    }
+    if (HWND note = FindConvertCtrl(hwnd, IDC_CONV_VECTOR_MODE_LBL)) {
+      if (HWND panelMid = GetDlgItem(hwnd, IDC_CONV_PANEL_MID)) {
+        if (GetParent(note) != panelMid) SetParent(note, panelMid);
+      }
+      std::wstring why;
+      IsConvertPairSupportedBySubtype(hwnd, &why);
+      SetWindowTextW(note, why.empty() ? L"当前输入/输出类型组合不支持。请调整输入/输出类型或子类型。" : why.c_str());
+      MoveWindow(note, 8, 10, (std::max)(120, colW - 16), 40, TRUE);
+      ShowWindow(note, SW_SHOW);
+    }
+    g_convertMidContentH = (std::max)(60, g_convertMidViewportH);
+    return;
+  }
   HWND g1 = FindConvertCtrl(hwnd, IDC_CONV_GRP_IN_TYPE);
   HWND g2 = FindConvertCtrl(hwnd, IDC_CONV_GRP_IN_SUB);
   HWND g3 = FindConvertCtrl(hwnd, IDC_CONV_GRP_OUT_TYPE);
   HWND g4 = FindConvertCtrl(hwnd, IDC_CONV_GRP_OUT_SUB);
   const int y0Base = m + 4;
   int y = y0Base - g_convertMidScrollY;
+  auto row = [](int lbl, int ctl, bool show, bool enable) -> ParamRowSpec {
+    return ParamRowSpec{lbl, ctl, show, enable};
+  };
   std::vector<ParamRowSpec> r1;
-  if (v.show_g1_vector) {
-    r1.push_back({IDC_CONV_VECTOR_MODE_LBL, IDC_CONV_VECTOR_MODE, true, v.en_vector});
-  }
-  if (v.show_g1_elev) {
-    r1.push_back({IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO, true, v.en_elev});
-  }
+  r1.push_back(row(IDC_CONV_VECTOR_MODE_LBL, IDC_CONV_VECTOR_MODE, v.show_g1_vector, v.en_vector));
+  r1.push_back(row(IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO, v.show_g1_elev, v.en_elev));
   if (v.show_coord_g1) {
-    r1.push_back({IDC_CONV_MODEL_COORD_LBL, IDC_CONV_MODEL_COORD, true, v.en_coord});
+    r1.push_back(row(IDC_CONV_MODEL_COORD_LBL, IDC_CONV_MODEL_COORD, true, v.en_coord));
   }
   y = LayoutParamGroup(hwnd, g1, midColX, y, colW, r1);
 
   std::vector<ParamRowSpec> r2;
-  if (v.show_g2_raster) {
-    r2.push_back({IDC_CONV_RASTER_MAX_LBL, IDC_CONV_RASTER_MAX, true, v.en_raster});
-  }
+  r2.push_back(row(IDC_CONV_RASTER_MAX_LBL, IDC_CONV_RASTER_MAX, v.show_g2_raster, v.en_raster));
   y = LayoutParamGroup(hwnd, g2, midColX, y, colW, r2);
 
   std::vector<ParamRowSpec> r3;
-  if (v.show_g3_crs) {
-    r3.push_back({IDC_CONV_TARGET_CRS_LBL, IDC_CONV_TARGET_CRS, true, v.en_crs});
-  }
+  r3.push_back(row(IDC_CONV_TARGET_CRS_LBL, IDC_CONV_TARGET_CRS, v.show_g3_crs, v.en_crs));
   if (v.show_g3_coord_out) {
-    r3.push_back({IDC_CONV_MODEL_COORD_LBL, IDC_CONV_MODEL_COORD, true, v.en_coord});
+    r3.push_back(row(IDC_CONV_MODEL_COORD_LBL, IDC_CONV_MODEL_COORD, true, v.en_coord));
   }
-  if (v.show_g3_unit) {
-    r3.push_back({IDC_CONV_OUTPUT_UNIT_LBL, IDC_CONV_OUTPUT_UNIT, true, v.en_unit});
-  }
-  if (v.show_g3_mesh) {
-    r3.push_back({IDC_CONV_MESH_SPACING_LBL, IDC_CONV_MESH_SPACING, true, v.en_mesh});
-  }
-  if (v.show_g3_tex) {
-    r3.push_back({IDC_CONV_TEXTURE_FMT_LBL, IDC_CONV_TEXTURE_FORMAT, true, v.en_tex});
-  }
-  if (v.show_g3_obj) {
-    r3.push_back({IDC_CONV_OBJ_FP_TYPE_LBL, IDC_CONV_OBJ_FP_TYPE, true, v.en_obj});
-  }
+  r3.push_back(row(IDC_CONV_OUTPUT_UNIT_LBL, IDC_CONV_OUTPUT_UNIT, v.show_g3_unit, v.en_unit));
+  r3.push_back(row(IDC_CONV_MESH_SPACING_LBL, IDC_CONV_MESH_SPACING, v.show_g3_mesh, v.en_mesh));
+  r3.push_back(row(IDC_CONV_TEXTURE_FMT_LBL, IDC_CONV_TEXTURE_FORMAT, v.show_g3_tex, v.en_tex));
+  r3.push_back(row(IDC_CONV_OBJ_FP_TYPE_LBL, IDC_CONV_OBJ_FP_TYPE, v.show_g3_obj, v.en_obj));
   y = LayoutParamGroup(hwnd, g3, midColX, y, colW, r3);
 
   std::vector<ParamRowSpec> r4;
-  if (v.show_g4_tile_levels) {
-    r4.push_back({IDC_CONV_TILE_LEVELS_LBL, IDC_CONV_TILE_LEVELS, true, v.en_tile_levels});
-  }
-  if (v.show_g4_gis_model_adv) {
-    r4.push_back({IDC_CONV_OBJ_TEX_MODE_LBL, IDC_CONV_OBJ_TEX_MODE, true, v.en_gis_model_adv});
-    r4.push_back({IDC_CONV_OBJ_VIS_EFFECT_LBL, IDC_CONV_OBJ_VIS_EFFECT, true, v.en_gis_model_adv});
-    r4.push_back({IDC_CONV_OBJ_SNOW_SCALE_LBL, IDC_CONV_OBJ_SNOW_SCALE, true, v.en_gis_model_adv});
-    r4.push_back({IDC_CONV_GIS_DEM_INTERP_LBL, IDC_CONV_GIS_DEM_INTERP, true, v.en_gis_model_adv});
-    r4.push_back({IDC_CONV_GIS_MESH_TOPO_LBL, IDC_CONV_GIS_MESH_TOPO, true, v.en_gis_model_adv});
-    r4.push_back({IDC_CONV_MODEL_BUDGET_MODE_LBL, IDC_CONV_MODEL_BUDGET_MODE, true, v.en_gis_model_adv});
-    r4.push_back({IDC_CONV_MODEL_BUDGET_MB_LBL, IDC_CONV_MODEL_BUDGET_MB, true, v.en_gis_model_adv});
-  }
+  r4.push_back(row(IDC_CONV_TILE_LEVELS_LBL, IDC_CONV_TILE_LEVELS, v.show_g4_tile_levels, v.en_tile_levels));
+  r4.push_back(row(IDC_CONV_OBJ_TEX_MODE_LBL, IDC_CONV_OBJ_TEX_MODE, v.show_g4_gis_model_adv, v.en_gis_model_adv));
+  r4.push_back(row(IDC_CONV_OBJ_VIS_EFFECT_LBL, IDC_CONV_OBJ_VIS_EFFECT, v.show_g4_gis_model_adv, v.en_gis_model_adv));
+  r4.push_back(row(IDC_CONV_OBJ_SNOW_SCALE_LBL, IDC_CONV_OBJ_SNOW_SCALE, v.show_g4_gis_model_adv, v.en_gis_model_adv));
+  r4.push_back(row(IDC_CONV_GIS_DEM_INTERP_LBL, IDC_CONV_GIS_DEM_INTERP, v.show_g4_gis_model_adv, v.en_gis_model_adv));
+  r4.push_back(row(IDC_CONV_GIS_MESH_TOPO_LBL, IDC_CONV_GIS_MESH_TOPO, v.show_g4_gis_model_adv, v.en_gis_model_adv));
+  r4.push_back(row(IDC_CONV_MODEL_BUDGET_MODE_LBL, IDC_CONV_MODEL_BUDGET_MODE, v.show_g4_gis_model_adv, v.en_gis_model_adv));
+  r4.push_back(row(IDC_CONV_MODEL_BUDGET_MB_LBL, IDC_CONV_MODEL_BUDGET_MB, v.show_g4_gis_model_adv, v.en_gis_model_adv));
   const int yEnd = LayoutParamGroup(hwnd, g4, midColX, y, colW, r4);
   g_convertMidContentH = (std::max)(0, yEnd - (y0Base - g_convertMidScrollY));
 }
@@ -695,7 +794,14 @@ void LayoutConvertWindow(HWND hwnd) {
   const int infoW = (std::max)(80, colW - 20);
   const int infoH = (std::max)(40, topH - 120);
 
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_INPUT_PANEL), m, m, colW, topH, TRUE);
+  UiLayout::Box client = UiLayout::Inset(UiLayout::FromRect(rc), m);
+  UiLayout::Box topRow = UiLayout::DockTop(client, topH);
+  UiLayout::Box taskRow = UiLayout::DockTop(client, taskH + 2);
+  UiLayout::Box logRow = client;
+  UiLayout::Box colL{}, colM{}, colR{};
+  UiLayout::Split3Cols(topRow, m, &colL, &colM, &colR);
+
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_INPUT_PANEL), colL.x, colL.y, colL.w, colL.h, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_INPUT_TITLE), 10, 8, 120, 16, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_INPUT_TYPE), 10, 30, comboW, comboDropH, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_INPUT_TYPE_HELP), colW - 24, 30, 24, 24, TRUE);
@@ -706,21 +812,19 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_INPUT_PREVIEW), colW - 70, 86, 70, 24, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_INPUT_INFO), 10, 116, infoW, infoH, TRUE);
 
-  const int midColX = m * 2 + colW;
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_MID), midColX, m, midColW + midScrollW + 4, topH, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_MID), colM.x, colM.y, midColW + midScrollW + 4, colM.h, TRUE);
   g_convertMidViewportX = 0;
   g_convertMidViewportY = 0;
   g_convertMidViewportW = midColW;
-  g_convertMidViewportH = (std::max)(80, topH - 2);
-  LayoutConvertMidColumn(hwnd, 0, midColW, 0, topH);
+  g_convertMidViewportH = (std::max)(80, colM.h - 2);
+  LayoutConvertMidColumn(hwnd, 0, midColW, 0, colM.h);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_MID_SCROLL), midColW + 2, 1, midScrollW, (std::max)(24, g_convertMidViewportH - 2), TRUE);
   if (HWND sb = FindConvertCtrl(hwnd, IDC_CONV_MID_SCROLL)) {
     SetWindowPos(sb, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
   }
   UpdateConvertMidScrollBar(hwnd);
 
-  const int outX = m * 3 + colW * 2;
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_OUTPUT_PANEL), outX, m, colW, topH, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_OUTPUT_PANEL), colR.x, colR.y, colR.w, colR.h, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TITLE), 10, 8, 120, 16, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TYPE), 10, 30, comboW, comboDropH, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TYPE_HELP), colW - 24, 30, 24, 24, TRUE);
@@ -731,26 +835,23 @@ void LayoutConvertWindow(HWND hwnd) {
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_PREVIEW), colW - 70, 86, 70, 24, TRUE);
   MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_INFO), 10, 116, infoW, infoH, TRUE);
 
-  const int y1 = m + topH + 8;
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_TASK_PANEL), m, y1, w - m * 2, taskH, TRUE);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_GRP_TASK_PANEL), taskRow.x, taskRow.y, taskRow.w, taskH, TRUE);
   const int cmdBtnLane = 212;  // 左列「复制命令/复制输出」+ 间距 + 右列「开始转换」
-  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_CMDLINE), 10, 8, w - m * 2 - cmdBtnLane, 88, TRUE);
-  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_COPY_CMD), w - m * 2 - cmdBtnLane, 8, 100, 26, TRUE);
-  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_RUN), w - m * 2 - 100, 8, 100, 52, TRUE);
-  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_PROGRESS), 10, 104, w - m * 2 - 20, 22, TRUE);
-  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_MSG), 10, 130, w - m * 2 - 20, 24, TRUE);
-  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_MSG_DETAIL), 10, 154, w - m * 2 - 20, 30, TRUE);
-  const int yLogBar = y1 + taskH + 2;
-  const int logPanelH = (std::max)(minLogH + 24, h - yLogBar - m);
-  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_LOG), m, yLogBar, w - m * 2, (std::max)(minLogH + 24, h - yLogBar - m), TRUE);
+  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_CMDLINE), 10, 8, taskRow.w - cmdBtnLane, 88, TRUE);
+  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_COPY_CMD), taskRow.w - cmdBtnLane, 8, 100, 26, TRUE);
+  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_RUN), taskRow.w - 100, 8, 100, 52, TRUE);
+  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_PROGRESS), 10, 104, taskRow.w - 20, 22, TRUE);
+  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_MSG), 10, 130, taskRow.w - 20, 24, TRUE);
+  MoveWindow(FindConvertCtrl(hwnd, IDC_CONV_MSG_DETAIL), 10, 154, taskRow.w - 20, 30, TRUE);
+  const int logPanelH = (std::max)(minLogH + 24, logRow.h);
+  MoveWindow(GetDlgItem(hwnd, IDC_CONV_PANEL_LOG), logRow.x, logRow.y, logRow.w, logPanelH, TRUE);
   HWND panelLog = GetDlgItem(hwnd, IDC_CONV_PANEL_LOG);
   HWND btnToggle = panelLog ? GetDlgItem(panelLog, IDC_CONV_TOGGLE_LOG) : GetDlgItem(hwnd, IDC_CONV_TOGGLE_LOG);
   HWND btnCopy = panelLog ? GetDlgItem(panelLog, IDC_CONV_COPY_LOG) : GetDlgItem(hwnd, IDC_CONV_COPY_LOG);
   HWND editLog = panelLog ? GetDlgItem(panelLog, IDC_CONV_LOG) : GetDlgItem(hwnd, IDC_CONV_LOG);
   if (btnToggle) MoveWindow(btnToggle, 0, 0, 100, 22, TRUE);
   if (btnCopy) MoveWindow(btnCopy, 106, 0, 100, 22, TRUE);
-  const int yLogTop = yLogBar + 24;
-  if (editLog) MoveWindow(editLog, 0, 24, w - m * 2, (std::max)(minLogH, h - yLogTop - m), TRUE);
+  if (editLog) MoveWindow(editLog, 0, 24, logRow.w, (std::max)(minLogH, logPanelH - 24), TRUE);
   UpdateConvertLogFoldUi(hwnd);
 }
 
@@ -965,7 +1066,18 @@ std::wstring GetComboSelectedText(HWND combo) {
 
 std::wstring GetConvertMajorTypeArg(HWND hwnd, bool inputSide) {
   const int id = inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE;
-  const int sel = static_cast<int>(SendMessageW(GetDlgItem(hwnd, id), CB_GETCURSEL, 0, 0));
+  HWND combo = FindConvertCtrl(hwnd, id);
+  int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+  if (sel < 0) {
+    const std::wstring t = GetComboSelectedText(combo);
+    if (t.find(L"模型") != std::wstring::npos || t.find(L"model") != std::wstring::npos || t.find(L"Mesh") != std::wstring::npos) {
+      sel = 1;
+    } else if (t.find(L"瓦片") != std::wstring::npos || t.find(L"tile") != std::wstring::npos || t.find(L"3DTiles") != std::wstring::npos) {
+      sel = 2;
+    } else if (t.find(L"GIS") != std::wstring::npos || t.find(L"gis") != std::wstring::npos) {
+      sel = 0;
+    }
+  }
   switch (sel) {
     case 1:
       return L"model";
@@ -979,8 +1091,29 @@ std::wstring GetConvertMajorTypeArg(HWND hwnd, bool inputSide) {
 std::wstring GetConvertSubtypeArg(HWND hwnd, bool inputSide) {
   const int majorId = inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE;
   const int subId = inputSide ? IDC_CONV_INPUT_SUBTYPE : IDC_CONV_OUTPUT_SUBTYPE;
-  const int major = static_cast<int>(SendMessageW(GetDlgItem(hwnd, majorId), CB_GETCURSEL, 0, 0));
-  const int sub = static_cast<int>(SendMessageW(GetDlgItem(hwnd, subId), CB_GETCURSEL, 0, 0));
+  const std::wstring majorArg = GetConvertMajorTypeArg(hwnd, inputSide);
+  const int major = (majorArg == L"model") ? 1 : (majorArg == L"tile") ? 2 : 0;
+  HWND subCombo = FindConvertCtrl(hwnd, subId);
+  int sub = static_cast<int>(SendMessageW(subCombo, CB_GETCURSEL, 0, 0));
+  if (sub < 0) {
+    const std::wstring t = GetComboSelectedText(subCombo);
+    if (major == 1) {
+      if (t.find(L"点云") != std::wstring::npos || t.find(L"point") != std::wstring::npos || t.find(L"LAS") != std::wstring::npos) sub = 1;
+      else sub = 0;
+    } else if (major == 2) {
+      if (t.find(L"TMS") != std::wstring::npos) sub = 1;
+      else if (t.find(L"WMTS") != std::wstring::npos) sub = 2;
+      else if (t.find(L"MBTiles") != std::wstring::npos) sub = 3;
+      else if (t.find(L"GPKG") != std::wstring::npos) sub = 4;
+      else if (t.find(L"3DTiles") != std::wstring::npos) sub = 5;
+      else sub = 0;
+    } else {
+      if (t.find(L"矢量") != std::wstring::npos || t.find(L"vector") != std::wstring::npos) sub = 1;
+      else if (t.find(L"栅格") != std::wstring::npos || t.find(L"raster") != std::wstring::npos || t.find(L"FLT") != std::wstring::npos) sub = 2;
+      else if (t.find(L"GPKG") != std::wstring::npos) sub = 3;
+      else sub = 0;
+    }
+  }
   if (major == 0) {
     switch (sub) {
       case 1:
@@ -1018,7 +1151,7 @@ std::wstring GetConvertSubtypeArg(HWND hwnd, bool inputSide) {
 }
 
 std::wstring GetModelCoordArg(HWND hwnd) {
-  const std::wstring raw = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_MODEL_COORD));
+  const std::wstring raw = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_MODEL_COORD));
   if (raw.find(L"cecf") != std::wstring::npos || raw.find(L"CECF") != std::wstring::npos) {
     return L"cecf";
   }
@@ -1026,7 +1159,7 @@ std::wstring GetModelCoordArg(HWND hwnd) {
 }
 
 std::wstring GetVectorModeArg(HWND hwnd) {
-  const std::wstring raw = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_VECTOR_MODE));
+  const std::wstring raw = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_VECTOR_MODE));
   if (raw.find(L"贴图") != std::wstring::npos || raw.find(L"texture") != std::wstring::npos) {
     return L"bake_texture";
   }
@@ -1132,6 +1265,13 @@ void UpdateConvertEditableControlStates(HWND hwnd) {
   g_convertMutedParamLabelIds.clear();
   ConvertUiVisibility v{};
   ComputeConvertUiVisibility(hwnd, &v);
+  if (!v.pair_supported) {
+    if (HWND hMsg = FindConvertCtrl(hwnd, IDC_CONV_MSG)) {
+      std::wstring why;
+      IsConvertPairSupportedBySubtype(hwnd, &why);
+      SetWindowTextW(hMsg, why.empty() ? L"当前输入/输出类型组合不支持。" : why.c_str());
+    }
+  }
 
   const auto paired = [](bool show, bool en) { return !show || en; };
   SetConvertParamLabel(hwnd, IDC_CONV_VECTOR_MODE_LBL, L"矢量参与转换策略：", paired(v.show_g1_vector, v.en_vector),
@@ -1169,25 +1309,22 @@ void UpdateConvertEditableControlStates(HWND hwnd) {
   SetConvertParamLabel(hwnd, IDC_CONV_MODEL_BUDGET_MB_LBL, L"预算上限（MB）：",
                        paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
 
-  RECT rc{};
-  GetClientRect(hwnd, &rc);
-  const int w = rc.right - rc.left;
-  const int h = rc.bottom - rc.top;
-  const int m = 10;
-  const int topH = (std::max)(180, h / 2);
-  const int colW = (w - m * 4) / 3;
-  const int midColX = m * 2 + colW;
-  LayoutConvertMidColumn(hwnd, midColX, colW, m, topH);
-
-  for (int lid : {IDC_CONV_VECTOR_MODE_LBL, IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_TARGET_CRS_LBL, IDC_CONV_MODEL_COORD_LBL,
-                  IDC_CONV_OUTPUT_UNIT_LBL, IDC_CONV_MESH_SPACING_LBL, IDC_CONV_OBJ_FP_TYPE_LBL, IDC_CONV_TEXTURE_FMT_LBL,
-                  IDC_CONV_RASTER_MAX_LBL, IDC_CONV_TILE_LEVELS_LBL, IDC_CONV_OBJ_TEX_MODE_LBL, IDC_CONV_OBJ_VIS_EFFECT_LBL,
-                  IDC_CONV_OBJ_SNOW_SCALE_LBL, IDC_CONV_GIS_DEM_INTERP_LBL, IDC_CONV_GIS_MESH_TOPO_LBL,
-                  IDC_CONV_MODEL_BUDGET_MODE_LBL, IDC_CONV_MODEL_BUDGET_MB_LBL}) {
-    if (HWND hl = GetDlgItem(hwnd, lid)) {
-      InvalidateRect(hl, nullptr, TRUE);
-    }
+  RECT rcMid{};
+  int midW = 240;
+  int midH = 200;
+  if (HWND panelMid = GetDlgItem(hwnd, IDC_CONV_PANEL_MID)) {
+    GetClientRect(panelMid, &rcMid);
+    const int mw = static_cast<int>(rcMid.right - rcMid.left - 16);
+    const int mh = static_cast<int>(rcMid.bottom - rcMid.top);
+    midW = (std::max)(120, mw);
+    midH = (std::max)(120, mh);
   }
+  g_convertMidViewportW = midW;
+  g_convertMidViewportH = (std::max)(80, midH - 2);
+  LayoutConvertMidColumn(hwnd, 0, midW, 0, midH);
+  UpdateConvertMidScrollBar(hwnd);
+
+  // 减少滚动过程闪烁：这里不逐个标签强制重绘，交给容器统一重绘
 }
 
 #if GIS_DESKTOP_HAVE_GDAL
@@ -1416,7 +1553,7 @@ int GetMeshSpacingArg(HWND hwnd) {
 }
 
 std::wstring GetTextureFormatArg(HWND hwnd) {
-  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_TEXTURE_FORMAT));
+  const std::wstring t = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_TEXTURE_FORMAT));
 #if AGIS_HAVE_BASISU
   if (t.find(L"KTX2") != std::wstring::npos && t.find(L"ETC1S") != std::wstring::npos) {
     return L"ktx2-etc1s";
@@ -1439,7 +1576,7 @@ std::wstring GetTextureFormatArg(HWND hwnd) {
 }
 
 std::wstring GetObjFpTypeArg(HWND hwnd) {
-  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OBJ_FP_TYPE));
+  const std::wstring t = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_OBJ_FP_TYPE));
   if (t.find(L"float") != std::wstring::npos || t.find(L"Float") != std::wstring::npos) {
     return L"float";
   }
@@ -1447,7 +1584,7 @@ std::wstring GetObjFpTypeArg(HWND hwnd) {
 }
 
 std::wstring GetObjTextureModeArg(HWND hwnd) {
-  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OBJ_TEX_MODE));
+  const std::wstring t = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_OBJ_TEX_MODE));
   if (t.find(L"pbr") != std::wstring::npos || t.find(L"PBR") != std::wstring::npos) {
     return L"pbr";
   }
@@ -1455,7 +1592,7 @@ std::wstring GetObjTextureModeArg(HWND hwnd) {
 }
 
 std::wstring GetObjVisualEffectArg(HWND hwnd) {
-  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_OBJ_VIS_EFFECT));
+  const std::wstring t = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_OBJ_VIS_EFFECT));
   if (t.find(L"night") != std::wstring::npos || t.find(L"夜") != std::wstring::npos) {
     return L"night";
   }
@@ -1479,7 +1616,7 @@ double GetObjSnowScaleArg(HWND hwnd) {
 }
 
 std::wstring GetGisDemInterpArg(HWND hwnd) {
-  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_GIS_DEM_INTERP));
+  const std::wstring t = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_GIS_DEM_INTERP));
   if (t.find(L"nearest") != std::wstring::npos) return L"nearest";
   if (t.find(L"cell_avg") != std::wstring::npos) return L"cell_avg";
   if (t.find(L"average") != std::wstring::npos || t.find(L"dem_avg") != std::wstring::npos) return L"dem_avg";
@@ -1489,14 +1626,14 @@ std::wstring GetGisDemInterpArg(HWND hwnd) {
 }
 
 std::wstring GetGisMeshTopologyArg(HWND hwnd) {
-  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_GIS_MESH_TOPO));
+  const std::wstring t = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_GIS_MESH_TOPO));
   if (t.find(L"delaunay") != std::wstring::npos || t.find(L"德劳内") != std::wstring::npos) return L"delaunay";
   if (t.find(L"tin") != std::wstring::npos || t.find(L"TIN") != std::wstring::npos) return L"tin";
   return L"grid";
 }
 
 std::wstring GetModelBudgetModeArg(HWND hwnd) {
-  const std::wstring t = GetComboSelectedText(GetDlgItem(hwnd, IDC_CONV_MODEL_BUDGET_MODE));
+  const std::wstring t = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_MODEL_BUDGET_MODE));
   if (t.find(L"file") != std::wstring::npos) return L"file";
   if (t.find(L"vram") != std::wstring::npos) return L"vram";
   return L"memory";
@@ -1812,6 +1949,11 @@ std::wstring QuoteArg(const std::wstring& s) {
 std::wstring AssembleConvertProcessCommandLine(HWND hwnd) {
   ConvertUiVisibility v{};
   ComputeConvertUiVisibility(hwnd, &v);
+  if (!v.pair_supported) {
+    std::wstring why;
+    IsConvertPairSupportedBySubtype(hwnd, &why);
+    return why.empty() ? L"<当前输入/输出组合不支持>" : (L"<不支持: " + why + L">");
+  }
   const int inMajor = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_INPUT_TYPE), CB_GETCURSEL, 0, 0));
   const int outMajor = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
   const wchar_t* exeName = ConvertToolExeName(inMajor, outMajor);
@@ -2026,19 +2168,10 @@ bool RunConvertBackendAsync(HWND hwnd) {
     MessageBoxW(hwnd, L"请先选择输入与输出类型。", L"数据转换", MB_OK | MB_ICONWARNING);
     return false;
   }
-  if (inMajor == outMajor) {
-    if (inMajor != 1) {
-      MessageBoxW(hwnd, L"同类型转换当前仅支持「模型数据」下 Mesh 与点云子类型互转。", L"数据转换",
-                  MB_OK | MB_ICONWARNING);
-      return false;
-    }
-    const std::wstring inSu = GetConvertSubtypeArg(hwnd, true);
-    const std::wstring outSu = GetConvertSubtypeArg(hwnd, false);
-    const auto isPc = [](const std::wstring& s) { return s == L"pointcloud" || s == L"las" || s == L"laz"; };
-    const auto isM3 = [](const std::wstring& s) { return s == L"3dmesh" || s == L"mesh"; };
-    if (!((isM3(inSu) && isPc(outSu)) || (isPc(inSu) && isM3(outSu)))) {
-      MessageBoxW(hwnd, L"请选择：一侧为「Mesh（网格模型）」、另一侧为「点云（LAS…）」。", L"数据转换",
-                  MB_OK | MB_ICONWARNING);
+  {
+    std::wstring why;
+    if (!IsConvertPairSupportedBySubtype(hwnd, &why)) {
+      MessageBoxW(hwnd, why.empty() ? L"当前输入/输出组合不支持。" : why.c_str(), L"数据转换", MB_OK | MB_ICONWARNING);
       return false;
     }
   }
@@ -2115,7 +2248,7 @@ void PreviewPath(HWND hwnd, bool inputSide) {
     MessageBoxW(hwnd, msg.c_str(), L"预览", MB_OK | MB_ICONWARNING);
     return;
   }
-  const int major = static_cast<int>(SendMessageW(GetDlgItem(hwnd, majorCtrl), CB_GETCURSEL, 0, 0));
+  const int major = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, majorCtrl), CB_GETCURSEL, 0, 0));
   HMENU menu = CreatePopupMenu();
   AppendMenuW(menu, MF_STRING, 1, L"内置预览（默认）");
   AppendMenuW(menu, MF_STRING, 2, L"系统默认打开");
@@ -2521,6 +2654,10 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (HWND c = GetDlgItem(hwnd, IDC_CONV_GRP_IN_SUB)) SetParent(c, panelMid);
         if (HWND c = GetDlgItem(hwnd, IDC_CONV_GRP_OUT_TYPE)) SetParent(c, panelMid);
         if (HWND c = GetDlgItem(hwnd, IDC_CONV_GRP_OUT_SUB)) SetParent(c, panelMid);
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_IN_TYPE)) SetWindowSubclass(g, ConvertPanelForwardSubclass, 906, 0);
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_IN_SUB)) SetWindowSubclass(g, ConvertPanelForwardSubclass, 907, 0);
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_OUT_TYPE)) SetWindowSubclass(g, ConvertPanelForwardSubclass, 908, 0);
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_OUT_SUB)) SetWindowSubclass(g, ConvertPanelForwardSubclass, 909, 0);
         if (HWND c = GetDlgItem(hwnd, IDC_CONV_MID_SCROLL)) SetParent(c, panelMid);
         for (int cid : {IDC_CONV_VECTOR_MODE_LBL,       IDC_CONV_VECTOR_MODE,       IDC_CONV_ELEV_HORIZ_LBL, IDC_CONV_ELEV_HORIZ_RATIO,
                         IDC_CONV_MODEL_COORD_LBL,       IDC_CONV_MODEL_COORD,       IDC_CONV_RASTER_MAX_LBL, IDC_CONV_RASTER_MAX,
@@ -2703,6 +2840,9 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     case WM_SIZE:
       LayoutConvertWindow(hwnd);
+      // 复杂父子层级下优先做“擦除+全子控件重绘”，避免缩放后残影
+      RedrawWindow(hwnd, nullptr, nullptr,
+                   RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
       return 0;
     case WM_GETMINMAXINFO: {
       auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
@@ -2747,7 +2887,6 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       if (next != g_convertMidScrollY) {
         g_convertMidScrollY = next;
         RefreshConvertSettingPanels(hwnd);
-        UpdateConvertCmdlinePreview(hwnd);
       }
       return 0;
     }
@@ -2777,7 +2916,6 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       if (pos != g_convertMidScrollY) {
         g_convertMidScrollY = pos;
         RefreshConvertSettingPanels(hwnd);
-        UpdateConvertCmdlinePreview(hwnd);
       }
       return 0;
     }
@@ -2980,6 +3118,10 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         RemoveWindowSubclass(grpOutput, ConvertPanelForwardSubclass, 904);
       }
       if (HWND panelMid = GetDlgItem(hwnd, IDC_CONV_PANEL_MID)) {
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_IN_TYPE)) RemoveWindowSubclass(g, ConvertPanelForwardSubclass, 906);
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_IN_SUB)) RemoveWindowSubclass(g, ConvertPanelForwardSubclass, 907);
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_OUT_TYPE)) RemoveWindowSubclass(g, ConvertPanelForwardSubclass, 908);
+        if (HWND g = GetDlgItem(panelMid, IDC_CONV_GRP_OUT_SUB)) RemoveWindowSubclass(g, ConvertPanelForwardSubclass, 909);
         RemoveWindowSubclass(panelMid, ConvertPanelForwardSubclass, 905);
       }
       if (HWND panelLog = GetDlgItem(hwnd, IDC_CONV_PANEL_LOG)) {

@@ -408,6 +408,27 @@ void AppendWindowJson(std::wstringstream& ss, HWND h, int indent, bool includeCh
   ss << L"}";
 }
 
+std::wstring NormalizeNewlinesForWinEdit(const std::wstring& s) {
+  std::wstring out;
+  out.reserve(s.size() + 32);
+  for (size_t i = 0; i < s.size(); ++i) {
+    const wchar_t ch = s[i];
+    if (ch == L'\r') {
+      if (i + 1 < s.size() && s[i + 1] == L'\n') {
+        out += L"\r\n";
+        ++i;
+      } else {
+        out += L"\r\n";
+      }
+    } else if (ch == L'\n') {
+      out += L"\r\n";
+    } else {
+      out.push_back(ch);
+    }
+  }
+  return out;
+}
+
 void UpdateInspectorProps() {
   if (!g_props || !IsWindow(g_props)) return;
   if (g_selected.empty()) {
@@ -422,7 +443,8 @@ void UpdateInspectorProps() {
   ss << L"  \"selected\":\r\n";
   AppendWindowJson(ss, h, 2, g_propsShowSubtree);
   ss << L"\r\n}";
-  SetWindowTextW(g_props, ss.str().c_str());
+  const std::wstring pretty = NormalizeNewlinesForWinEdit(ss.str());
+  SetWindowTextW(g_props, pretty.c_str());
 }
 
 HTREEITEM AddTreeNode(HWND tree, HTREEITEM parent, HWND h) {
@@ -510,6 +532,26 @@ std::vector<HWND> CollectThreadWindows() {
   std::vector<HWND> all;
   EnumThreadWindows(GetCurrentThreadId(), EnumTopCollect, reinterpret_cast<LPARAM>(&all));
   return all;
+}
+
+HWND PickWindowAtPoint(POINT screenPt) {
+  const auto all = CollectThreadWindows();
+  HWND best = nullptr;
+  LONG bestArea = LONG_MAX;
+  for (HWND h : all) {
+    if (!IsWindow(h) || h == g_overlay || IsInspectorWindowOrChild(h)) continue;
+    RECT wr{};
+    if (!GetWindowRect(h, &wr)) continue;
+    if (!PtInRect(&wr, screenPt)) continue;
+    const LONG w = (std::max)(0L, wr.right - wr.left);
+    const LONG hgt = (std::max)(0L, wr.bottom - wr.top);
+    const LONG area = w * hgt;
+    if (!best || area < bestArea) {
+      best = h;
+      bestArea = area;
+    }
+  }
+  return best ? best : WindowFromPoint(screenPt);
 }
 
 void SelectSingle(HWND h) {
@@ -876,7 +918,7 @@ bool HandleMsg(MSG* msg) {
     const int dx = sr.right - sr.left;
     const int dy = sr.bottom - sr.top;
     if (dx <= 3 && dy <= 3) {
-      HWND h = WindowFromPoint(up);
+      HWND h = PickWindowAtPoint(up);
       if (ctrl) ToggleSelect(h);
       else SelectSingle(h);
     } else {
