@@ -51,8 +51,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
   } else {
     OpenModelPreviewWindow(nullptr, path);
   }
+  const HWND previewWnd = FindWindowW(kModelPreviewClass, nullptr);
   MSG msg{};
-  while (GetMessageW(&msg, nullptr, 0, 0)) {
+  while (previewWnd && IsWindow(previewWnd) && GetMessageW(&msg, nullptr, 0, 0)) {
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }

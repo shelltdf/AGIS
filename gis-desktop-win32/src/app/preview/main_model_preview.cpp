@@ -3103,7 +3103,8 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 void OpenModelPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingPreviewLoadAs3DTiles = false;
   g_pendingPreviewModelPath = path;
-  HWND pw = CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"模型数据预览",
+  const DWORD exStyle = owner ? WS_EX_TOOLWINDOW : 0;
+  HWND pw = CreateWindowExW(exStyle, kModelPreviewClass, L"模型数据预览",
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
                             nullptr, GetModuleHandleW(nullptr), nullptr);
   if (pw) {
@@ -3115,7 +3116,8 @@ void OpenModelPreviewWindow(HWND owner, const std::wstring& path) {
 void OpenModelPreviewWindow3DTiles(HWND owner, const std::wstring& tilesetRootOrFile) {
   g_pendingPreviewLoadAs3DTiles = true;
   g_pendingPreviewModelPath = tilesetRootOrFile;
-  HWND pw = CreateWindowExW(WS_EX_TOOLWINDOW, kModelPreviewClass, L"3D Tiles 预览",
+  const DWORD exStyle = owner ? WS_EX_TOOLWINDOW : 0;
+  HWND pw = CreateWindowExW(exStyle, kModelPreviewClass, L"3D Tiles 预览",
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
                             nullptr, GetModuleHandleW(nullptr), nullptr);
   if (pw) {
@@ -4160,7 +4162,8 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingTilePreviewRoot = path;
-  HWND tw = CreateWindowExW(WS_EX_TOOLWINDOW, kTilePreviewClass, L"瓦片预览 · 四叉树 / BVH 元数据",
+  const DWORD exStyle = owner ? WS_EX_TOOLWINDOW : 0;
+  HWND tw = CreateWindowExW(exStyle, kTilePreviewClass, L"瓦片预览 · 四叉树 / BVH 元数据",
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
                             nullptr, GetModuleHandleW(nullptr), nullptr);
   if (tw) {

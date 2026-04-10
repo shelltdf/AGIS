@@ -36,8 +36,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
   if (argv) LocalFree(argv);
 
   OpenTileRasterPreviewWindow(nullptr, path);
+  const HWND previewWnd = FindWindowW(kTilePreviewClass, nullptr);
   MSG msg{};
-  while (GetMessageW(&msg, nullptr, 0, 0)) {
+  while (previewWnd && IsWindow(previewWnd) && GetMessageW(&msg, nullptr, 0, 0)) {
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
