@@ -43,6 +43,32 @@
 
 // --- 瓦片：平面四叉树 (slippy z/x/y) + 3D Tiles BVH/体积元数据（tileset.json 根 region）---
 
+/// Slippy 平面预览的屏幕展开方式（瓦片内容仍为 Web Mercator 纹理；非网格模式按经纬度或 sinφ 摆放，属示意拼贴）。
+enum class TileSlippyProjection : uint8_t {
+  /// 等比例经纬度（Plate Carrée）：同一 ° 经、° 纬在屏幕上等长。
+  kEquirectangular = 0,
+  /// 与 XYZ 索引一致的线性片元网格（传统「滑块地图」展开）。
+  kWebMercatorGrid = 1,
+  /// 等积圆柱（Lambert）：横轴为经度，纵轴为 sin(φ)，极点压缩更明显。
+  kCylindricalEqualArea = 2,
+};
+
+static constexpr int kTileSlippyProjectionCount = 3;
+static constexpr double kTileGeoPi = 3.14159265358979323846;
+
+static const wchar_t* TileSlippyProjectionShortLabel(TileSlippyProjection p) {
+  switch (p) {
+  case TileSlippyProjection::kEquirectangular:
+    return L"等经纬";
+  case TileSlippyProjection::kWebMercatorGrid:
+    return L"XYZ 网格";
+  case TileSlippyProjection::kCylindricalEqualArea:
+    return L"等积圆柱";
+  default:
+    return L"";
+  }
+}
+
 enum class TileSampleResult { kOk, kNoRaster, kContainerUnsupported };
 
 struct TileFindResult {
@@ -659,6 +685,13 @@ struct TilePreviewState {
   /// 非拖拽时用于节流 WM_PAINT：仅当光标落入新格（2^3 像素）才整窗刷新，避免每像素触发整屏 GDI+。
   int lastPointerQuantX = INT_MIN;
   int lastPointerQuantY = INT_MIN;
+
+  TileSlippyProjection slippyProjection = TileSlippyProjection::kEquirectangular;
+  bool showOptionsPanel = false;
+  bool uiShowTopHint = true;
+  bool uiShowSlippyMapHud = true;
+  bool uiShowTileGrid = true;
+  bool uiShowTileLabels = true;
 };
 
 static constexpr size_t kTilePreviewBitmapCacheMax = 160;
@@ -671,12 +704,15 @@ static constexpr int kTilePreviewBottomStatus = 28;
 
 /// 顶部说明区高度：随模式变化（含「打开方式」+ 动态 hint）。
 /// Slippy 地图模式仅保留一行快捷说明 + 动态 hint，避免固定 212px 把地图挤到窗口下半区。
-static int TilePreviewTopBarPx(TilePreviewState::Mode mode) {
-  switch (mode) {
+static int TilePreviewTopBarPx(const TilePreviewState* st) {
+  if (!st) {
+    return 212;
+  }
+  switch (st->mode) {
   case TilePreviewState::Mode::kThreeDTilesMeta:
     return 288;
   case TilePreviewState::Mode::kSlippyQuadtree:
-    return 72;
+    return st->uiShowTopHint ? 72 : 40;
   default:
     return 212;
   }
@@ -687,9 +723,9 @@ static RECT TilePreviewStatusBarRect(RECT cr) {
   return {cr.left, (std::max)(cr.top, cr.bottom - h), cr.right, cr.bottom};
 }
 
-static RECT TileSlippyImageArea(RECT cr, TilePreviewState::Mode mode) {
+static RECT TileSlippyImageArea(RECT cr, const TilePreviewState* st) {
   const int margin = 10;
-  const int top = cr.top + TilePreviewTopBarPx(mode);
+  const int top = cr.top + TilePreviewTopBarPx(st);
   const int bot = cr.bottom - margin - kTilePreviewBottomStatus;
   if (bot <= top + 8) {
     return {cr.left + margin, top, cr.right - margin, top + 8};
@@ -725,10 +761,12 @@ static void SlippyTileXYToLonLat(double tileX, double tileY, int z, double* lonD
   }
   const double n = static_cast<double>(1u << static_cast<unsigned>(z));
   *lonDeg = tileX / n * 360.0 - 180.0;
-  constexpr double kPi = 3.14159265358979323846;
-  const double latRad = std::atan(std::sinh(kPi * (1.0 - 2.0 * tileY / n)));
-  *latDeg = latRad * 180.0 / kPi;
+  const double latRad = std::atan(std::sinh(kTileGeoPi * (1.0 - 2.0 * tileY / n)));
+  *latDeg = latRad * 180.0 / kTileGeoPi;
 }
+
+static void TilePreviewUpdateSlippyPointerGeo(TilePreviewState* st, const RECT& img, const RECT& cr, POINT clientPt,
+                                              wchar_t* lineBuf, size_t lineCap);
 
 static void TilePreviewUpdatePointerGeo(TilePreviewState* st, HWND hwnd, POINT clientPt) {
   if (!st || !hwnd) {
@@ -742,31 +780,20 @@ static void TilePreviewUpdatePointerGeo(TilePreviewState* st, HWND hwnd, POINT c
   wchar_t line[512]{};
 
   if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
-    const RECT img = TileSlippyImageArea(cr, st->mode);
+    const RECT img = TileSlippyImageArea(cr, st);
     if (!PtInRect(&img, clientPt)) {
       swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入地图区域查看经纬度", clientPt.x, clientPt.y);
       st->tilePointerStatusLine = line;
       return;
     }
     st->pointerOverImage = true;
-    const int aw = (std::max)(1, static_cast<int>(img.right - img.left));
-    const int ah = (std::max)(1, static_cast<int>(img.bottom - img.top));
-    const double worldW = static_cast<double>(aw) / static_cast<double>(st->pixelsPerTile);
-    const double worldH = static_cast<double>(ah) / static_cast<double>(st->pixelsPerTile);
-    const double worldLeft = st->centerTx - worldW * 0.5;
-    const double worldTop = st->centerTy - worldH * 0.5;
-    const double tileX = worldLeft + static_cast<double>(clientPt.x - img.left) / static_cast<double>(st->pixelsPerTile);
-    const double tileY = worldTop + static_cast<double>(clientPt.y - img.top) / static_cast<double>(st->pixelsPerTile);
-    SlippyTileXYToLonLat(tileX, tileY, st->viewZ, &st->pointerLon, &st->pointerLat);
-    st->pointerGeoValid = true;
-    swprintf_s(line, L"客户区 (%d, %d) | λ %.6f° φ %.6f° | 椭球高 —（平面瓦片，无 DTM）", clientPt.x, clientPt.y, st->pointerLon,
-               st->pointerLat);
+    TilePreviewUpdateSlippyPointerGeo(st, img, cr, clientPt, line, std::size(line));
     st->tilePointerStatusLine = line;
     return;
   }
 
   if (st->mode == TilePreviewState::Mode::kSingleRaster && st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok) {
-    const RECT imgArea = TileSlippyImageArea(cr, st->mode);
+    const RECT imgArea = TileSlippyImageArea(cr, st);
     RECT dest{};
     if (TilePreviewComputeRasterDestRect(st, imgArea, &dest) && PtInRect(&dest, clientPt)) {
       st->pointerOverImage = true;
@@ -920,7 +947,7 @@ static void TileZoomSlippy(TilePreviewState* st, RECT clientCr, const POINT* cur
   if (newZ == st->viewZ) {
     return;
   }
-  const RECT img = TileSlippyImageArea(clientCr, st->mode);
+  const RECT img = TileSlippyImageArea(clientCr, st);
   const int aw = (std::max)(1, static_cast<int>(img.right - img.left));
   const int ah = (std::max)(1, static_cast<int>(img.bottom - img.top));
   POINT focusPt{};
@@ -954,6 +981,97 @@ static void TileZoomSlippy(TilePreviewState* st, RECT clientCr, const POINT* cur
 
 static RECT TileOpenButtonRect(RECT cr) {
   return RECT{cr.left + 12, cr.top + 10, cr.left + 92, cr.top + 34};
+}
+
+static RECT TileOptionsButtonRect(RECT cr) {
+  return RECT{cr.left + 100, cr.top + 10, cr.left + 186, cr.top + 34};
+}
+
+static RECT TileSlippyOptionsPanelRect(RECT cr) {
+  constexpr int kPanelW = 296;
+  constexpr int kPanelH = 232;
+  constexpr int kMargin = 12;
+  const int top = cr.top + 42;
+  return {cr.right - kPanelW - kMargin, top, cr.right - kMargin, top + kPanelH};
+}
+
+static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) {
+  if (!st || !st->showOptionsPanel || st->mode != TilePreviewState::Mode::kSlippyQuadtree) {
+    return;
+  }
+  const RECT prc = TileSlippyOptionsPanelRect(cr);
+  TileFillRectSemi(hdc, prc.left, prc.top, prc.right - prc.left, prc.bottom - prc.top, 250, 252, 254, 255);
+  HBRUSH frameBr = CreateSolidBrush(RGB(186, 198, 218));
+  FrameRect(hdc, &prc, frameBr);
+  DeleteObject(frameBr);
+  if (HFONT f = UiGetAppFont()) {
+    SelectObject(hdc, f);
+  }
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, RGB(28, 36, 52));
+  RECT titleRc{prc.left + 10, prc.top + 6, prc.right - 10, prc.top + 24};
+  DrawTextW(hdc, L"显示与投影", -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  static const wchar_t* kProjPickLabel[] = {L"等比例经纬度（Plate Carrée）", L"XYZ 片元线性（Web Mercator 网格）",
+                                            L"等积圆柱（Lambert · sin φ）"};
+  for (int i = 0; i < kTileSlippyProjectionCount; ++i) {
+    wchar_t line[180]{};
+    const bool sel = static_cast<int>(st->slippyProjection) == i;
+    swprintf_s(line, L"%s  %s", sel ? L"●" : L"○", kProjPickLabel[i]);
+    RECT rowRc{prc.left + 10, prc.top + 26 + i * 24, prc.right - 8, prc.top + 26 + i * 24 + 22};
+    DrawTextW(hdc, line, -1, &rowRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  }
+  RECT secRc{prc.left + 10, prc.top + 104, prc.right - 8, prc.top + 122};
+  DrawTextW(hdc, L"界面元素", -1, &secRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  auto drawCheckRow = [&](int y, bool on, const wchar_t* label) {
+    const RECT box{prc.left + 14, y, prc.left + 28, y + 14};
+    Rectangle(hdc, box.left, box.top, box.right, box.bottom);
+    if (on) {
+      RECT tick = box;
+      DrawTextW(hdc, L"√", -1, &tick, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    RECT tx{prc.left + 32, y - 2, prc.right - 10, y + 18};
+    DrawTextW(hdc, label, -1, &tx, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  };
+  drawCheckRow(prc.top + 124, st->uiShowTopHint, L"顶栏说明（打开方式 / 提示）");
+  drawCheckRow(prc.top + 148, st->uiShowSlippyMapHud, L"地图内 HUD（层级与操作说明）");
+  drawCheckRow(prc.top + 172, st->uiShowTileGrid, L"瓦片网格线");
+  drawCheckRow(prc.top + 196, st->uiShowTileLabels, L"瓦片标注（z/x/y 与像素尺寸）");
+}
+
+/// @return true 若点击落在面板内并已消费（含空白区域），调用方勿启动地图拖拽。
+static bool TileSlippyOptionsPanelHandleClick(HWND hwnd, TilePreviewState* st, RECT cr, POINT pt) {
+  if (!st || !st->showOptionsPanel || st->mode != TilePreviewState::Mode::kSlippyQuadtree) {
+    return false;
+  }
+  const RECT prc = TileSlippyOptionsPanelRect(cr);
+  if (!PtInRect(&prc, pt)) {
+    return false;
+  }
+  const int relY = pt.y - prc.top;
+  const int relX = pt.x - prc.left;
+  bool changed = false;
+  if (relY >= 26 && relY < 26 + 24 * kTileSlippyProjectionCount && relX >= 8) {
+    const int i = (relY - 26) / 24;
+    if (i >= 0 && i < kTileSlippyProjectionCount) {
+      st->slippyProjection = static_cast<TileSlippyProjection>(i);
+      changed = true;
+    }
+  } else if (relX >= 10 && relX < 260) {
+    auto toggleRow = [&](int y0, bool* flag) {
+      if (pt.y >= prc.top + y0 && pt.y < prc.top + y0 + 20) {
+        *flag = !*flag;
+        changed = true;
+      }
+    };
+    toggleRow(124, &st->uiShowTopHint);
+    toggleRow(148, &st->uiShowSlippyMapHud);
+    toggleRow(172, &st->uiShowTileGrid);
+    toggleRow(196, &st->uiShowTileLabels);
+  }
+  if (changed) {
+    InvalidateRect(hwnd, nullptr, FALSE);
+  }
+  return true;
 }
 
 struct TilePreviewLoadReport {
@@ -991,6 +1109,12 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   if (!st) {
     return;
   }
+  const TileSlippyProjection saveProj = st->slippyProjection;
+  const bool savePanel = st->showOptionsPanel;
+  const bool saveTopHint = st->uiShowTopHint;
+  const bool saveMapHud = st->uiShowSlippyMapHud;
+  const bool saveGrid = st->uiShowTileGrid;
+  const bool saveLabels = st->uiShowTileLabels;
   const auto markOk = [&]() {
     if (report) {
       report->ok = true;
@@ -1031,6 +1155,12 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   st->tileMouseTrackingLeave = false;
   st->lastPointerQuantX = INT_MIN;
   st->lastPointerQuantY = INT_MIN;
+  st->slippyProjection = saveProj;
+  st->showOptionsPanel = savePanel;
+  st->uiShowTopHint = saveTopHint;
+  st->uiShowSlippyMapHud = saveMapHud;
+  st->uiShowTileGrid = saveGrid;
+  st->uiShowTileLabels = saveLabels;
 
   if (st->rootPath.empty()) {
     st->hint = L"【操作提示】地图模式：滚轮切换 Z（光标中心；Shift+滚轮以视口中心）；Ctrl+滚轮调整片元像素尺寸；拖拽平移。";
@@ -1155,13 +1285,101 @@ struct TileSlippyPaintLayout {
   int spanY = 0;
   bool tooMany = false;
   bool valid = false;
+  /// 视口四角（片元浮点矩形）对应的 WGS84，顺序 TL, TR, BL, BR；供等经纬 / 等积圆柱与指针反算。
+  double cornerLon[4]{};
+  double cornerLat[4]{};
+  double viewCenterLon = 0.0;
+  double viewCenterLat = 0.0;
+  double imgCenterX = 0.0;
+  double imgCenterY = 0.0;
+  /// 每度经纬在屏幕上的像素（Plate Carrée / 等积圆柱的经向尺度）。
+  double ppdEq = 0.0;
+  /// 等积圆柱：R_pix = ppdEq * 180/π，用于 (sin φ - sin φ₀) 项。
+  double rPixCea = 0.0;
 };
+
+static void TileSlippyPaintLayoutFillGeo(TilePreviewState* st, TileSlippyPaintLayout* lay) {
+  if (!st || !lay || !lay->valid) {
+    return;
+  }
+  const int z = st->viewZ;
+  const double wl = lay->worldLeft;
+  const double wt = lay->worldTop;
+  const double wr = lay->worldLeft + lay->worldW;
+  const double wb = lay->worldTop + lay->worldH;
+  SlippyTileXYToLonLat(wl, wt, z, &lay->cornerLon[0], &lay->cornerLat[0]);
+  SlippyTileXYToLonLat(wr, wt, z, &lay->cornerLon[1], &lay->cornerLat[1]);
+  SlippyTileXYToLonLat(wl, wb, z, &lay->cornerLon[2], &lay->cornerLat[2]);
+  SlippyTileXYToLonLat(wr, wb, z, &lay->cornerLon[3], &lay->cornerLat[3]);
+  SlippyTileXYToLonLat(st->centerTx, st->centerTy, z, &lay->viewCenterLon, &lay->viewCenterLat);
+  lay->ppdEq = static_cast<double>(st->pixelsPerTile) * static_cast<double>(lay->dim) / 360.0;
+  lay->rPixCea = lay->ppdEq * (180.0 / kTileGeoPi);
+  lay->imgCenterX = static_cast<double>(lay->imgArea.left + lay->imgArea.right) * 0.5;
+  lay->imgCenterY = static_cast<double>(lay->imgArea.top + lay->imgArea.bottom) * 0.5;
+}
+
+static void SlippyLonLatToScreenEq(const TileSlippyPaintLayout& lay, double lonDeg, double latDeg, int* sx, int* sy) {
+  if (!sx || !sy) {
+    return;
+  }
+  *sx = static_cast<int>(std::lround(lay.imgCenterX + (lonDeg - lay.viewCenterLon) * lay.ppdEq));
+  *sy = static_cast<int>(std::lround(lay.imgCenterY - (latDeg - lay.viewCenterLat) * lay.ppdEq));
+}
+
+static void SlippyLonLatToScreenCea(const TileSlippyPaintLayout& lay, double lonDeg, double latDeg, int* sx, int* sy) {
+  if (!sx || !sy) {
+    return;
+  }
+  const double latR = latDeg * kTileGeoPi / 180.0;
+  const double cLatR = lay.viewCenterLat * kTileGeoPi / 180.0;
+  *sx = static_cast<int>(std::lround(lay.imgCenterX + (lonDeg - lay.viewCenterLon) * lay.ppdEq));
+  *sy = static_cast<int>(std::lround(lay.imgCenterY - (std::sin(latR) - std::sin(cLatR)) * lay.rPixCea));
+}
+
+static void SlippyGetTileScreenBounds(const TilePreviewState* st, const TileSlippyPaintLayout& lay, int tx, int ty, RECT* out) {
+  if (!st || !out) {
+    return;
+  }
+  if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
+    const RECT& imgArea = lay.imgArea;
+    const int sx = imgArea.left +
+                   static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * st->pixelsPerTile));
+    const int sy =
+        imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
+    const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
+    *out = {sx, sy, sx + sw, sy + sw};
+    return;
+  }
+  const int z = st->viewZ;
+  double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
+  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
+  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
+  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
+  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
+  int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
+  if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
+    SlippyLonLatToScreenEq(lay, lon0, lat0, &sxa, &sya);
+    SlippyLonLatToScreenEq(lay, lon1, lat1, &sxb, &syb);
+    SlippyLonLatToScreenEq(lay, lon2, lat2, &sxc, &syc);
+    SlippyLonLatToScreenEq(lay, lon3, lat3, &sxd, &syd);
+  } else {
+    SlippyLonLatToScreenCea(lay, lon0, lat0, &sxa, &sya);
+    SlippyLonLatToScreenCea(lay, lon1, lat1, &sxb, &syb);
+    SlippyLonLatToScreenCea(lay, lon2, lat2, &sxc, &syc);
+    SlippyLonLatToScreenCea(lay, lon3, lat3, &sxd, &syd);
+  }
+  const int minx = (std::min)({sxa, sxb, sxc, sxd});
+  const int maxx = (std::max)({sxa, sxb, sxc, sxd});
+  const int miny = (std::min)({sya, syb, syc, syd});
+  const int maxy = (std::max)({sya, syb, syc, syd});
+  *out = {minx, miny, (std::max)(minx + 1, maxx), (std::max)(miny + 1, maxy)};
+}
 
 static bool TileSlippyBuildPaintLayout(RECT cr, TilePreviewState* st, TileSlippyPaintLayout* out) {
   if (!st || !out || st->slippyPaths.empty()) {
     return false;
   }
-  out->imgArea = TileSlippyImageArea(cr, st->mode);
+  out->imgArea = TileSlippyImageArea(cr, st);
   out->aw = (std::max)(1, static_cast<int>(out->imgArea.right - out->imgArea.left));
   out->ah = (std::max)(1, static_cast<int>(out->imgArea.bottom - out->imgArea.top));
   out->worldW = static_cast<double>(out->aw) / static_cast<double>(st->pixelsPerTile);
@@ -1181,7 +1399,85 @@ static bool TileSlippyBuildPaintLayout(RECT cr, TilePreviewState* st, TileSlippy
   out->spanY = out->ty1 - out->ty0 + 1;
   out->tooMany = out->spanX * out->spanY > 220;
   out->valid = true;
+  TileSlippyPaintLayoutFillGeo(st, out);
   return true;
+}
+
+static void TilePreviewUpdateSlippyPointerGeo(TilePreviewState* st, const RECT& img, const RECT& cr, POINT clientPt,
+                                              wchar_t* lineBuf, size_t lineCap) {
+  if (!st || !lineBuf || lineCap < 64u) {
+    return;
+  }
+  TileSlippyPaintLayout lay{};
+  if (!TileSlippyBuildPaintLayout(cr, st, &lay) || lay.tooMany) {
+    swprintf_s(lineBuf, lineCap, L"客户区 (%d, %d) | 可视块过多，无法读点", clientPt.x, clientPt.y);
+    return;
+  }
+  if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
+    const int aw = (std::max)(1, static_cast<int>(img.right - img.left));
+    const int ah = (std::max)(1, static_cast<int>(img.bottom - img.top));
+    const double worldW = static_cast<double>(aw) / static_cast<double>(st->pixelsPerTile);
+    const double worldH = static_cast<double>(ah) / static_cast<double>(st->pixelsPerTile);
+    const double worldLeft = st->centerTx - worldW * 0.5;
+    const double worldTop = st->centerTy - worldH * 0.5;
+    const double tileX =
+        worldLeft + static_cast<double>(clientPt.x - img.left) / static_cast<double>(st->pixelsPerTile);
+    const double tileY =
+        worldTop + static_cast<double>(clientPt.y - img.top) / static_cast<double>(st->pixelsPerTile);
+    SlippyTileXYToLonLat(tileX, tileY, st->viewZ, &st->pointerLon, &st->pointerLat);
+  } else if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
+    st->pointerLon = lay.viewCenterLon + (static_cast<double>(clientPt.x) - lay.imgCenterX) / lay.ppdEq;
+    st->pointerLat = lay.viewCenterLat - (static_cast<double>(clientPt.y) - lay.imgCenterY) / lay.ppdEq;
+  } else {
+    const double s0 = std::sin(lay.viewCenterLat * kTileGeoPi / 180.0);
+    const double sAt = s0 - (static_cast<double>(clientPt.y) - lay.imgCenterY) / lay.rPixCea;
+    const double clamped = (std::clamp)(sAt, -1.0, 1.0);
+    st->pointerLat = std::asin(clamped) * 180.0 / kTileGeoPi;
+    st->pointerLon = lay.viewCenterLon + (static_cast<double>(clientPt.x) - lay.imgCenterX) / lay.ppdEq;
+  }
+  st->pointerGeoValid = true;
+  swprintf_s(lineBuf, lineCap, L"客户区 (%d, %d) | λ %.6f° φ %.6f° | 投影 %s | 椭球高 —（瓦片为 Web Mercator 纹理，非网格模式为示意拼贴）",
+             clientPt.x, clientPt.y, st->pointerLon, st->pointerLat, TileSlippyProjectionShortLabel(st->slippyProjection));
+}
+
+static void TilePaintOneSlippyTileGeo(Gdiplus::Graphics& g, TilePreviewState* st, const TileSlippyPaintLayout& lay,
+                                      int tx, int ty, TileSlippyProjection proj, Gdiplus::SolidBrush& miss) {
+  const uint64_t key = PackTileKey(st->viewZ, tx, ty);
+  auto pit = st->slippyPaths.find(key);
+  const int z = st->viewZ;
+  double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
+  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
+  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
+  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
+  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
+  int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
+  if (proj == TileSlippyProjection::kEquirectangular) {
+    SlippyLonLatToScreenEq(lay, lon0, lat0, &sxa, &sya);
+    SlippyLonLatToScreenEq(lay, lon1, lat1, &sxb, &syb);
+    SlippyLonLatToScreenEq(lay, lon2, lat2, &sxc, &syc);
+    SlippyLonLatToScreenEq(lay, lon3, lat3, &sxd, &syd);
+  } else {
+    SlippyLonLatToScreenCea(lay, lon0, lat0, &sxa, &sya);
+    SlippyLonLatToScreenCea(lay, lon1, lat1, &sxb, &syb);
+    SlippyLonLatToScreenCea(lay, lon2, lat2, &sxc, &syc);
+    SlippyLonLatToScreenCea(lay, lon3, lat3, &sxd, &syd);
+  }
+  const int minx = (std::min)({sxa, sxb, sxc, sxd});
+  const int maxx = (std::max)({sxa, sxb, sxc, sxd});
+  const int miny = (std::min)({sya, syb, syc, syd});
+  const int maxy = (std::max)({sya, syb, syc, syd});
+  const int rw = (std::max)(1, maxx - minx);
+  const int rh = (std::max)(1, maxy - miny);
+  if (pit == st->slippyPaths.end()) {
+    g.FillRectangle(&miss, minx, miny, rw, rh);
+    return;
+  }
+  Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second);
+  if (bm) {
+    g.DrawImage(bm, minx, miny, rw, rh);
+  } else {
+    g.FillRectangle(&miss, minx, miny, rw, rh);
+  }
 }
 
 static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippyPaintLayout& lay) {
@@ -1195,31 +1491,40 @@ static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippy
   g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
   g.SetCompositingQuality(Gdiplus::CompositingQualityHighSpeed);
   Gdiplus::SolidBrush miss(Gdiplus::Color(255, 238, 240, 245));
+  if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
+    for (int ty = lay.ty0; ty <= lay.ty1; ++ty) {
+      for (int tx = lay.tx0; tx <= lay.tx1; ++tx) {
+        const uint64_t key = PackTileKey(st->viewZ, tx, ty);
+        auto pit = st->slippyPaths.find(key);
+        const int sx = imgArea.left +
+                       static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * st->pixelsPerTile));
+        const int sy =
+            imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
+        const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
+        if (pit == st->slippyPaths.end()) {
+          g.FillRectangle(&miss, sx, sy, sw, sw);
+          continue;
+        }
+        Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second);
+        if (bm) {
+          const int iw = bm->GetWidth();
+          const int ih = bm->GetHeight();
+          if (iw > 0 && ih > 0 && std::abs(iw - sw) <= 1 && std::abs(ih - sw) <= 1) {
+            g.DrawImage(bm, sx, sy);
+          } else {
+            g.DrawImage(bm, sx, sy, sw, sw);
+          }
+        } else {
+          g.FillRectangle(&miss, sx, sy, sw, sw);
+        }
+      }
+    }
+    return;
+  }
+  const TileSlippyProjection gp = st->slippyProjection;
   for (int ty = lay.ty0; ty <= lay.ty1; ++ty) {
     for (int tx = lay.tx0; tx <= lay.tx1; ++tx) {
-      const uint64_t key = PackTileKey(st->viewZ, tx, ty);
-      auto pit = st->slippyPaths.find(key);
-      const int sx = imgArea.left +
-                     static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * st->pixelsPerTile));
-      const int sy =
-          imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
-      const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
-      if (pit == st->slippyPaths.end()) {
-        g.FillRectangle(&miss, sx, sy, sw, sw);
-        continue;
-      }
-      Gdiplus::Bitmap* bm = TileBitmapCacheGet(st, key, pit->second);
-      if (bm) {
-        const int iw = bm->GetWidth();
-        const int ih = bm->GetHeight();
-        if (iw > 0 && ih > 0 && std::abs(iw - sw) <= 1 && std::abs(ih - sw) <= 1) {
-          g.DrawImage(bm, sx, sy);
-        } else {
-          g.DrawImage(bm, sx, sy, sw, sw);
-        }
-      } else {
-        g.FillRectangle(&miss, sx, sy, sw, sw);
-      }
+      TilePaintOneSlippyTileGeo(g, st, lay, tx, ty, gp, miss);
     }
   }
 }
@@ -1235,29 +1540,33 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, RGB(28, 36, 52));
 
-  wchar_t status[384]{};
+  wchar_t status[512]{};
   if (lay.tooMany) {
     swprintf_s(status, L"当前显示层级 Z = %d（金字塔最大 Z = %d）\n可视块过多 (%d×%d)：请滚轮降低 Z 或 Ctrl+滚轮缩小片元。", st->viewZ,
                st->indexMaxZ, lay.spanX, lay.spanY);
-  } else {
+  } else if (st->uiShowSlippyMapHud) {
     swprintf_s(status,
-               L"当前显示层级 Z = %d（金字塔最大 Z = %d）| 屏幕片元约 %.0f×%.0f px\n"
-               L"可视瓦片列 [%d..%d] 行 [%d..%d] | 已索引 %zu 块 | 拖拽平移 | 滚轮换级 | Shift+滚轮视口中心 | Ctrl+滚轮片元尺度",
-               st->viewZ, st->indexMaxZ, static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile),
-               lay.tx0, lay.tx1, lay.ty0, lay.ty1, st->tileCount);
+               L"投影：%s | Z = %d（最大 %d）| 片元约 %.0f×%.0f px\n"
+               L"可视瓦片列 [%d..%d] 行 [%d..%d] | 已索引 %zu 块\n"
+               L"拖拽平移 | 滚轮换级 | Shift+滚轮视口中心 | Ctrl+滚轮片元尺度 | 「选项」改投影与界面",
+               TileSlippyProjectionShortLabel(st->slippyProjection), st->viewZ, st->indexMaxZ,
+               static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile), lay.tx0, lay.tx1, lay.ty0,
+               lay.ty1, st->tileCount);
   }
   const int zPad = 6;
-  const int zBandH = lay.tooMany ? 68 : 62;
-  RECT zRc{imgArea.left + zPad, imgArea.top + zPad, imgArea.right - zPad, imgArea.top + zPad + zBandH};
-  if (zRc.bottom > imgArea.bottom - 10) {
-    zRc.bottom = imgArea.bottom - 10;
+  const int zBandH = lay.tooMany ? 68 : (st->uiShowSlippyMapHud ? 78 : 0);
+  if (lay.tooMany || st->uiShowSlippyMapHud) {
+    RECT zRc{imgArea.left + zPad, imgArea.top + zPad, imgArea.right - zPad, imgArea.top + zPad + zBandH};
+    if (zRc.bottom > imgArea.bottom - 10) {
+      zRc.bottom = imgArea.bottom - 10;
+    }
+    if (zRc.top >= zRc.bottom - 8) {
+      zRc.top = (std::max)(imgArea.top + 2, zRc.bottom - 40);
+    }
+    TileDrawTextBlockSemiBg(hdc, status, zRc, 5, 210);
   }
-  if (zRc.top >= zRc.bottom - 8) {
-    zRc.top = (std::max)(imgArea.top + 2, zRc.bottom - 40);
-  }
-  TileDrawTextBlockSemiBg(hdc, status, zRc, 5, 210);
 
-  if (!lay.tooMany) {
+  if (!lay.tooMany && (st->uiShowTileGrid || st->uiShowTileLabels)) {
     const int saved = SaveDC(hdc);
     HPEN pen = CreatePen(PS_SOLID, 1, RGB(255, 120, 0));
     HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
@@ -1266,12 +1575,18 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
       for (int tx = lay.tx0; tx <= lay.tx1; ++tx) {
         const uint64_t key = PackTileKey(st->viewZ, tx, ty);
         auto pit = st->slippyPaths.find(key);
-        const int sx = imgArea.left +
-                       static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * st->pixelsPerTile));
-        const int sy =
-            imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
-        const int sw = (std::max)(1, static_cast<int>(std::ceil(st->pixelsPerTile)) + 1);
-        Rectangle(hdc, sx, sy, sx + sw + 1, sy + sw + 1);
+        RECT tRc{};
+        SlippyGetTileScreenBounds(st, lay, tx, ty, &tRc);
+        const int sx = tRc.left;
+        const int sy = tRc.top;
+        const int sw = (std::max)(1, static_cast<int>(tRc.right - tRc.left));
+        const int sh = (std::max)(1, static_cast<int>(tRc.bottom - tRc.top));
+        if (st->uiShowTileGrid) {
+          Rectangle(hdc, sx, sy, sx + sw + 1, sy + sh + 1);
+        }
+        if (!st->uiShowTileLabels) {
+          continue;
+        }
         int bw = static_cast<int>(std::lround(st->pixelsPerTile));
         int bh = bw;
         if (pit != st->slippyPaths.end()) {
@@ -1334,6 +1649,15 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           return 0;
         }
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+          const RECT optBtnRc = TileOptionsButtonRect(cr);
+          if (PtInRect(&optBtnRc, pt)) {
+            st->showOptionsPanel = !st->showOptionsPanel;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+          }
+          if (TileSlippyOptionsPanelHandleClick(hwnd, st, cr, pt)) {
+            return 0;
+          }
           st->dragging = true;
           st->lastDragPt.x = GET_X_LPARAM(lParam);
           st->lastDragPt.y = GET_Y_LPARAM(lParam);
@@ -1501,23 +1825,43 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         DeleteObject(btnBg);
         Rectangle(hdc, openRc.left, openRc.top, openRc.right, openRc.bottom);
         DrawTextW(hdc, L"Open...", -1, &openRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        RECT hintRc{openRc.right + 8, 8, cr.right - 10, cr.top + TilePreviewTopBarPx(st->mode) - 6};
+        if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+          RECT optBtnRc = TileOptionsButtonRect(cr);
+          HBRUSH optBg = CreateSolidBrush(st->showOptionsPanel ? RGB(200, 216, 248) : RGB(236, 242, 252));
+          FillRect(hdc, &optBtnRc, optBg);
+          DeleteObject(optBg);
+          Rectangle(hdc, optBtnRc.left, optBtnRc.top, optBtnRc.right, optBtnRc.bottom);
+          DrawTextW(hdc, L"选项", -1, &optBtnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+        const RECT optBtnRc = TileOptionsButtonRect(cr);
+        const int hintLeft =
+            (st->mode == TilePreviewState::Mode::kSlippyQuadtree)
+                ? ((std::max)(openRc.right, optBtnRc.right) + 8)
+                : (openRc.right + 8);
+        RECT hintRc{hintLeft, 8, cr.right - 10, cr.top + TilePreviewTopBarPx(st) - 6};
         if (hintRc.bottom < hintRc.top + 20) {
           hintRc.bottom = hintRc.top + 20;
         }
         {
-          const std::wstring panel =
-              (st->mode == TilePreviewState::Mode::kSlippyQuadtree)
-                  ? (std::wstring(kTilePreviewSlippyTopLine) + L"\n\n" + st->hint)
-                  : (std::wstring(kTilePreviewOpenMethods) + L"\n\n──\n" + st->hint);
+          std::wstring panel;
+          if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+            if (st->uiShowTopHint) {
+              panel = std::wstring(kTilePreviewSlippyTopLine) + L"\n\n" + st->hint;
+            } else {
+              panel = st->hint.empty() ? L"顶栏说明已关闭（「选项」可再打开）。" : st->hint;
+            }
+          } else {
+            panel = std::wstring(kTilePreviewOpenMethods) + L"\n\n──\n" + st->hint;
+          }
           TileDrawTextBlockSemiBg(hdc, panel.c_str(), hintRc, 6, 218);
         }
         if (slippyPaint) {
           TilePaintSlippyHud(hdc, st, slippyLay);
         }
+        TilePaintSlippyOptionsPanel(hdc, cr, st);
         if (st->mode != TilePreviewState::Mode::kSlippyQuadtree && st->bmp &&
             st->bmp->GetLastStatus() == Gdiplus::Ok) {
-          const RECT imgArea = TileSlippyImageArea(cr, st->mode);
+          const RECT imgArea = TileSlippyImageArea(cr, st);
           const int aw = (std::max)(1, static_cast<int>(imgArea.right - imgArea.left));
           const int ah = (std::max)(1, static_cast<int>(imgArea.bottom - imgArea.top));
           const int iw = st->bmp->GetWidth();
