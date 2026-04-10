@@ -10,13 +10,19 @@
 #include "common/ui/ui_debug_pick.h"
 #include "ui_engine/gdiplus_ui.h"
 
+static HBRUSH g_modelPreviewWinClassBgBrush;
+
 static bool RegisterModelPreviewClass(HINSTANCE inst) {
   WNDCLASSW wc{};
   wc.lpfnWndProc = ModelPreviewWndProc;
   wc.hInstance = inst;
   wc.lpszClassName = kModelPreviewClass;
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  if (!g_modelPreviewWinClassBgBrush) {
+    g_modelPreviewWinClassBgBrush = CreateSolidBrush(RGB(200, 212, 230));
+  }
+  wc.hbrBackground = g_modelPreviewWinClassBgBrush ? g_modelPreviewWinClassBgBrush
+                                                 : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   return RegisterClassW(&wc) != 0;
 }
 

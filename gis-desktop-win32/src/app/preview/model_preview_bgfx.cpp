@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -17,6 +18,9 @@
 #include "vs_debugdraw_fill_texture.bin.h"
 
 namespace {
+
+/// 灰蓝清屏色。bgfx `setViewClear` 第三参为 **0xRRGGBBAA**（见 `bgfx_p.h` `Clear::set`，非 ABGR）。
+constexpr uint32_t kPreviewBgfxClearRgba = 0xC8D4E6FFu;  // RGB(200,212,230), A=255
 
 bx::DefaultAllocator s_bimgAlloc;
 
@@ -311,9 +315,28 @@ static void DestroyTextureResources(AgisBgfxPreviewContextImpl* c) {
   }
 }
 
+static void LoadCpuPbrMapsFromPaths(const AgisBgfxPbrTexturePaths& paths, CpuPbrMaps* out) {
+  if (!out) {
+    return;
+  }
+  *out = CpuPbrMaps{};
+  if (!paths.normalPath.empty()) {
+    LoadCpuImage2D(paths.normalPath, &out->normal);
+  }
+  if (!paths.roughnessPath.empty()) {
+    LoadCpuImage2D(paths.roughnessPath, &out->roughness);
+  }
+  if (!paths.metallicPath.empty()) {
+    LoadCpuImage2D(paths.metallicPath, &out->metallic);
+  }
+  if (!paths.aoPath.empty()) {
+    LoadCpuImage2D(paths.aoPath, &out->ao);
+  }
+}
+
 static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisBgfxPbrViewMode pbrViewMode,
                       const CpuPbrMaps* cpuMaps, std::vector<PosTexColorVertex>* verts, std::vector<uint32_t>* triIdx,
-                      std::vector<uint32_t>* lineIdx) {
+                      std::vector<uint32_t>* lineIdx, int* progressPct) {
   verts->clear();
   triIdx->clear();
   lineIdx->clear();
@@ -375,7 +398,20 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
   }
   const size_t stride = ModelPreviewFaceStride(model.faces.size());
   const bool haveFt = model.faceTexcoord.size() == model.faces.size();
+  size_t faceSteps = 0;
   for (size_t fi = 0; fi < model.faces.size(); fi += stride) {
+    (void)fi;
+    ++faceSteps;
+  }
+  size_t fiStep = 0;
+  for (size_t fi = 0; fi < model.faces.size(); fi += stride) {
+    ++fiStep;
+    if (progressPct && faceSteps > 0) {
+      if ((fiStep & 0x3Fu) == 0 || fiStep == faceSteps) {
+        const int pct = static_cast<int>((fiStep * 100) / faceSteps);
+        *progressPct = (std::min)(99, pct);
+      }
+    }
     const auto& f = model.faces[fi];
     if (f[0] < 0 || f[1] < 0 || f[2] < 0 || f[0] >= static_cast<int>(model.vertices.size()) ||
         f[1] >= static_cast<int>(model.vertices.size()) || f[2] >= static_cast<int>(model.vertices.size())) {
@@ -607,7 +643,32 @@ static bool BuildMesh(const ObjPreviewModel& model, bool pseudoPbrEnabled, AgisB
     lineIdx->push_back(base + 2);
     lineIdx->push_back(base);
   }
+  if (progressPct) {
+    *progressPct = 100;
+  }
   return true;
+}
+
+static bool UploadPrebuiltMesh(AgisBgfxPreviewContextImpl* c, const AgisBgfxCpuBuiltMesh& mesh) {
+  static_assert(sizeof(AgisBgfxInterleavedVertex) == sizeof(PosTexColorVertex), "vertex layout mismatch");
+  DestroyMesh(c);
+  if (mesh.vertices.empty() || mesh.triIndices.empty()) {
+    c->triCount = 0;
+    c->lineCount = 0;
+    return true;
+  }
+  const bgfx::Memory* vmem =
+      bgfx::copy(mesh.vertices.data(), static_cast<uint32_t>(mesh.vertices.size() * sizeof(PosTexColorVertex)));
+  c->vbh = bgfx::createVertexBuffer(vmem, PosTexColorVertex::Layout());
+  const bgfx::Memory* tmem =
+      bgfx::copy(mesh.triIndices.data(), static_cast<uint32_t>(mesh.triIndices.size() * sizeof(uint32_t)));
+  c->ibhTri = bgfx::createIndexBuffer(tmem, BGFX_BUFFER_INDEX32);
+  const bgfx::Memory* lmem =
+      bgfx::copy(mesh.lineIndices.data(), static_cast<uint32_t>(mesh.lineIndices.size() * sizeof(uint32_t)));
+  c->ibhLine = bgfx::createIndexBuffer(lmem, BGFX_BUFFER_INDEX32);
+  c->triCount = static_cast<uint32_t>(mesh.triIndices.size());
+  c->lineCount = static_cast<uint32_t>(mesh.lineIndices.size());
+  return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
 }
 
 static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
@@ -617,7 +678,7 @@ static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
   std::vector<PosTexColorVertex> verts;
   std::vector<uint32_t> triIdx;
   std::vector<uint32_t> lineIdx;
-  if (!BuildMesh(c->cachedModel, c->pseudoPbrEnabled, c->pbrViewMode, &c->cpuMaps, &verts, &triIdx, &lineIdx)) {
+  if (!BuildMesh(c->cachedModel, c->pseudoPbrEnabled, c->pbrViewMode, &c->cpuMaps, &verts, &triIdx, &lineIdx, nullptr)) {
     return false;
   }
   DestroyMesh(c);
@@ -637,13 +698,56 @@ static bool RebuildMeshBuffers(AgisBgfxPreviewContextImpl* c) {
   return bgfx::isValid(c->vbh) && bgfx::isValid(c->ibhTri) && bgfx::isValid(c->ibhLine);
 }
 
+static bool BuildMeshOnCpuImpl(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
+                               const AgisBgfxPbrTexturePaths& pbrPaths, int* progressPct, AgisBgfxCpuBuiltMesh* out) {
+  static_assert(sizeof(AgisBgfxInterleavedVertex) == sizeof(PosTexColorVertex), "vertex layout mismatch");
+  if (!out) {
+    return false;
+  }
+  *out = AgisBgfxCpuBuiltMesh{};
+  if (model.vertices.empty() || model.faces.empty()) {
+    if (progressPct) {
+      *progressPct = 100;
+    }
+    return true;
+  }
+  int localPct = 0;
+  int* prog = progressPct ? progressPct : &localPct;
+  *prog = 0;
+  CpuPbrMaps maps{};
+  LoadCpuPbrMapsFromPaths(pbrPaths, &maps);
+  std::vector<PosTexColorVertex> verts;
+  std::vector<uint32_t> triIdx;
+  std::vector<uint32_t> lineIdx;
+  if (!BuildMesh(model, pseudoPbr, mode, &maps, &verts, &triIdx, &lineIdx, prog)) {
+    return false;
+  }
+  if (progressPct) {
+    *progressPct = 100;
+  }
+  out->vertices.resize(verts.size());
+  if (!verts.empty()) {
+    memcpy(out->vertices.data(), verts.data(), verts.size() * sizeof(PosTexColorVertex));
+  }
+  out->triIndices = std::move(triIdx);
+  out->lineIndices = std::move(lineIdx);
+  return true;
+}
+
 }  // namespace
 
 static AgisBgfxPreviewContextImpl* AsImpl(AgisBgfxPreviewContext* p) {
   return reinterpret_cast<AgisBgfxPreviewContextImpl*>(p);
 }
 
-bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRendererKind renderer, const ObjPreviewModel& model) {
+bool agis_bgfx_preview_build_mesh_on_cpu(const ObjPreviewModel& model, bool pseudoPbr, AgisBgfxPbrViewMode mode,
+                                         const AgisBgfxPbrTexturePaths& pbrPaths, int* progressPct,
+                                         AgisBgfxCpuBuiltMesh* out) {
+  return BuildMeshOnCpuImpl(model, pseudoPbr, mode, pbrPaths, progressPct, out);
+}
+
+bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRendererKind renderer, const ObjPreviewModel& model,
+                            const AgisBgfxCpuBuiltMesh* prebuiltMesh) {
   if (!ctx || !hwnd) return false;
   if (*ctx) {
     agis_bgfx_preview_shutdown(hwnd, *ctx);
@@ -677,8 +781,7 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
     return false;
   }
 
-  // 默认浅灰背景（ABGR）。
-  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0xffececec, 1.0f, 0);
+  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kPreviewBgfxClearRgba, 1.0f, 0);
 
   bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(kEmbeddedShaders, c->renderer, "vs_debugdraw_fill_texture");
   bgfx::ShaderHandle fsh = bgfx::createEmbeddedShader(kEmbeddedShaders, c->renderer, "fs_debugdraw_fill_texture");
@@ -723,7 +826,16 @@ bool agis_bgfx_preview_init(HWND hwnd, AgisBgfxPreviewContext** ctx, AgisBgfxRen
     }
   }
 
-  if (!RebuildMeshBuffers(c)) {
+  if (prebuiltMesh && !prebuiltMesh->vertices.empty()) {
+    if (!UploadPrebuiltMesh(c, *prebuiltMesh)) {
+      DestroyTextureResources(c);
+      bgfx::destroy(c->program);
+      c->program = BGFX_INVALID_HANDLE;
+      bgfx::shutdown();
+      delete c;
+      return false;
+    }
+  } else if (!RebuildMeshBuffers(c)) {
     DestroyTextureResources(c);
     bgfx::destroy(c->program);
     c->program = BGFX_INVALID_HANDLE;
@@ -772,7 +884,7 @@ void agis_bgfx_preview_draw(AgisBgfxPreviewContext* ctx, HWND hwnd, const RECT& 
   const int vh = static_cast<int>((std::max)(1L, viewportPx.bottom - viewportPx.top));
   const float aspect = static_cast<float>(vw) / static_cast<float>(vh);
 
-  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0xffececec, 1.0f, 0);
+  bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kPreviewBgfxClearRgba, 1.0f, 0);
 
   const bgfx::Caps* caps = bgfx::getCaps();
   float view[16];
