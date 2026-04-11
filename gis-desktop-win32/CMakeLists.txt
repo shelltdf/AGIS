@@ -32,8 +32,10 @@ option(AGIS_BUNDLED_LIBS_SHARED
   ON)
 
 option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static (links into every exe)" ON)
+option(AGIS_COMMON_APP_SHARED
+  "Build agis_common (仓库根 common/) as shared library（agis_common.dll）。ON 时 Windows 上须 AGIS_UI_ENGINE_SHARED=ON。OFF 为静态 .lib。" ON)
 option(AGIS_MAP_ENGINE_SHARED
-  "Build agis_map_engine as DLL/SO (ON) or static .lib (OFF). ON (WIN32): also builds agis_common_app as DLL and requires AGIS_UI_ENGINE_SHARED=ON." ON)
+  "Build agis_map_engine as DLL/SO (ON) or static .lib (OFF). ON (WIN32) 须 AGIS_UI_ENGINE_SHARED=ON。" ON)
 option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
 option(AGIS_USE_LASZIP
   "Bundle LASzip from ../3rdparty/LASzip for LAZ in model preview (AGIS_HAVE_LASZIP=1 when sources are present). Default ON; set OFF to skip."
@@ -64,6 +66,11 @@ endif()
 set(AGIS_MAP_ENGINE_DIR "${CMAKE_SOURCE_DIR}/../map_engine")
 if(NOT EXISTS "${AGIS_MAP_ENGINE_DIR}/CMakeLists.txt")
   message(FATAL_ERROR "map_engine not found at ${AGIS_MAP_ENGINE_DIR} (expected sibling of gis-desktop-win32).")
+endif()
+
+set(AGIS_COMMON_DIR "${CMAKE_SOURCE_DIR}/../common")
+if(NOT EXISTS "${AGIS_COMMON_DIR}/CMakeLists.txt")
+  message(FATAL_ERROR "AGIS common module not found at ${AGIS_COMMON_DIR} (expected sibling of gis-desktop-win32).")
 endif()
 
 set(AGIS_BGFX_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/bgfx-master")
@@ -230,11 +237,6 @@ set_target_properties(agis_ui_engine PROPERTIES OUTPUT_NAME "agis_ui_engine")
 # 公开 API：`core` / `widgets` / `gdiplus` 的 `include/ui_engine/`；平台私有头在 `platform/include/platform/`（PRIVATE）
 target_include_directories(agis_ui_engine PUBLIC ${AGIS_UI_ENGINE_PUBLIC_INCLUDES})
 target_include_directories(agis_ui_engine PRIVATE ${AGIS_UI_ENGINE_DIR}/platform/include)
-# `widgets_mainframe.cpp` 依赖 `common/ui/ui_private.h`（当前位于 `src/app/common/ui`）
-target_include_directories(agis_ui_engine PRIVATE
-  ${CMAKE_SOURCE_DIR}/src
-  ${CMAKE_SOURCE_DIR}/src/app
-)
 
 if(AGIS_UI_ENGINE_SHARED)
   target_compile_definitions(agis_ui_engine PRIVATE AGIS_UI_EXPORTS)
@@ -321,45 +323,14 @@ if(MSVC)
   target_compile_options(agis_bgfx_vendor PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
 endif()
 
-set(_agis_common_app_sources
-  src/app/common/runtime/agis_gdal_runtime_env.cpp
-  src/app/common/ui/ui_layout.cpp
-  src/app/common/ui/ui_debug_pick.cpp
-  src/app/common/ui/ui_font.cpp
-  src/app/common/ui/ui_theme.cpp
-  src/app/common/app_core/main_globals.cpp
-  src/core/app_log.cpp
-)
-if(AGIS_MAP_ENGINE_SHARED)
-  if(NOT WIN32)
-    message(FATAL_ERROR "AGIS_MAP_ENGINE_SHARED=ON is currently only supported on WIN32.")
-  endif()
-  if(NOT AGIS_UI_ENGINE_SHARED)
-    message(FATAL_ERROR
-      "AGIS_MAP_ENGINE_SHARED=ON requires AGIS_UI_ENGINE_SHARED=ON: agis_map_engine.dll links agis_ui_engine; "
-      "with static ui_engine you would duplicate globals across the DLL and the main executable.")
-  endif()
-  add_library(agis_common_app SHARED ${_agis_common_app_sources})
-  set_target_properties(agis_common_app PROPERTIES OUTPUT_NAME "agis_common_app")
-  set_target_properties(agis_common_app PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-  target_compile_definitions(agis_common_app PRIVATE AGIS_COMMON_APP_BUILDING=1)
-  target_compile_definitions(agis_common_app INTERFACE AGIS_COMMON_APP_SHARED=1)
-else()
-  add_library(agis_common_app STATIC ${_agis_common_app_sources})
-endif()
-target_include_directories(agis_common_app PRIVATE
-  ${CMAKE_SOURCE_DIR}/src
-  ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
-)
-target_compile_definitions(agis_common_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
-target_compile_features(agis_common_app PRIVATE cxx_std_20)
-if(NOT AGIS_UI_ENGINE_SHARED)
-  target_compile_definitions(agis_common_app PRIVATE AGIS_UI_STATIC=1)
-endif()
-# common 为 DLL 时须在链接阶段解析 ui_theme.cpp → gdiplus_ui（UiSetPanelThemeDark 等）
-if(AGIS_MAP_ENGINE_SHARED)
-  target_link_libraries(agis_common_app PRIVATE agis_ui_engine)
+add_subdirectory("${AGIS_COMMON_DIR}" agis_common_build)
+
+# 与 agis_ui_engine.dll、主程序 exe 同目录（build/<Config>/），避免 DLL 仅出现在 agis_common_build 子目录。
+if(TARGET agis_common)
+  set_target_properties(agis_common PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
 endif()
 
 add_subdirectory("${AGIS_MAP_ENGINE_DIR}" agis_map_engine_build)
@@ -408,7 +379,7 @@ target_include_directories(agis_workbench_app PRIVATE
   ${AGIS_THIRDPARTY_ROOT}
   ${AGIS_THIRDPARTY_ROOT}/tinygltf
 )
-target_link_libraries(agis_workbench_app PRIVATE agis_common_app agis_ui_engine agis_bgfx_vendor)
+target_link_libraries(agis_workbench_app PRIVATE agis_common agis_ui_engine agis_bgfx_vendor)
 target_link_libraries(agis_workbench_app PUBLIC agis_map_engine)
 target_compile_definitions(agis_workbench_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_compile_features(agis_workbench_app PRIVATE cxx_std_20)
@@ -422,7 +393,7 @@ target_include_directories(agis_converter_app PRIVATE
   ${CMAKE_SOURCE_DIR}/src/app
   ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
-target_link_libraries(agis_converter_app PRIVATE agis_common_app agis_map_engine agis_bgfx_vendor)
+target_link_libraries(agis_converter_app PRIVATE agis_common agis_map_engine agis_bgfx_vendor)
 target_compile_definitions(agis_converter_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_compile_features(agis_converter_app PRIVATE cxx_std_20)
 
@@ -435,7 +406,7 @@ target_include_directories(agis_desktop PRIVATE
   ${CMAKE_SOURCE_DIR}/src/app
   ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
-target_link_libraries(agis_desktop PRIVATE agis_workbench_app agis_common_app)
+target_link_libraries(agis_desktop PRIVATE agis_workbench_app agis_common)
 
 set_target_properties(agis_desktop PROPERTIES
   OUTPUT_NAME "AGIS"
@@ -483,11 +454,9 @@ endif()
 target_compile_features(agis_desktop PRIVATE cxx_std_20)
 
 if(AGIS_USE_GDAL AND GDAL_FOUND)
-  target_link_libraries(agis_common_app PRIVATE GDAL::GDAL)
   target_link_libraries(agis_workbench_app PRIVATE GDAL::GDAL)
   target_link_libraries(agis_desktop PRIVATE GDAL::GDAL)
   if(TARGET PROJ::proj)
-    target_link_libraries(agis_common_app PRIVATE PROJ::proj)
     target_link_libraries(agis_workbench_app PRIVATE PROJ::proj)
     target_link_libraries(agis_desktop PRIVATE PROJ::proj)
   endif()
@@ -535,7 +504,7 @@ target_include_directories(agis_convert_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/app
   ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
-target_link_libraries(agis_convert_gui PRIVATE agis_converter_app agis_common_app)
+target_link_libraries(agis_convert_gui PRIVATE agis_converter_app agis_common)
 set_target_properties(agis_convert_gui PROPERTIES
   OUTPUT_NAME "AGIS-Convert"
   WIN32_EXECUTABLE ON
@@ -551,11 +520,9 @@ target_link_libraries(agis_convert_gui PRIVATE
   shell32
 )
 if(AGIS_USE_GDAL AND GDAL_FOUND)
-  target_link_libraries(agis_common_app PRIVATE GDAL::GDAL)
   target_link_libraries(agis_converter_app PRIVATE GDAL::GDAL)
   target_link_libraries(agis_convert_gui PRIVATE GDAL::GDAL)
   if(TARGET PROJ::proj)
-    target_link_libraries(agis_common_app PRIVATE PROJ::proj)
     target_link_libraries(agis_converter_app PRIVATE PROJ::proj)
     target_link_libraries(agis_convert_gui PRIVATE PROJ::proj)
   endif()
@@ -569,7 +536,6 @@ if(MSVC)
   target_compile_options(agis_convert_gui PRIVATE /utf-8)
 endif()
 if(MSVC)
-  target_compile_options(agis_common_app PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
   target_compile_options(agis_workbench_app PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
   target_compile_options(agis_converter_app PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
 endif()
@@ -589,7 +555,7 @@ set_target_properties(agis_model_preview_gui PROPERTIES
 target_compile_definitions(agis_model_preview_gui PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_link_libraries(agis_model_preview_gui PRIVATE
   agis_workbench_app
-  agis_common_app
+  agis_common
   agis_bgfx_vendor
   agis_ui_engine
   comctl32
@@ -633,7 +599,7 @@ set_target_properties(agis_tile_preview_gui PROPERTIES
 target_compile_definitions(agis_tile_preview_gui PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_link_libraries(agis_tile_preview_gui PRIVATE
   agis_workbench_app
-  agis_common_app
+  agis_common
   agis_bgfx_vendor
   agis_ui_engine
   comctl32
@@ -696,7 +662,7 @@ if(WIN32 AND AGIS_MAP_ENGINE_SHARED)
         $<TARGET_FILE_DIR:${_agis_me_exe}>)
     add_custom_command(TARGET ${_agis_me_exe} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:agis_common_app>
+        $<TARGET_FILE:agis_common>
         $<TARGET_FILE_DIR:${_agis_me_exe}>)
   endforeach()
 endif()
@@ -723,7 +689,7 @@ else()
   )
 endif()
 
-# `widgets_all.h` → `common/ui/ui_private.h`（主程序侧 Widget 声明，实现仍在 agis_ui_engine）
+# `widgets_all.h` → `ui_engine/ui_private.h`（声明在 ui_engine/include，实现仍在 widgets_mainframe.cpp）
 target_include_directories(ui_engine_demo PRIVATE
   ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
   ${AGIS_UI_ENGINE_DIR}/demo/src
@@ -764,7 +730,7 @@ if(MSVC)
   target_compile_options(ui_engine_demo PRIVATE /utf-8)
 endif()
 
-# map_engine：独立演示（顶层 Map 宿主 + GDI+ / agis_common_app）。
+# map_engine：独立演示（顶层 Map 宿主 + GDI+ / agis_common）。
 if(WIN32)
   set(_map_engine_demo_sources ${AGIS_MAP_ENGINE_DIR}/demo/src/map_engine_demo_main.cpp)
   if(NOT AGIS_MAP_ENGINE_SHARED)
@@ -801,7 +767,7 @@ if(WIN32)
   endif()
   target_link_libraries(map_engine_demo PRIVATE
     agis_map_engine
-    agis_common_app
+    agis_common
     agis_ui_engine
     agis_bgfx_vendor
     comctl32
@@ -832,7 +798,7 @@ if(WIN32)
         $<TARGET_FILE_DIR:map_engine_demo>)
     add_custom_command(TARGET map_engine_demo POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:agis_common_app>
+        $<TARGET_FILE:agis_common>
         $<TARGET_FILE_DIR:map_engine_demo>)
   endif()
   # 须在 add_executable(map_engine_demo) 之后：此前 if(TARGET map_engine_demo) 恒为假，导致未复制 gdal/proj/curl/tiff。
@@ -848,13 +814,13 @@ endif()
 # 7 个数据转换后端命令行工具（3 类型互转 6 过程 + 模型↔模型 1 过程）
 set(_agis_convert_backend_sources
   src/app/tools/convert_backend_common.cpp
-  src/app/common/runtime/agis_gdal_runtime_env.cpp
 )
 if(AGIS_HAVE_BASISU)
   list(APPEND _agis_convert_backend_sources src/app/tools/ktx2_basis_encode.cpp)
 endif()
 add_library(agis_convert_backend_common STATIC ${_agis_convert_backend_sources})
 target_include_directories(agis_convert_backend_common PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app)
+target_link_libraries(agis_convert_backend_common PUBLIC agis_common)
 target_compile_features(agis_convert_backend_common PRIVATE cxx_std_20)
 if(AGIS_USE_GDAL AND GDAL_FOUND)
   target_link_libraries(agis_convert_backend_common PRIVATE GDAL::GDAL)

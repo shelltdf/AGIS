@@ -1,6 +1,6 @@
 #include "map_engine/map_engine.h"
 
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 
 #include "ui_engine/gdiplus_ui.h"
 

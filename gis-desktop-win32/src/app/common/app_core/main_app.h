@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 
 bool ForwardWheelToMapIfOver(WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK ToolbarWheelSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR);

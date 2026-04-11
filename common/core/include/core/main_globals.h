@@ -5,7 +5,7 @@
 
 #include <string>
 
-#include "common/app_core/agis_common_api.h"
+#include "core/export.h"
 
 constexpr int kSplitterW = 6;
 constexpr int kDockStripW = 20;

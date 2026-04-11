@@ -2,7 +2,7 @@
 
 #include <windows.h>
 
-#include "common/app_core/agis_common_api.h"
+#include "core/export.h"
 
 /** 主窗口 WM_CREATE 中创建，WM_DESTROY 中 UiFontShutdown 释放；子窗口控件用 WM_SETFONT 引用同一逻辑字体。 */
 AGIS_COMMON_API HFONT UiGetAppFont();

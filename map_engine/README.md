@@ -7,7 +7,7 @@
 
 CMake 将各组下的 `*/include` 全部加入 **PUBLIC**，因此任意 `map_engine/xxx.h` 仍从单一逻辑前缀解析。
 
-仍依赖桌面工程私有头（`resource.h`、`app_log`、`common/*` 等），见 `CMakeLists.txt` 中 `../gis-desktop-win32/src`。
+共享头与实现来自仓库根目录 `common/`（CMake 目标 `agis_common`，动态库为 `agis_common.dll`），由 `gis-desktop-win32` 的 CMake 引入；`map_engine` 不再向 `gis-desktop-win32/src` 要 include 路径。
 
 ---
 

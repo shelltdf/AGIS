@@ -1,11 +1,11 @@
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
-#include "common/app_core/resource.h"
+#include "core/main_globals.h"
+#include "core/resource.h"
 #include "core/app_log.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_gpu.h"
 #include "map_engine/map_projection.h"
-#include "common/ui/ui_theme.h"
+#include "utils/ui_theme.h"
 
 #include <array>
 #include <cstdio>

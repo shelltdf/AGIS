@@ -1,5 +1,5 @@
 #pragma once
 
-/** 通用控件（`widget_core.h`）+ AGIS 主框架壳层（`widgets_mainframe.h`）+ 主程序私有 Widget（`app/ui_private.h`）。 */
+/** 通用控件（`widgets_mainframe.h` 已聚合 `widget_core`）+ 宿主绑定 Widget（`ui_private.h`）。 */
 #include "ui_engine/widgets_mainframe.h"
-#include "common/ui/ui_private.h"
+#include "ui_engine/ui_private.h"

@@ -5,9 +5,9 @@
 #include <string>
 
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
-#include "common/ui/ui_font.h"
-#include "common/ui/ui_debug_pick.h"
+#include "core/main_globals.h"
+#include "utils/ui_font.h"
+#include "debug/ui_debug_pick.h"
 #include "ui_engine/gdiplus_ui.h"
 
 static HBRUSH g_modelPreviewWinClassBgBrush;

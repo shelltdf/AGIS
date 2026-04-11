@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/app_core/agis_common_api.h"
+#include "core/export.h"
 
 /// 在首次 GDALAllRegister / `proj_create_crs_to_crs` 之前调用：若环境未设置 GDAL_DATA，则探测
 /// `gdal_data`；若未设置 PROJ_DATA，则探测 `proj_data`（或 `share/proj`，内含 `proj.db`）。

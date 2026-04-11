@@ -41,15 +41,15 @@
 #endif
 #include "app/preview/model_preview/tiles_gltf_loader.h"
 #include <gdiplus.h>
-#include "common/ui/ui_font.h"
+#include "utils/ui_font.h"
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 
 #ifndef GIS_DESKTOP_HAVE_GDAL
 #define GIS_DESKTOP_HAVE_GDAL 0
 #endif
 #if GIS_DESKTOP_HAVE_GDAL
-#include "common/runtime/agis_gdal_runtime_env.h"
+#include "utils/agis_gdal_runtime_env.h"
 #include <cpl_error.h>
 #include <gdal.h>
 #include <gdal_priv.h>

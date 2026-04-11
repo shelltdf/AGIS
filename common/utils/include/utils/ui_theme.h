@@ -2,7 +2,7 @@
 
 #include <windows.h>
 
-#include "common/app_core/agis_common_api.h"
+#include "core/export.h"
 
 enum class AgisThemeMenu : int {
   kFollowSystem = 0,

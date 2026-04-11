@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """配置并仅构建 ``map_engine_demo`` 目标（工程树在 ``gis-desktop-win32``）。
 
-每次均执行 ``cmake -S … -B …`` 与 ``cmake --build … --target map_engine_demo``；增量由 CMake/MSBuild 处理。
+入口脚本：``run_map_demo.py``。每次均执行 ``cmake -S … -B …`` 与 ``cmake --build … --target map_engine_demo``；增量由 CMake/MSBuild 处理。
 
 环境变量：``CMAKE_CONFIG``（默认 ``Release``）、``AGIS_USE_GDAL``（与 ``gis-desktop-win32/build.py`` 语义一致：未设置则 ``ON``）、``CMAKE_PREFIX_PATH`` / ``AGIS_*_PREFIX`` 等同桌面构建。
 """

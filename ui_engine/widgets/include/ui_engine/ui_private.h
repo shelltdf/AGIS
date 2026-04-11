@@ -1,9 +1,9 @@
 #pragma once
 
 /**
- * 主程序 / 宿主 HWND 强绑定的 Widget 声明（与 `main.cpp` 资源 ID、子类过程对应）。
- * 基类与共用壳层类型见 `ui_engine/widgets_mainframe.h`；实现见 `ui_engine/widgets_mainframe.cpp`。
- * 需要完整类型表时与 `widgets_mainframe.h` 一并包含本头，或使用 `ui_engine/widgets_all.h`。
+ * 宿主 HWND 强绑定的 Widget 声明（与 AGIS 桌面 `resource.h` 控件 ID、子类过程对应）。
+ * 基类见 `widgets_mainframe.h`；实现见 `widgets_mainframe.cpp`。
+ * 需要完整类型表时使用 `ui_engine/widgets_all.h`。
  */
 
 #include "ui_engine/export.h"

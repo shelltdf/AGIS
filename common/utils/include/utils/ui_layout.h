@@ -26,4 +26,3 @@ Box DockRight(Box& b, int w);
 void Split3Cols(const Box& row, int gap, Box* left, Box* mid, Box* right);
 
 }  // namespace UiLayout
-

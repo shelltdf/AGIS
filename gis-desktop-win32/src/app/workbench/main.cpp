@@ -11,13 +11,13 @@
 #endif
 
 #include "workbench/help_data_drivers.h"
-#include "common/app_core/resource.h"
-#include "common/ui/ui_debug_pick.h"
-#include "common/ui/ui_font.h"
-#include "common/ui/ui_theme.h"
+#include "core/resource.h"
+#include "debug/ui_debug_pick.h"
+#include "utils/ui_font.h"
+#include "utils/ui_theme.h"
 #include "core/app_log.h"
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_projection.h"
 #include "ui_engine/gdiplus_ui.h"

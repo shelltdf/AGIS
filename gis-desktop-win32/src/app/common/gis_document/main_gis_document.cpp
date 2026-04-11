@@ -4,9 +4,9 @@
 
 #include <windows.h>
 
-#include "common/app_core/resource.h"
+#include "core/resource.h"
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 #include "core/app_log.h"
 #include "main_gis_xml.h"
 #include "map_engine/map_engine.h"

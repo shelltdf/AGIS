@@ -43,7 +43,7 @@
 ### 2.4 语言与主题
 
 - **语言**：菜单触发 `MessageBox` 或状态栏提示「语言切换待实现」；预留资源加载点。  
-- **主题**（实现：`ui_theme.h` / `ui_theme.cpp`）：菜单 **跟随系统 / 浅色 / 深色**；`HKCU\Software\AGIS\GIS-Desktop` 下 `ThemeMenu`（DWORD 0–2）持久化；`AppsUseLightTheme`（个性化）判定系统偏暗应用。`AgisApplyTheme`：**DWM** `DWMWA_USE_IMMERSIVE_DARK_MODE`（主窗、日志、转换、数据驱动说明窗）；**uxtheme** `SetWindowTheme`（工具栏、状态栏、左右缘条 `DarkMode_Explorer` / `Explorer`）；**GDI+ 侧栏** `UiSetPanelThemeDark`；主客户区 `WM_ERASEBKGND` 使用随主题重建的画刷；**跟随系统** 时响应 `WM_SETTINGCHANGE`（`lParam == L"ImmersiveColorSet"`）重应用。属性 Dock、日志窗、转换窗、帮助窗对子控件使用 **`WM_CTLCOLOR*`** 与浅色/深色配色一致。
+- **主题**（实现：`common/utils/include/utils/ui_theme.h` / `common/utils/src/ui_theme.cpp`）：菜单 **跟随系统 / 浅色 / 深色**；`HKCU\Software\AGIS\GIS-Desktop` 下 `ThemeMenu`（DWORD 0–2）持久化；`AppsUseLightTheme`（个性化）判定系统偏暗应用。`AgisApplyTheme`：**DWM** `DWMWA_USE_IMMERSIVE_DARK_MODE`（主窗、日志、转换、数据驱动说明窗）；**uxtheme** `SetWindowTheme`（工具栏、状态栏、左右缘条 `DarkMode_Explorer` / `Explorer`）；**GDI+ 侧栏** `UiSetPanelThemeDark`；主客户区 `WM_ERASEBKGND` 使用随主题重建的画刷；**跟随系统** 时响应 `WM_SETTINGCHANGE`（`lParam == L"ImmersiveColorSet"`）重应用。属性 Dock、日志窗、转换窗、帮助窗对子控件使用 **`WM_CTLCOLOR*`** 与浅色/深色配色一致。
 
 ### 2.5 关于对话框
 

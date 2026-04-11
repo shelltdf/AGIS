@@ -3,7 +3,7 @@
 /**
  * AGIS 桌面端专用 Widget：与当前 `main.cpp` / `map_engine` 中 HWND、资源 ID、布局一一对应的类型。
  * 通用基元（Window、Label、Splitter、Canvas2D、DialogWindow、PopupMenu 等）见 `widget_core.h`。
- * 与主窗口 HWND 强绑定的部分类型（图层 Dock、地图画布、地图叠层与菜单、图层对话框等）见 `app/ui_private.h`。
+ * 与主窗口 HWND 强绑定的部分类型（图层 Dock、地图画布、地图叠层与菜单、图层对话框等）见 `ui_engine/ui_private.h`。
  */
 
 #include "ui_engine/export.h"

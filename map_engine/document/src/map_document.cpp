@@ -14,7 +14,7 @@
 #include <string>
 
 #if GIS_DESKTOP_HAVE_GDAL
-#include "common/runtime/agis_gdal_runtime_env.h"
+#include "utils/agis_gdal_runtime_env.h"
 #include "cpl_conv.h"
 #include "gdal_priv.h"
 #endif
@@ -502,7 +502,7 @@ void MapDocument::NormalizeEmptyMapView() {
 
 bool MapDocument::AddLayerFromFile(const std::wstring& path, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
-  err = L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。请在 gis-desktop-win32 下用 AGIS_USE_GDAL=on 重新运行 "
+  err = L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。请用 AGIS_USE_GDAL=on 重新配置并构建桌面工程（CMake）后重试。"
         L"python build.py 并确保 CMake 配置成功（依赖见 3rdparty/README-GDAL-BUILD.md）。若仅需壳程序，请用 AGIS_USE_GDAL=off 编译。";
   return false;
 #else

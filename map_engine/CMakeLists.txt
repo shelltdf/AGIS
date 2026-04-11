@@ -1,8 +1,8 @@
 # agis_map_engine — 地图引擎库（静/动由父工程 AGIS_MAP_ENGINE_SHARED 决定）
 #
-# 设计为与 gis-desktop-win32 并列，由后者以 add_subdirectory(../map_engine) 引入。
-# 依赖父工程中已定义的：AGIS_UI_ENGINE_DIR、AGIS_BGFX_DIR、AGIS_BX_DIR、AGIS_BIMG_DIR、
-# agis_bgfx_vendor、_agis_gdal_defs、GDAL/PROJ 等。
+# 由 gis-desktop-win32 以 add_subdirectory(../map_engine) 引入。
+# 依赖父工程已定义的：AGIS_UI_ENGINE_DIR、仓库根 common/（目标 agis_common）、AGIS_BGFX_DIR、
+# AGIS_BX_DIR、AGIS_BIMG_DIR、agis_bgfx_vendor、_agis_gdal_defs、GDAL/PROJ 等。
 
 if(NOT DEFINED AGIS_UI_ENGINE_DIR)
   message(FATAL_ERROR "agis_map_engine: 请从 gis-desktop-win32 工程内 add_subdirectory(../map_engine)。")
@@ -16,7 +16,6 @@ if(NOT DEFINED AGIS_MAP_ENGINE_SHARED)
 endif()
 
 set(_ME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
-set(_ME_DESKTOP_SRC "${_ME_ROOT}/../gis-desktop-win32/src")
 set(_ME_THIRDPARTY "${_ME_ROOT}/../3rdparty")
 
 # 按功能组划分：每组 <组>/include/map_engine/*.h + <组>/src/*.cpp
@@ -48,8 +47,6 @@ target_include_directories(agis_map_engine
     "${_ME_ROOT}/gpu/include"
     "${_ME_ROOT}/shell/include"
   PRIVATE
-    "${_ME_DESKTOP_SRC}"
-    "${_ME_DESKTOP_SRC}/app"
     "${AGIS_UI_ENGINE_DIR}/core/include"
     "${AGIS_UI_ENGINE_DIR}/widgets/include"
     "${AGIS_UI_ENGINE_DIR}/gdiplus/include"
@@ -69,12 +66,15 @@ target_include_directories(agis_map_engine
 
 target_link_libraries(agis_map_engine PRIVATE agis_bgfx_vendor)
 
-# SHARED：DLL 链接阶段须解析 map_gpu_bgfx（ImGui）及对 agis_common_app / ui_engine 的符号；ImGui 只编进本 DLL，避免与 workbench 重复。
+if(NOT TARGET agis_common OR NOT TARGET agis_ui_engine)
+  message(FATAL_ERROR
+    "agis_map_engine: 须先于本目录定义 agis_common（仓库根 common/）与 agis_ui_engine。")
+endif()
+# 静/动均需：继承 common 的 PUBLIC include（resource.h、utils/agis_gdal_runtime_env.h 等），并解析 shell 中对 ui_engine 的引用。
+target_link_libraries(agis_map_engine PRIVATE agis_common agis_ui_engine)
+
+# SHARED：ImGui 只编进 map_engine DLL，避免与 workbench 重复。
 if(AGIS_MAP_ENGINE_SHARED)
-  if(NOT TARGET agis_common_app OR NOT TARGET agis_ui_engine)
-    message(FATAL_ERROR
-      "agis_map_engine: SHARED 需要先于本目录定义目标 agis_common_app 与 agis_ui_engine（见 gis-desktop-win32 CMake 中 add_subdirectory 顺序）。")
-  endif()
   set(_me_imgui_sources
     ${AGIS_BGFX_DIR}/examples/common/imgui/imgui.cpp
     ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui.cpp
@@ -84,7 +84,6 @@ if(AGIS_MAP_ENGINE_SHARED)
     ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
   )
   target_sources(agis_map_engine PRIVATE ${_me_imgui_sources})
-  target_link_libraries(agis_map_engine PRIVATE agis_common_app agis_ui_engine)
 endif()
 
 if(AGIS_MAP_ENGINE_SHARED)

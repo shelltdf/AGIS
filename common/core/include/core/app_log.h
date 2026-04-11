@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "common/app_core/agis_common_api.h"
+#include "core/export.h"
 
 AGIS_COMMON_API void AppLogLine(const wchar_t* line);
 AGIS_COMMON_API void AppLogLine(const std::wstring& line);

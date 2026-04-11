@@ -1,8 +1,8 @@
 #include "workbench/help_data_drivers.h"
 
-#include "common/ui/ui_font.h"
-#include "common/ui/ui_theme.h"
-#include "common/app_core/main_globals.h"
+#include "utils/ui_font.h"
+#include "utils/ui_theme.h"
+#include "core/main_globals.h"
 #include "map_engine/map_utf8.h"
 
 #include <algorithm>
@@ -16,7 +16,7 @@
 #endif
 
 #if GIS_DESKTOP_HAVE_GDAL
-#include "common/runtime/agis_gdal_runtime_env.h"
+#include "utils/agis_gdal_runtime_env.h"
 #include "gdal_priv.h"
 #endif
 

@@ -35,9 +35,9 @@ constexpr Gdiplus::PixelFormat k32bppArgb = static_cast<Gdiplus::PixelFormat>(0x
 constexpr Gdiplus::PixelFormat k24bppRgb = static_cast<Gdiplus::PixelFormat>(0x21808U);
 }  // namespace agis_gdip_pf
 
-#include "common/ui/ui_font.h"
+#include "utils/ui_font.h"
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 
 // `tile_preview/`：本地磁盘上的瓦片/栅格信息采样预览（目录 z/x/y、TMS、本地 tileset.json 元数据、单图、MBTiles/GPKG 等）。
 // 不实现 HTTP(S)、WMTS、XYZ URL 等网络拉取；输入须为可访问的本机文件或文件夹路径。
@@ -46,7 +46,7 @@ constexpr Gdiplus::PixelFormat k24bppRgb = static_cast<Gdiplus::PixelFormat>(0x2
 #define GIS_DESKTOP_HAVE_GDAL 0
 #endif
 #if GIS_DESKTOP_HAVE_GDAL
-#include "common/runtime/agis_gdal_runtime_env.h"
+#include "utils/agis_gdal_runtime_env.h"
 #include <cpl_error.h>
 #include <gdal.h>
 #include <gdal_priv.h>

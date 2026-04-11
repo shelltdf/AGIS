@@ -4,11 +4,11 @@
 
 #include <string>
 
-#include "common/ui/ui_font.h"
-#include "common/ui/ui_debug_pick.h"
-#include "common/ui/ui_theme.h"
+#include "utils/ui_font.h"
+#include "debug/ui_debug_pick.h"
+#include "utils/ui_theme.h"
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 
 // 独立转换程序不内置 3D 预览窗口：调用系统默认程序打开。
 void OpenModelPreviewWindow(HWND owner, const std::wstring& path) {

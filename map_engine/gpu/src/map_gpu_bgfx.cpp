@@ -19,7 +19,7 @@
 #include "fs_debugdraw_fill_texture.bin.h"
 #include "vs_debugdraw_fill_texture.bin.h"
 
-#include "common/app_core/resource.h"
+#include "core/resource.h"
 #include "map_engine/map_engine.h"
 
 namespace map_gpu_bgfx {

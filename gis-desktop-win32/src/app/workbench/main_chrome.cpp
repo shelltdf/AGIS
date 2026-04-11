@@ -4,10 +4,10 @@
 #include <commctrl.h>
 #include <shellapi.h>
 
-#include "common/app_core/resource.h"
-#include "common/ui/ui_font.h"
+#include "core/resource.h"
+#include "utils/ui_font.h"
 #include "common/app_core/main_app.h"
-#include "common/app_core/main_globals.h"
+#include "core/main_globals.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_gpu.h"
 #include "map_engine/map_projection.h"
