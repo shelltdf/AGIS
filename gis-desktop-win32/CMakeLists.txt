@@ -311,6 +311,8 @@ if(MSVC)
   target_compile_options(agis_bgfx_vendor PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
 endif()
 
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../map_engine" agis_map_engine_build)
+
 add_library(agis_common_app STATIC
   src/app/common/runtime/agis_gdal_runtime_env.cpp
   src/app/common/ui/ui_layout.cpp
@@ -352,15 +354,6 @@ add_library(agis_workbench_app STATIC
   ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_tables.cpp
   ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_widgets.cpp
   ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
-  src/map_engine/map_layer.cpp
-  src/map_engine/map_layer_driver.cpp
-  src/map_engine/map_layer_driver_gdal.cpp
-  src/map_engine/map_document.cpp
-  src/map_engine/map_engine.cpp
-  src/map_engine/map_gpu.cpp
-  src/map_engine/map_gpu_d2d.cpp
-  src/map_engine/map_gpu_bgfx.cpp
-  src/map_engine/map_projection.cpp
 )
 target_include_directories(agis_workbench_app PRIVATE
   ${CMAKE_SOURCE_DIR}/src
@@ -380,20 +373,20 @@ target_include_directories(agis_workbench_app PRIVATE
   ${AGIS_THIRDPARTY_ROOT}/tinygltf
 )
 target_link_libraries(agis_workbench_app PRIVATE agis_common_app agis_ui_engine agis_bgfx_vendor)
+target_link_libraries(agis_workbench_app PUBLIC agis_map_engine)
 target_compile_definitions(agis_workbench_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_compile_features(agis_workbench_app PRIVATE cxx_std_20)
 
 add_library(agis_converter_app STATIC
   src/app/common/gis_document/main_gis_xml.cpp
   src/app/converter/main_convert.cpp
-  src/map_engine/map_projection.cpp
 )
 target_include_directories(agis_converter_app PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
   ${AGIS_UI_ENGINE_DIR}/include
 )
-target_link_libraries(agis_converter_app PRIVATE agis_common_app)
+target_link_libraries(agis_converter_app PRIVATE agis_common_app agis_map_engine agis_bgfx_vendor)
 target_compile_definitions(agis_converter_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_compile_features(agis_converter_app PRIVATE cxx_std_20)
 

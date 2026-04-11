@@ -147,7 +147,7 @@ classDiagram
 
 ## AGIS 主框架壳层 + 主程序私有（widgets_mainframe.h / app/ui_private.h）
 
-与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/main.cpp) / [`map_engine.cpp`](../../../gis-desktop-win32/src/map_engine/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型（**抽象桩**）。声明在 [`widgets_mainframe.h`](../../../ui_engine/include/ui_engine/widgets_mainframe.h)（内部已 `#include` [`widget_core.h`](../../../ui_engine/include/ui_engine/widget_core.h)）；与主窗口 HWND 强绑定的类型见 [`ui_private.h`](../../../gis-desktop-win32/src/app/ui_private.h)；实现见 [`widgets_mainframe.cpp`](../../../ui_engine/src/widgets_mainframe.cpp)。[`widgets_all.h`](../../../ui_engine/include/ui_engine/widgets_all.h) 一次包含通用 + 主框架 + 私有。
+与当前 [`main.cpp`](../../../gis-desktop-win32/src/app/workbench/main.cpp) / [`map_engine.cpp`](../../../map_engine/src/map_engine.cpp) / [`resource.h`](../../../gis-desktop-win32/src/app/common/app_core/resource.h) 中的 **HWND / IDC / 菜单 ID** 一一对应的类型（**抽象桩**）。声明在 [`widgets_mainframe.h`](../../../ui_engine/include/ui_engine/widgets_mainframe.h)（内部已 `#include` [`widget_core.h`](../../../ui_engine/include/ui_engine/widget_core.h)）；与主窗口 HWND 强绑定的类型见 [`ui_private.h`](../../../gis-desktop-win32/src/app/common/ui/ui_private.h)；实现见 [`widgets_mainframe.cpp`](../../../ui_engine/src/widgets_mainframe.cpp)。[`widgets_all.h`](../../../ui_engine/include/ui_engine/widgets_all.h) 一次包含通用 + 主框架 + 私有。
 
 ```mermaid
 classDiagram

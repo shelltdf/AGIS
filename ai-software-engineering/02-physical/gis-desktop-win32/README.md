@@ -10,5 +10,5 @@
 - **规格**：[spec.md](spec.md)  
 - **映射**：[mapping.md](mapping.md)  
 - **类图**：[uml-class.md](uml-class.md)（应用壳过程入口）  
-- **map 模块类图**：[uml-class-map.md](uml-class-map.md)（`src/map_engine/`：图层、文档、投影、GPU 后端）  
+- **map 模块类图**：[uml-class-map.md](uml-class-map.md)（根目录 [`map_engine/`](../../../map_engine/)：图层、文档、投影、GPU 后端；库目标 `agis_map_engine`）  
 - **ui 模块类图**：[uml-class-ui.md](uml-class-ui.md)（仓库根 `ui_engine/include/ui_engine/` + `ui_engine/src/`：GDI+ 绘制与 PNG 导出 API）
