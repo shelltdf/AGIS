@@ -804,6 +804,43 @@ if(AGIS_USE_GDAL AND GDAL_FOUND AND EXISTS "${_AGIS_GDAL_GCORE_DATA}/tms_NZTM200
   endforeach()
 endif()
 
+# 捆绑 PROJ 数据库（proj.db）：动态链接 PROJ 时默认不嵌入 DB，独立 proj_context 依赖 PROJ_DATA。
+# 先暂存到 ${CMAKE_BINARY_DIR}/proj_data；与 gdal_data 相同，仅挂在 agis_desktop 上 POST_BUILD 复制到 $(OutDir)/proj_data，
+# 避免对每个 exe 各自复制时 VS 多目标并行同时写同一目录导致失败。同目录下的转换工具与预览 exe 共用该份 proj_data。
+# 运行时亦可自 exe 向上探测 build/proj_data。
+# copy_directory 来自 PROJ data 的构建树，会带入 CMakeFiles/、cmake_install.cmake、x64/ 等；复制后脚本剔除，仅保留运行所需文件。
+if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED AND TARGET generate_proj_db)
+  set(_agis_proj_built_data "${CMAKE_BINARY_DIR}/agis_bundled_proj/data")
+  set(AGIS_PROJ_DATA_STAGE "${CMAKE_BINARY_DIR}/proj_data")
+  add_custom_target(agis_proj_runtime_data ALL
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${AGIS_PROJ_DATA_STAGE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${AGIS_PROJ_DATA_STAGE}"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_agis_proj_built_data}" "${AGIS_PROJ_DATA_STAGE}"
+    COMMAND ${CMAKE_COMMAND} "-DAGIS_PROJ_STAGE_DST=${AGIS_PROJ_DATA_STAGE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/agis_clean_proj_data_stage.cmake"
+    COMMENT "Stage PROJ_DATA (proj.db etc.) under build/proj_data for AGIS")
+  add_dependencies(agis_proj_runtime_data generate_proj_db)
+  set(_agis_proj_runtime_consumers
+    agis_desktop
+    agis_tile_preview_gui
+    agis_model_preview_gui
+    agis_convert_gui)
+  foreach(_c IN LISTS _agis_proj_runtime_consumers)
+    if(TARGET "${_c}")
+      add_dependencies("${_c}" agis_proj_runtime_data)
+    endif()
+  endforeach()
+  foreach(_t IN LISTS _agis_convert_tools)
+    add_dependencies("${_t}" agis_proj_runtime_data)
+  endforeach()
+  add_custom_command(
+    TARGET agis_desktop
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${AGIS_PROJ_DATA_STAGE}"
+            "$<TARGET_FILE_DIR:agis_desktop>/proj_data"
+    COMMENT "Copy PROJ_DATA next to AGIS (shared OutDir)")
+endif()
+
 add_dependencies(agis_desktop ${_agis_convert_tools})
 if(WIN32)
   foreach(_tool IN LISTS _agis_convert_tools)

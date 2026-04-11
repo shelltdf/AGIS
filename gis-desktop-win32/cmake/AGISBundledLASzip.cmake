@@ -28,5 +28,12 @@ if(NOT TARGET "${AGIS_LASZIP_TARGET}")
   message(FATAL_ERROR "AGIS: LASzip target '${AGIS_LASZIP_TARGET}' missing after add_subdirectory")
 endif()
 
+# 与根 CMakeLists 中 CMAKE_MSVC_RUNTIME_LIBRARY 一致（/MD 与 /MDd），避免 LASzip 子工程在 CMP0091
+# 下与主目标 CRT 不一致，导致 Release 链接时出现 __imp__calloc_dbg / __imp__CrtDbgReport（Debug 堆）。
+if(MSVC)
+  set_target_properties("${AGIS_LASZIP_TARGET}" PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 set(AGIS_HAVE_LASZIP TRUE)
 message(STATUS "AGIS: bundled LASzip (static) from ${AGIS_LASZIP_ROOT}, target ${AGIS_LASZIP_TARGET}")

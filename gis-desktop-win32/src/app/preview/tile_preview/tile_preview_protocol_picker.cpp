@@ -13,13 +13,17 @@
 namespace {
 
 constexpr wchar_t kPickerClassName[] = L"AgisTilePreviewProtocolPickerDlg";
+/// 标题栏文案（与窗口类名无关；须对用户可见）。
+constexpr wchar_t kPickerWindowTitle[] = L"本地瓦片预览 — 选择数据源类型";
 constexpr int kIdList = 1001;
 constexpr int kIdOk = 1002;
 constexpr int kIdCancel = 1003;
+constexpr int kIdDetail = 1004;
 
 struct PickerUiCtx {
   HWND owner = nullptr;
   HWND list = nullptr;
+  HWND detail = nullptr;
   bool done = false;
   bool accepted = false;
   std::wstring path;
@@ -50,7 +54,7 @@ static bool PickFolderWithIFileOrBrowse(HWND owner, std::wstring* out, std::wstr
     if (SUCCEEDED(pfd->GetOptions(&opts))) {
       pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
     }
-    pfd->SetTitle(L"选择 XYZ / TMS 瓦片根目录");
+    pfd->SetTitle(L"选择本地 XYZ / TMS 瓦片根目录");
     hr = pfd->Show(owner);
     if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
       pfd->Release();
@@ -84,7 +88,7 @@ static bool PickFolderWithIFileOrBrowse(HWND owner, std::wstring* out, std::wstr
   wchar_t display[MAX_PATH * 2]{};
   BROWSEINFOW bi{};
   bi.hwndOwner = owner;
-  bi.lpszTitle = L"选择 XYZ / TMS 瓦片根目录（备用文件夹浏览器）";
+  bi.lpszTitle = L"选择本地 XYZ / TMS 瓦片根目录（备用文件夹浏览器）";
   bi.pszDisplayName = display;
   bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
   PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
@@ -132,9 +136,6 @@ static bool PickPathForProtocol(HWND owner, AgisTilePreviewProtocol proto, std::
   case AgisTilePreviewProtocol::kThreeDTilesJson:
     return PickOpenFile(owner, L"选择 3D Tiles 的 tileset.json",
                         L"tileset.json\0tileset.json\0JSON\0*.json\0所有文件\0*.*\0\0", pathOut);
-  case AgisTilePreviewProtocol::kSingleRasterImage:
-    return PickOpenFile(owner, L"选择栅格图像",
-                        L"栅格图像\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff\0所有文件\0*.*\0\0", pathOut);
   case AgisTilePreviewProtocol::kMBTilesFile:
     return PickOpenFile(owner, L"选择 MBTiles 文件", L"MBTiles\0*.mbtiles\0所有文件\0*.*\0\0", pathOut);
   case AgisTilePreviewProtocol::kGeoPackageFile:
@@ -149,12 +150,48 @@ static bool PickPathForProtocol(HWND owner, AgisTilePreviewProtocol proto, std::
 
 static void FillProtocolList(HWND lb) {
   SendMessageW(lb, LB_RESETCONTENT, 0, 0);
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ / TMS — 平面金字塔（选择瓦片根目录）"));
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3D Tiles — tileset.json（选择文件）"));
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"单张栅格 — PNG / JPG / WebP / BMP / TIF（选择文件）"));
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"MBTiles — .mbtiles（选择文件，需 GDAL）"));
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GeoPackage — .gpkg（选择文件，需 GDAL）"));
+  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ / TMS"));
+  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3D Tiles"));
+  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"MBTiles"));
+  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GeoPackage"));
   SendMessageW(lb, LB_SETCURSEL, 0, 0);
+}
+
+/// 与 `AgisTilePreviewProtocol` 枚举顺序一致（列表框索引相同）。
+static const wchar_t* ProtocolLongDescription(AgisTilePreviewProtocol p) {
+  switch (p) {
+  case AgisTilePreviewProtocol::kXyzTmsFolder:
+    return L"【打开方式】\r\n点「确定」后弹出文件夹选择框，请选择「瓦片根目录」文件夹（不要选单个瓦片文件）。\r\n\r\n"
+           L"【目录与格式】\r\n根目录下应为按缩放级组织的子目录与栅格瓦片（常见结构类似 z/x/y 与 .png/.jpg 等）。若磁盘上为 "
+           L"TMS 行号文件名，且存在 tms.xml 或 README 标明 protocol=tms（与 AGIS 瓦片导出约定一致），预览会映射为北向上的 XYZ 方式拼图。\r\n\r\n"
+           L"【范围】\r\n仅本机路径；不支持 http(s)、WMTS、网络 URL。";
+  case AgisTilePreviewProtocol::kThreeDTilesJson:
+    return L"【打开方式】\r\n点「确定」后弹出文件选择框，请选择本地「tileset.json」。\r\n\r\n"
+           L"【文件说明】\r\n3D Tiles 切片集的入口描述文件。本预览窗主要展示元数据、包围体与统计信息（非「数据转换里子类型 3dtiles」时的三维网格绘制，三维网格在模型预览窗）。\r\n\r\n"
+           L"【范围】\r\n仅解析磁盘上的相对路径资源；纯 http(s) 外链内容无法在此加载。";
+  case AgisTilePreviewProtocol::kMBTilesFile:
+    return L"【打开方式】\r\n点「确定」后选择本地「.mbtiles」单文件。\r\n\r\n"
+           L"【文件说明】\r\nSQLite 封装的瓦片库。本预览依赖 GDAL：将栅格层读出并下采样为一张全球墨卡托缩略拼图（约不超过 2048px），用于快速浏览内容概况。\r\n\r\n"
+           L"【限制】\r\n当前不按 zoom 在容器内逐瓦交互；若构建未启用 GDAL，此项不可用。";
+  case AgisTilePreviewProtocol::kGeoPackageFile:
+    return L"【打开方式】\r\n点「确定」后选择本地「.gpkg」单文件。\r\n\r\n"
+           L"【文件说明】\r\nOGC GeoPackage。本预览依赖 GDAL 打开其中的栅格瓦片表并下采样为缩略拼图（与 MBTiles 类似，用于概况浏览）。纯矢量 GPKG 或无栅格层时可能无法预览。\r\n\r\n"
+           L"【限制】\r\n当前不按 zoom 在容器内逐瓦交互；若构建未启用 GDAL，此项不可用。";
+  default:
+    return L"";
+  }
+}
+
+static void SetDetailTextForListIndex(HWND detailWnd, int listIndex) {
+  if (!detailWnd) {
+    return;
+  }
+  if (listIndex < 0 || listIndex >= static_cast<int>(AgisTilePreviewProtocol::kCount)) {
+    SetWindowTextW(detailWnd, L"");
+    return;
+  }
+  const auto p = static_cast<AgisTilePreviewProtocol>(listIndex);
+  SetWindowTextW(detailWnd, ProtocolLongDescription(p));
 }
 
 static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -172,7 +209,7 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
       RECT cr{};
       GetClientRect(hwnd, &cr);
       const int m = 12;
-      const int cw = (std::max)(1, static_cast<int>(cr.right - cr.left - 2 * m));
+      const int innerW = (std::max)(1, static_cast<int>(cr.right - cr.left - 2 * m));
 
       TEXTMETRICW tm{};
       int lineH = 20;
@@ -193,9 +230,9 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
 
       HWND hint = CreateWindowExW(
           0, L"STATIC",
-          L"请选择要打开的瓦片协议。\r\n"
-          L"点「确定」后将弹出文件夹或文件选择对话框。",
-          WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, m, m, cw, hintH, hwnd, nullptr, hi, nullptr);
+          L"左侧选择数据源类型；右侧为打开方式与格式说明。\r\n"
+          L"仅本机路径，不支持网络地址。点「确定」后选择文件夹或文件。",
+          WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, m, m, innerW, hintH, hwnd, nullptr, hi, nullptr);
       SendMessageW(hint, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
 
       constexpr int kGap = 10;
@@ -204,15 +241,30 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
       constexpr int kBtnW = 88;
       constexpr int kBtnGap = 10;
       const int btnRowTop = static_cast<int>(cr.bottom) - m - kBtnH;
-      const int listH = (std::max)(100, btnRowTop - kGap - listY);
+      const int listH = (std::max)(120, btnRowTop - kGap - listY);
+
+      constexpr int kListColW = 152;
+      constexpr int kMidGap = 10;
+      const int listW = (std::min)(kListColW, (std::max)(108, innerW * 28 / 100));
+      const int detailW = (std::max)(160, innerW - listW - kMidGap);
+      const int listX = m;
+      const int detailX = m + listW + kMidGap;
 
       HWND lb = CreateWindowExW(
           WS_EX_CLIENTEDGE, L"LISTBOX", L"",
-          WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, m, listY, cw, listH, hwnd,
-          reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdList)), hi, nullptr);
+          WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, listX, listY, listW, listH,
+          hwnd, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdList)), hi, nullptr);
       ctx->list = lb;
       SendMessageW(lb, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
       FillProtocolList(lb);
+
+      HWND det = CreateWindowExW(
+          WS_EX_CLIENTEDGE, L"EDIT", L"",
+          WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, detailX, listY, detailW, listH,
+          hwnd, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdDetail)), hi, nullptr);
+      ctx->detail = det;
+      SendMessageW(det, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+      SetDetailTextForListIndex(det, 0);
 
       const int cancelX = static_cast<int>(cr.right) - m - kBtnW;
       const int okX = cancelX - kBtnGap - kBtnW;
@@ -225,13 +277,21 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
     case WM_COMMAND: {
       ctx = reinterpret_cast<PickerUiCtx*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
       const int id = GET_WM_COMMAND_ID(wParam, lParam);
+      const int cmd = GET_WM_COMMAND_CMD(wParam, lParam);
+      if (id == kIdList && cmd == LBN_SELCHANGE && ctx->list && ctx->detail) {
+        const LRESULT sel = SendMessageW(ctx->list, LB_GETCURSEL, 0, 0);
+        if (sel != LB_ERR) {
+          SetDetailTextForListIndex(ctx->detail, static_cast<int>(sel));
+        }
+        return 0;
+      }
       if (id == kIdCancel) {
         ctx->accepted = false;
         ctx->done = true;
         DestroyWindow(hwnd);
         return 0;
       }
-      if (id == kIdOk || (id == kIdList && GET_WM_COMMAND_CMD(wParam, lParam) == LBN_DBLCLK)) {
+      if (id == kIdOk || (id == kIdList && cmd == LBN_DBLCLK)) {
         const LRESULT sel = SendMessageW(ctx->list, LB_GETCURSEL, 0, 0);
         if (sel == LB_ERR) {
           MessageBoxW(hwnd, L"请先在列表中选择一种瓦片协议。", L"瓦片预览", MB_OK | MB_ICONINFORMATION);
@@ -301,10 +361,11 @@ static bool RunProtocolPickerModal(HWND owner, PickerUiCtx* ctx) {
     r = wa;
   }
   // 目标客户区（控件在 WM_CREATE 中按 GetClientRect 排版）；外框用 AdjustWindowRectEx 换算，避免按钮落在非客户区外被裁切。
-  constexpr int kClientW = 468;
-  constexpr int kClientH = 288;
+  constexpr int kClientW = 560;
+  constexpr int kClientH = 320;
   RECT adj{0, 0, kClientW, kClientH};
-  const DWORD kFrameStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+  // 使用 OVERLAPPED+CAPTION（不用 WS_POPUP）以便标题栏稳定显示窗口标题。
+  const DWORD kFrameStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
   const DWORD kFrameExStyle = WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE;
   AdjustWindowRectEx(&adj, kFrameStyle, FALSE, kFrameExStyle);
   const int kW = adj.right - adj.left;
@@ -318,12 +379,13 @@ static bool RunProtocolPickerModal(HWND owner, PickerUiCtx* ctx) {
   ctx->error.clear();
   ctx->owner = owner;
 
-  HWND dlg = CreateWindowExW(kFrameExStyle, kPickerClassName, L"打开瓦片 — 选择协议", kFrameStyle, x, y, kW, kH, owner,
+  HWND dlg = CreateWindowExW(kFrameExStyle, kPickerClassName, kPickerWindowTitle, kFrameStyle, x, y, kW, kH, owner,
                              nullptr, inst, ctx);
   if (!dlg) {
     ctx->error = L"无法创建协议选择窗口（CreateWindow 失败）。";
     return false;
   }
+  SetWindowTextW(dlg, kPickerWindowTitle);
 
   if (owner) {
     EnableWindow(owner, FALSE);
@@ -417,25 +479,6 @@ bool TilePreviewValidatePathMatchesProtocol(AgisTilePreviewProtocol protocol, co
     }
     if (_wcsicmp(fp.extension().c_str(), L".json") != 0) {
       return fail(L"请选择扩展名为 .json 的文件（通常为 tileset.json）。");
-    }
-    return true;
-  case AgisTilePreviewProtocol::kSingleRasterImage:
-    if (!isFile) {
-      return fail(L"单张栅格需要选择图像「文件」。");
-    }
-    {
-      const std::wstring ext = fp.extension().wstring();
-      const wchar_t* kOk[] = {L".png", L".jpg", L".jpeg", L".webp", L".bmp", L".tif", L".tiff"};
-      bool okex = false;
-      for (const wchar_t* e : kOk) {
-        if (_wcsicmp(ext.c_str(), e) == 0) {
-          okex = true;
-          break;
-        }
-      }
-      if (!okex) {
-        return fail(L"不支持的栅格扩展名。请选择 PNG / JPG / JPEG / WebP / BMP / TIF。");
-      }
     }
     return true;
   case AgisTilePreviewProtocol::kMBTilesFile:

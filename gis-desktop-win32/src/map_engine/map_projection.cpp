@@ -1,5 +1,6 @@
 #include "map_engine/map_projection.h"
 
+#include "common/runtime/agis_gdal_runtime_env.h"
 #include "map_engine/map_layer.h"
 
 #include <algorithm>
@@ -187,6 +188,47 @@ bool EnsureProjBoundsCached(MapDisplayProjection proj, const ViewExtent& geoView
   g_cacheOk = true;
   return true;
 }
+
+/// 将当前缓存的投影外包框映射到 cw×ch：用统一比例尺（取 min 以完整落入视口）并居中，避免视口与外包框长宽比不一致时 X/Y 非等比拉伸。
+static void MapProj_ProjectedExtentToScreenPx(double mx, double my, int cw, int ch, double* sx, double* sy) {
+  if (!sx || !sy) {
+    return;
+  }
+  const double w = g_cacheMaxX - g_cacheMinX;
+  const double h = g_cacheMaxY - g_cacheMinY;
+  if (!(w > 0.0) || !(h > 0.0) || cw <= 0 || ch <= 0) {
+    *sx = 0;
+    *sy = 0;
+    return;
+  }
+  const double scale = (std::min)(static_cast<double>(cw) / w, static_cast<double>(ch) / h);
+  const double drawnW = w * scale;
+  const double drawnH = h * scale;
+  const double offX = (static_cast<double>(cw) - drawnW) * 0.5;
+  const double offY = (static_cast<double>(ch) - drawnH) * 0.5;
+  *sx = (mx - g_cacheMinX) * scale + offX;
+  *sy = (g_cacheMaxY - my) * scale + offY;
+}
+
+static void MapProj_ScreenPxToProjectedExtent(int sx, int sy, int cw, int ch, double* mx, double* my) {
+  if (!mx || !my) {
+    return;
+  }
+  const double w = g_cacheMaxX - g_cacheMinX;
+  const double h = g_cacheMaxY - g_cacheMinY;
+  if (!(w > 0.0) || !(h > 0.0) || cw <= 0 || ch <= 0) {
+    *mx = g_cacheMinX;
+    *my = g_cacheMaxY;
+    return;
+  }
+  const double scale = (std::min)(static_cast<double>(cw) / w, static_cast<double>(ch) / h);
+  const double drawnW = w * scale;
+  const double drawnH = h * scale;
+  const double offX = (static_cast<double>(cw) - drawnW) * 0.5;
+  const double offY = (static_cast<double>(ch) - drawnH) * 0.5;
+  *mx = g_cacheMinX + (static_cast<double>(sx) - offX) / scale;
+  *my = g_cacheMaxY - (static_cast<double>(sy) - offY) / scale;
+}
 #endif  // GIS_DESKTOP_HAVE_GDAL
 
 void WorldToScreenLinear(const ViewExtent& v, double wx, double wy, int cw, int ch, double* sx, double* sy) {
@@ -206,6 +248,7 @@ void WorldToScreenLinear(const ViewExtent& v, double wx, double wy, int cw, int 
 bool MapProj_SystemInit() {
 #if GIS_DESKTOP_HAVE_GDAL
   if (!g_ctx) {
+    AgisEnsureGdalDataPath();
     g_ctx = proj_context_create();
   }
   return g_ctx != nullptr;
@@ -300,8 +343,7 @@ void MapProj_GeoLonLatToScreen(MapDisplayProjection proj, const ViewExtent& geoV
     WorldToScreenLinear(geoView, lon, lat, cw, ch, sx, sy);
     return;
   }
-  *sx = (mx - g_cacheMinX) / w * static_cast<double>(cw);
-  *sy = (g_cacheMaxY - my) / h * static_cast<double>(ch);
+  MapProj_ProjectedExtentToScreenPx(mx, my, cw, ch, sx, sy);
 #else
   WorldToScreenLinear(geoView, lon, lat, cw, ch, sx, sy);
 #endif
@@ -344,10 +386,9 @@ void MapProj_ScreenToGeoLonLat(MapDisplayProjection proj, const ViewExtent& geoV
     *lat = geoView.minY;
     return;
   }
-  const double fx = static_cast<double>(sx) / static_cast<double>(cw);
-  const double fy = static_cast<double>(sy) / static_cast<double>(ch);
-  const double mx = g_cacheMinX + fx * w;
-  const double my = g_cacheMaxY - fy * h;
+  double mx = 0;
+  double my = 0;
+  MapProj_ScreenPxToProjectedExtent(sx, sy, cw, ch, &mx, &my);
   if (!InverseProj(tf, mx, my, lon, lat)) {
     *lon = geoView.minX;
     *lat = geoView.minY;

@@ -160,7 +160,7 @@ classDiagram
 
 ## 投影与空白地图（map_projection.h）
 
-`MapDocument` 持有 `MapDisplayProjection`，无图层时与 `MapProj_*` 配合做经纬网/拾取变换；有图层时仍以数据坐标为准（见头文件注释）。
+`MapDocument` 持有 `MapDisplayProjection`，无图层时与 `MapProj_*` 配合做经纬网/拾取变换；有图层时仍以数据坐标为准（见头文件注释）。**非地理投影**（依赖 PROJ 时）下，将当前视口经纬范围对应的**投影平面外包框**映射到客户区像素时采用**统一比例尺并居中**（视口长宽比与外包框不一致时两侧或上下留边），避免 X/Y 非等比拉伸；`MapProj_ScreenToGeoLonLat` 与正向变换使用同一套偏移与比例。
 
 ```mermaid
 classDiagram

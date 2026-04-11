@@ -39,6 +39,9 @@ constexpr Gdiplus::PixelFormat k24bppRgb = static_cast<Gdiplus::PixelFormat>(0x2
 #include "common/app_core/main_app.h"
 #include "common/app_core/main_globals.h"
 
+// `tile_preview/`：本地磁盘上的瓦片/栅格信息采样预览（目录 z/x/y、TMS、本地 tileset.json 元数据、单图、MBTiles/GPKG 等）。
+// 不实现 HTTP(S)、WMTS、XYZ URL 等网络拉取；输入须为可访问的本机文件或文件夹路径。
+
 #ifndef GIS_DESKTOP_HAVE_GDAL
 #define GIS_DESKTOP_HAVE_GDAL 0
 #endif
@@ -52,10 +55,19 @@ constexpr Gdiplus::PixelFormat k24bppRgb = static_cast<Gdiplus::PixelFormat>(0x2
 #endif
 
 // --- 瓦片：平面四叉树 (slippy z/x/y) + 3D Tiles BVH/体积元数据（tileset.json 根 region）---
-
-/// Slippy 平面预览的屏幕展开方式（瓦片内容仍为 Web Mercator 纹理；非网格模式按经纬度或 sinφ 摆放，属示意拼贴）。
+//
+// === Slippy 栅格：输入源投影 →（算法）→ 显示用投影/几何 → 屏幕 ===
+// **产品语义**：把 **输入源**（按约定为 **EPSG:3857** 的 XYZ 纹理）按用户所选 **显示用展开** 画到窗口上；即「源 CRS 上的瓦片 → 经重投影与重采样 → 在显示几何下呈现 → 像素输出」。
+// **实现上的采样方向（与上面箭头相反，数学等价）**：对每个 **输出像素**，从 **屏幕** 逆入 **当前显示平面**（`TileSlippyProjection` + 视口）→ 得到可与 PROJ 衔接的坐标（如 WGS84、CEA 米制）→ **PROJ 变换到输入源 CRS（EPSG:3857）** → 在磁盘纹理上双线性/拼贴取色。这样实现只需持有一份 3857 纹理，不必预生成多份显示 CRS 的切片。
+// 1) **输入源投影 / 纹理 CRS**：标准 OSM/Google 类 XYZ 下，z/x/y 与瓦片范围对应 **EPSG:3857**；`SlippyTileIndexToEpsg3857BoundsMeters` 等用于纹素定位。
+// 2) **显示用投影 / 显示几何**：`TileSlippyProjection` + center / pixelsPerTile 决定「屏上一点」落在片元线性+4326 语义、XYZ 恒等网格，还是等积圆柱平面；**不改写**磁盘 CRS。
+// 3) **算法**：上述逆映射 + **PROJ（显示侧坐标 ↔ EPSG:3857）** + 重采样；整视口可为单遍 `TileSlippyPaintProjResampled`，否则按瓦片拼贴。
+// 4) **特例**：`kWebMercatorGrid` 下显示平面与源索引一致，纹理侧无额外 CRS 变换（恒等展开）。
+// 单张栅格 / MBTiles / GPKG 等：**输入源 CRS** 以 GDAL 数据集为准，不在此枚举内。
+//
+/// 用户可选的 **显示用展开 / 显示侧几何**（上条第 2 步）。**不等于**磁盘纹理 CRS；标准 Slippy 纹理侧恒为 EPSG:3857。
 enum class TileSlippyProjection : uint8_t {
-  /// 等比例经纬度（Plate Carrée）：同一 ° 经、° 纬在屏幕上等长。
+  /// 产品名仍称「等比例经纬度 / Plate Carrée」：采样平面为 WGS84 度；屏上映射取片元矩形线性（与 XYZ 拓扑一致）再 PROJ→3857 取纹理，避免仿射 lat∝屏 Y 与 Web 墨卡托瓦片竖向错位。非「整屏仿射」意义下横纵像素/度可不等。
   kEquirectangular = 0,
   /// 与 XYZ 索引一致的线性片元网格（传统「滑块地图」展开）。
   kWebMercatorGrid = 1,
@@ -79,11 +91,11 @@ static const wchar_t* TileSlippyProjectionShortLabel(TileSlippyProjection p) {
   }
 }
 
-/// Slippy 标准栅格瓦片数据源为 Web 墨卡托；此项为界面「显示投影」全称。
+/// 界面长标签：描述 **显示侧** 展开方式；数据源纹理仍为 EPSG:3857。
 static const wchar_t* TileSlippyProjectionLongLabel(TileSlippyProjection p) {
   switch (p) {
   case TileSlippyProjection::kEquirectangular:
-    return L"等比例经纬度（Plate Carrée）";
+    return L"等比例经纬度（Plate Carrée · 片元线性 + PROJ，与 XYZ 同拓扑）";
   case TileSlippyProjection::kWebMercatorGrid:
     return L"XYZ 片元线性（Web Mercator 网格）";
   case TileSlippyProjection::kCylindricalEqualArea:
@@ -93,7 +105,7 @@ static const wchar_t* TileSlippyProjectionLongLabel(TileSlippyProjection p) {
   }
 }
 
-/// 等积圆柱显示平面与 PROJ 管线一致（WGS84 datum）；`TileSlippyProjEnsurePipelines` 与场景 JSON 共用。
+/// 等积圆柱显示平面与 PROJ 管线一致（WGS84 datum）。等比例经纬度（选项「等经纬」）仅建 EPSG:4326→3857；等积圆柱另建 CEA 链，避免 CEA 失败拖垮前者。
 static constexpr const char kTileSlippyCeaWgs84Proj[] = "+proj=cea +lat_ts=0 +lon_0=0 +datum=WGS84 +type=crs";
 
 enum class TileSampleResult { kOk, kNoRaster, kContainerUnsupported };
@@ -106,7 +118,8 @@ struct TileFindResult {
 static bool IsRasterTileExtension(const std::wstring& ext) {
   return _wcsicmp(ext.c_str(), L".png") == 0 || _wcsicmp(ext.c_str(), L".jpg") == 0 ||
          _wcsicmp(ext.c_str(), L".jpeg") == 0 || _wcsicmp(ext.c_str(), L".webp") == 0 ||
-         _wcsicmp(ext.c_str(), L".bmp") == 0;
+         _wcsicmp(ext.c_str(), L".bmp") == 0 || _wcsicmp(ext.c_str(), L".tif") == 0 ||
+         _wcsicmp(ext.c_str(), L".tiff") == 0;
 }
 
 static bool TryParseNonNegIntW(const std::wstring& s, int* out) {
@@ -736,6 +749,7 @@ struct TilePreviewState {
   int lastPointerQuantX = INT_MIN;
   int lastPointerQuantY = INT_MIN;
 
+  /// 显示用投影/展开（`TileSlippyProjection`）；Slippy 源纹理 CRS 仍为 EPSG:3857，见文件头流水线说明。
   TileSlippyProjection slippyProjection = TileSlippyProjection::kEquirectangular;
   bool showOptionsPanel = false;
   bool uiShowTopHint = true;
@@ -754,11 +768,10 @@ static std::wstring g_pendingTilePreviewRoot;
 /// 底部单行状态条高度（半透明信息栏）。
 static constexpr int kTilePreviewBottomStatus = 28;
 
-/// 顶部说明区高度：随模式变化（含「打开方式」+ 动态 hint）。
-/// Slippy 地图模式仅保留一行快捷说明 + 动态 hint，避免固定 212px 把地图挤到窗口下半区。
+/// 顶部说明区高度：Slippy / 单图 为紧凑顶栏（仅动态 hint）；3D Tiles 元数据区仍较高。
 static int TilePreviewTopBarPx(const TilePreviewState* st) {
   if (!st) {
-    return 212;
+    return 72;
   }
   switch (st->mode) {
   case TilePreviewState::Mode::kThreeDTilesMeta:
@@ -766,7 +779,7 @@ static int TilePreviewTopBarPx(const TilePreviewState* st) {
   case TilePreviewState::Mode::kSlippyQuadtree:
     return st->uiShowTopHint ? 72 : 40;
   default:
-    return 212;
+    return st->uiShowTopHint ? 72 : 40;
   }
 }
 
@@ -817,6 +830,88 @@ static void SlippyTileXYToLonLat(double tileX, double tileY, int z, double* lonD
   *latDeg = latRad * 180.0 / kTileGeoPi;
 }
 
+/// 视口在片元浮点矩形 [wl,wl+ww]×[wt,wt+wh] 下的 WGS84 轴对齐包络（四角墨卡托反算；跨日界线时未特殊处理）。
+static void SlippyViewportLonLatBounds(int z, double wl, double wt, double ww, double wh, double* lonMin,
+                                       double* lonMax, double* latMin, double* latMax) {
+  if (!lonMin || !lonMax || !latMin || !latMax || z < 0 || z > 30) {
+    return;
+  }
+  double c[4][2]{};
+  auto corner = [&](int i, double tx, double ty) { SlippyTileXYToLonLat(tx, ty, z, &c[i][0], &c[i][1]); };
+  corner(0, wl, wt);
+  corner(1, wl + ww, wt);
+  corner(2, wl, wt + wh);
+  corner(3, wl + ww, wt + wh);
+  *lonMin = *lonMax = c[0][0];
+  *latMin = *latMax = c[0][1];
+  for (int i = 1; i < 4; ++i) {
+    *lonMin = (std::min)(*lonMin, c[i][0]);
+    *lonMax = (std::max)(*lonMax, c[i][0]);
+    *latMin = (std::min)(*latMin, c[i][1]);
+    *latMax = (std::max)(*latMax, c[i][1]);
+  }
+}
+
+/// 在 full 内取最大轴对齐子矩形，使 **宽:高 = Δlon:Δlat**（等经纬/等积圆柱下与 Plate Carrée「一度经≈一度纬」像素比一致）；地理视域仍为 (wl,wt,ww,wh) 片元窗，映射到子矩形内 u,v∈[0,1]。
+static RECT TileSlippyLetterboxMapRectForEqualLonLatPx(RECT fullImg, TileSlippyProjection proj, int viewZ, double wl,
+                                                       double wt, double ww, double wh) {
+  if (proj == TileSlippyProjection::kWebMercatorGrid) {
+    return fullImg;
+  }
+  const int aw0 = (std::max)(1, static_cast<int>(fullImg.right - fullImg.left));
+  const int ah0 = (std::max)(1, static_cast<int>(fullImg.bottom - fullImg.top));
+  double lmn = 0;
+  double lmx = 0;
+  double bmn = 0;
+  double bmx = 0;
+  SlippyViewportLonLatBounds(viewZ, wl, wt, ww, wh, &lmn, &lmx, &bmn, &bmx);
+  double lonSpan = lmx - lmn;
+  double latSpan = bmx - bmn;
+  lonSpan = (std::max)(lonSpan, 1e-6);
+  latSpan = (std::max)(latSpan, 1e-6);
+  const double targetAspect = lonSpan / latSpan;
+  const double car = static_cast<double>(aw0) / static_cast<double>(ah0);
+  int iw = aw0;
+  int ih = ah0;
+  if (car > targetAspect) {
+    ih = ah0;
+    iw = static_cast<int>(std::lround(static_cast<double>(ah0) * targetAspect));
+    iw = (std::clamp)(iw, 4, aw0);
+  } else {
+    iw = aw0;
+    ih = static_cast<int>(std::lround(static_cast<double>(aw0) / targetAspect));
+    ih = (std::clamp)(ih, 4, ah0);
+  }
+  const int ix = fullImg.left + (aw0 - iw) / 2;
+  const int iy = fullImg.top + (ah0 - ih) / 2;
+  return {ix, iy, ix + iw, iy + ih};
+}
+
+struct SlippyViewFrame {
+  RECT fullImg{};
+  RECT mapImg{};
+  double worldLeft = 0.0;
+  double worldTop = 0.0;
+  double worldW = 1.0;
+  double worldH = 1.0;
+};
+
+static void TileSlippyComputeViewFrame(RECT clientCr, const TilePreviewState* st, SlippyViewFrame* out) {
+  if (!st || !out) {
+    return;
+  }
+  out->fullImg = TileSlippyImageArea(clientCr, st);
+  const int aw0 = (std::max)(1, static_cast<int>(out->fullImg.right - out->fullImg.left));
+  const int ah0 = (std::max)(1, static_cast<int>(out->fullImg.bottom - out->fullImg.top));
+  const double ppt = static_cast<double>(st->pixelsPerTile);
+  out->worldW = static_cast<double>(aw0) / ppt;
+  out->worldH = static_cast<double>(ah0) / ppt;
+  out->worldLeft = st->centerTx - out->worldW * 0.5;
+  out->worldTop = st->centerTy - out->worldH * 0.5;
+  out->mapImg = TileSlippyLetterboxMapRectForEqualLonLatPx(out->fullImg, st->slippyProjection, st->viewZ,
+                                                           out->worldLeft, out->worldTop, out->worldW, out->worldH);
+}
+
 /// 整数片元 (tx,ty) 在当前 Z 下于球面 Web 墨卡托（与常见 XYZ 纹理一致的 EPSG:3857 米制范围）中的轴对齐外包。
 /// ty=0 为北侧；X 向东、Y 向北，与 EPSG:3857 一致。
 static void SlippyTileIndexToEpsg3857BoundsMeters(int z, int tx, int ty, double* minXM, double* maxXM, double* minYM,
@@ -849,14 +944,15 @@ static void TilePreviewUpdatePointerGeo(TilePreviewState* st, HWND hwnd, POINT c
   wchar_t line[512]{};
 
   if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
-    const RECT img = TileSlippyImageArea(cr, st);
-    if (!PtInRect(&img, clientPt)) {
-      swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入地图区域查看经纬度", clientPt.x, clientPt.y);
+    SlippyViewFrame vf{};
+    TileSlippyComputeViewFrame(cr, st, &vf);
+    if (!PtInRect(&vf.mapImg, clientPt)) {
+      swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入地图绘制区查看经纬度", clientPt.x, clientPt.y);
       st->tilePointerStatusLine = line;
       return;
     }
     st->pointerOverImage = true;
-    TilePreviewUpdateSlippyPointerGeo(st, img, cr, clientPt, line, std::size(line));
+    TilePreviewUpdateSlippyPointerGeo(st, vf.mapImg, cr, clientPt, line, std::size(line));
     st->tilePointerStatusLine = line;
     return;
   }
@@ -1016,32 +1112,35 @@ static void TileZoomSlippy(TilePreviewState* st, RECT clientCr, const POINT* cur
   if (newZ == st->viewZ) {
     return;
   }
-  const RECT img = TileSlippyImageArea(clientCr, st);
-  const int aw = (std::max)(1, static_cast<int>(img.right - img.left));
-  const int ah = (std::max)(1, static_cast<int>(img.bottom - img.top));
+  SlippyViewFrame vf{};
+  TileSlippyComputeViewFrame(clientCr, st, &vf);
+  const RECT& map = vf.mapImg;
+  const int iw = (std::max)(1, static_cast<int>(map.right - map.left));
+  const int ih = (std::max)(1, static_cast<int>(map.bottom - map.top));
   POINT focusPt{};
-  if (cursorClient && PtInRect(&img, *cursorClient)) {
+  if (cursorClient && PtInRect(&map, *cursorClient)) {
     focusPt = *cursorClient;
   } else {
-    focusPt.x = img.left + aw / 2;
-    focusPt.y = img.top + ah / 2;
+    focusPt.x = map.left + iw / 2;
+    focusPt.y = map.top + ih / 2;
   }
-  const float ppt = st->pixelsPerTile;
-  const double worldW = static_cast<double>(aw) / static_cast<double>(ppt);
-  const double worldH = static_cast<double>(ah) / static_cast<double>(ppt);
-  const double worldLeft = st->centerTx - worldW * 0.5;
-  const double worldTop = st->centerTy - worldH * 0.5;
+  const double worldW = vf.worldW;
+  const double worldH = vf.worldH;
+  const double worldLeft = vf.worldLeft;
+  const double worldTop = vf.worldTop;
   const int dim0 = 1 << st->viewZ;
-  const double focX = static_cast<double>(focusPt.x - img.left);
-  const double focY = static_cast<double>(focusPt.y - img.top);
-  double nu = (worldLeft + focX / static_cast<double>(ppt)) / static_cast<double>((std::max)(1, dim0));
-  double nv = (worldTop + focY / static_cast<double>(ppt)) / static_cast<double>((std::max)(1, dim0));
+  const double focX = static_cast<double>(focusPt.x - map.left);
+  const double focY = static_cast<double>(focusPt.y - map.top);
+  const double tileXF = worldLeft + focX * worldW / static_cast<double>(iw);
+  const double tileYF = worldTop + focY * worldH / static_cast<double>(ih);
+  double nu = tileXF / static_cast<double>((std::max)(1, dim0));
+  double nv = tileYF / static_cast<double>((std::max)(1, dim0));
   nu = (std::clamp)(nu, 0.0, 1.0);
   nv = (std::clamp)(nv, 0.0, 1.0);
   st->viewZ = newZ;
   const int dim1 = 1 << newZ;
-  st->centerTx = nu * static_cast<double>(dim1) + worldW * 0.5 - focX / static_cast<double>(ppt);
-  st->centerTy = nv * static_cast<double>(dim1) + worldH * 0.5 - focY / static_cast<double>(ppt);
+  st->centerTx = nu * static_cast<double>(dim1) + worldW * 0.5 - focX * worldW / static_cast<double>(iw);
+  st->centerTy = nv * static_cast<double>(dim1) + worldH * 0.5 - focY * worldH / static_cast<double>(ih);
   const double lim = static_cast<double>(1 << newZ) + 4.0;
   st->centerTx = (std::clamp)(st->centerTx, -2.0, lim);
   st->centerTy = (std::clamp)(st->centerTy, -2.0, lim);
@@ -1052,21 +1151,53 @@ static RECT TileOpenButtonRect(RECT cr) {
   return RECT{cr.left + 12, cr.top + 10, cr.left + 92, cr.top + 34};
 }
 
-static RECT TileOptionsButtonRect(RECT cr) {
-  return RECT{cr.left + 100, cr.top + 10, cr.left + 186, cr.top + 34};
+/// 紧挨「Open…」右侧。
+static RECT TileCloseButtonRect(RECT cr) {
+  const RECT o = TileOpenButtonRect(cr);
+  constexpr int kW = 68;
+  return RECT{o.right + 4, o.top, o.right + 4 + kW, o.bottom};
 }
 
-/// 「复制场景信息」：Slippy 模式下在「选项」右侧；其它模式紧挨「Open…」。
-static RECT TileCopySceneInfoButtonRect(RECT cr, const TilePreviewState* st) {
-  if (st && st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
-    return RECT{cr.left + 194, cr.top + 10, cr.left + 346, cr.top + 34};
+static RECT TileOptionsButtonRect(RECT cr) {
+  const RECT c = TileCloseButtonRect(cr);
+  constexpr int kW = 86;
+  return RECT{c.right + 4, c.top, c.right + 4 + kW, c.bottom};
+}
+
+/// 已成功加载可导出场景 JSON 的内容（Slippy 已索引、单图已解码、或 3D Tiles 元数据路径有效）。
+static bool TilePreviewHasLoadedPreviewContent(const TilePreviewState* st) {
+  if (!st) {
+    return false;
   }
-  return RECT{cr.left + 100, cr.top + 10, cr.left + 268, cr.top + 34};
+  switch (st->mode) {
+  case TilePreviewState::Mode::kSlippyQuadtree:
+    return st->tileCount > 0 && !st->slippyPaths.empty();
+  case TilePreviewState::Mode::kSingleRaster:
+    return st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok;
+  case TilePreviewState::Mode::kThreeDTilesMeta:
+    return !st->rootPath.empty();
+  default:
+    return false;
+  }
+}
+
+/// 「复制场景信息」：Slippy 模式下在「选项」右侧；否则在「关闭」右侧。仅在有已加载内容时显示。
+static RECT TileCopySceneInfoButtonRect(RECT cr, const TilePreviewState* st) {
+  constexpr int kCopyW = 152;
+  int left = 0;
+  if (st && st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
+    const RECT opt = TileOptionsButtonRect(cr);
+    left = opt.right + 4;
+  } else {
+    const RECT cls = TileCloseButtonRect(cr);
+    left = cls.right + 4;
+  }
+  return RECT{left, cr.top + 10, left + kCopyW, cr.top + 34};
 }
 
 static RECT TileSlippyOptionsPanelRect(RECT cr) {
   constexpr int kPanelW = 300;
-  constexpr int kPanelH = 278;
+  constexpr int kPanelH = 302;
   constexpr int kMargin = 12;
   const int top = cr.top + 42;
   return {cr.right - kPanelW - kMargin, top, cr.right - kMargin, top + kPanelH};
@@ -1087,18 +1218,19 @@ static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, RGB(28, 36, 52));
   RECT titleRc{prc.left + 10, prc.top + 6, prc.right - 10, prc.top + 22};
-  DrawTextW(hdc, L"显示与投影", -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-  RECT ioRc{prc.left + 10, prc.top + 22, prc.right - 10, prc.top + 72};
+  DrawTextW(hdc, L"输入源投影 → 算法 → 显示 → 屏幕", -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  RECT ioRc{prc.left + 10, prc.top + 22, prc.right - 10, prc.top + 102};
   DrawTextW(hdc,
 #if GIS_DESKTOP_HAVE_GDAL
-             L"数据源：Web 墨卡托（EPSG:3857）\n"
-             L"显示：下列单选；除「XYZ 片元线性」外由 PROJ 做显示 CRS→3857 逐像素重采样（GDAL 构建）。",
+             L"① 输入源投影：标准 XYZ 纹理 = EPSG:3857（与 z/x/y 一致）\n"
+             L"② 算法：重投影/重采样（PROJ 等）把「显示几何上的点」变到 ① 再取纹素；代码里对每个像素：屏→显示→3857→纹理\n"
+             L"③ 显示：下列为显示用投影/几何；④ 合成到窗口像素。「XYZ 片元线性」下显示与源一致，② 无额外 CRS 步",
 #else
-             L"数据源：Web 墨卡托（EPSG:3857）\n"
-             L"显示：当前构建未启用 GDAL，非 XYZ 模式为近似拼贴；请用带 GDAL/PROJ 的构建以启用严格变换。",
+             L"① 输入源：EPSG:3857 标准 XYZ 纹理\n"
+             L"②④ 当前无 GDAL/PROJ：非 XYZ 为近似几何；请用带 GDAL 的构建做严格 源→显示 重采样。",
 #endif
              -1, &ioRc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
-  constexpr int kProjRow0 = 78;
+  constexpr int kProjRow0 = 110;
   for (int i = 0; i < kTileSlippyProjectionCount; ++i) {
     wchar_t line[200]{};
     const bool sel = static_cast<int>(st->slippyProjection) == i;
@@ -1106,7 +1238,7 @@ static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) 
     RECT rowRc{prc.left + 10, prc.top + kProjRow0 + i * 24, prc.right - 8, prc.top + kProjRow0 + i * 24 + 22};
     DrawTextW(hdc, line, -1, &rowRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   }
-  RECT secRc{prc.left + 10, prc.top + 156, prc.right - 8, prc.top + 174};
+  RECT secRc{prc.left + 10, prc.top + 188, prc.right - 8, prc.top + 206};
   DrawTextW(hdc, L"界面元素", -1, &secRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   auto drawCheckRow = [&](int y, bool on, const wchar_t* label) {
     const RECT box{prc.left + 14, y, prc.left + 28, y + 14};
@@ -1118,10 +1250,10 @@ static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) 
     RECT tx{prc.left + 32, y - 2, prc.right - 10, y + 18};
     DrawTextW(hdc, label, -1, &tx, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   };
-  drawCheckRow(prc.top + 178, st->uiShowTopHint, L"顶栏说明（打开方式 / 提示）");
-  drawCheckRow(prc.top + 202, st->uiShowSlippyMapHud, L"地图内 HUD（层级与操作说明）");
-  drawCheckRow(prc.top + 226, st->uiShowTileGrid, L"瓦片网格线");
-  drawCheckRow(prc.top + 250, st->uiShowTileLabels, L"瓦片标注（z/x/y 与像素尺寸）");
+  drawCheckRow(prc.top + 210, st->uiShowTopHint, L"顶栏说明（快捷提示）");
+  drawCheckRow(prc.top + 234, st->uiShowSlippyMapHud, L"地图内 HUD（层级与操作说明）");
+  drawCheckRow(prc.top + 258, st->uiShowTileGrid, L"瓦片网格线");
+  drawCheckRow(prc.top + 282, st->uiShowTileLabels, L"瓦片标注（z/x/y 与像素尺寸）");
 }
 
 /// @return true 若点击落在面板内并已消费（含空白区域），调用方勿启动地图拖拽。
@@ -1136,7 +1268,7 @@ static bool TileSlippyOptionsPanelHandleClick(HWND hwnd, TilePreviewState* st, R
   const int relY = pt.y - prc.top;
   const int relX = pt.x - prc.left;
   bool changed = false;
-  constexpr int kHitProjRow0 = 78;
+  constexpr int kHitProjRow0 = 110;
   if (relY >= kHitProjRow0 && relY < kHitProjRow0 + 24 * kTileSlippyProjectionCount && relX >= 8) {
     const int i = (relY - kHitProjRow0) / 24;
     if (i >= 0 && i < kTileSlippyProjectionCount) {
@@ -1150,10 +1282,10 @@ static bool TileSlippyOptionsPanelHandleClick(HWND hwnd, TilePreviewState* st, R
         changed = true;
       }
     };
-    toggleRow(178, &st->uiShowTopHint);
-    toggleRow(202, &st->uiShowSlippyMapHud);
-    toggleRow(226, &st->uiShowTileGrid);
-    toggleRow(250, &st->uiShowTileLabels);
+    toggleRow(210, &st->uiShowTopHint);
+    toggleRow(234, &st->uiShowSlippyMapHud);
+    toggleRow(258, &st->uiShowTileGrid);
+    toggleRow(282, &st->uiShowTileLabels);
   }
   if (changed) {
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -1175,22 +1307,9 @@ static void TilePreviewShowLoadError(HWND owner, const TilePreviewLoadReport& re
   MessageBoxW(owner, rep.errorText.c_str(), cap, MB_OK | MB_ICONWARNING);
 }
 
-static const wchar_t kTilePreviewOpenMethods[] =
-    L"【打开方式】\n"
-    L"· 命令行：AGIS-TilePreview.exe <文件夹或单文件路径>\n"
-    L"· 窗口左上角「Open…」浏览选择\n"
-    L"· 将文件或文件夹拖入本窗口（拖放）\n"
-    L"· 从工作台等入口带路径参数启动\n"
-    L"\n"
-    L"【支持的数据】\n"
-    L"· XYZ / TMS 瓦片根目录（如 {z}/{x}/{y}.png；可含 tilejson.json）\n"
-    L"· tileset.json（3D Tiles：BVH / 元数据面板）\n"
-    L"· 单张栅格 PNG / JPG / JPEG / WebP / BMP（缩放置中）\n"
-    L"· .mbtiles / .gpkg（需 GDAL：全球拼图缩略预览）";
-
-/// Slippy 顶栏一行：完整「打开方式」见其它模式或产品文档；此处为地图区让出高度。
+/// Slippy 顶栏一行；完整打开方式与支持格式见产品文档 / README，不再占用主视图顶栏。
 static const wchar_t kTilePreviewSlippyTopLine[] =
-    L"Open… 或拖入瓦片根目录（标准 XYZ 栅格数据源为 Web 墨卡托 EPSG:3857，「选项」可选显示方式）。滚轮：Z；Shift+滚轮：视口中心；Ctrl+滚轮：片元像素；拖拽平移。";
+    L"本地路径：Open… 或拖入瓦片根目录/文件（无网络服务；标准 XYZ 纹理为 Web 墨卡托 EPSG:3857，「选项」可调显示投影）。滚轮：Z；Shift+滚轮：视口中心；Ctrl+滚轮：片元像素；拖拽平移。";
 
 static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::wstring& path, TilePreviewLoadReport* report) {
   if (!st) {
@@ -1251,7 +1370,7 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   st->uiShowTileLabels = saveLabels;
 
   if (st->rootPath.empty()) {
-    st->hint = L"【操作提示】地图模式：滚轮切换 Z（光标中心；Shift+滚轮以视口中心）；Ctrl+滚轮调整片元像素尺寸；拖拽平移。";
+    st->hint = L"请使用「Open…」、拖放或命令行传入本机路径：XYZ/TMS 目录、单张栅格、本地 tileset.json（3D Tiles 元数据）、或 .mbtiles/.gpkg（需 GDAL）。不支持 http(s)/WMTS 等网络地址。";
     InvalidateRect(hwnd, nullptr, FALSE);
     markOk();
     return;
@@ -1354,16 +1473,19 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   }
 
   markFail(L"无法预览",
-           L"未找到可预览的内容：\n"
+           L"未找到可预览的本地内容：\n"
            L"· 目录下无 z/x/y（或 TMS）瓦片结构；且\n"
-           L"· 无 tileset.json / 有效 .json；且\n"
-           L"· 未找到可读的 PNG/JPG/WebP/BMP 栅格。\n"
-           L"请确认路径正确，或通过「Open…」按协议重新选择。");
+           L"· 无本地 tileset.json / 有效 .json；且\n"
+           L"· 未找到可读的 PNG/JPG/WebP/BMP/TIF 栅格。\n"
+           L"本窗口仅支持磁盘路径，不支持网络 URL。请确认路径或通过「Open…」按类型重新选择。");
 }
 
 /// Slippy 绘制布局（瓦片层与 HUD 层共用；分阶段绘制以保证 Z 序：瓦片 → 顶栏 UI → 地图 HUD → 底栏）。
 struct TileSlippyPaintLayout {
+  /// 地图绘制与指针命中区（等经纬/等积圆柱下可能为 fullImgArea 内 letterbox 子矩形）。
   RECT imgArea{};
+  /// 与 `TileSlippyImageArea` 一致的外层客户区；条带区无瓦片绘制，仅衬底。
+  RECT fullImgArea{};
   int aw = 1;
   int ah = 1;
   double worldW = 1.0;
@@ -1386,7 +1508,10 @@ struct TileSlippyPaintLayout {
   double viewCenterLat = 0.0;
   double imgCenterX = 0.0;
   double imgCenterY = 0.0;
-  /// 每度经纬在屏幕上的像素（Plate Carrée / 等积圆柱的经向尺度）。
+  /// 每度经度、纬度在屏幕上的近似像素（JSON/状态）；等经纬下横纵尺度通常不等——经向来自片元矩形线性跨度，纬向来自四角纬度包络（墨卡托非线性）。
+  double ppdLon = 0.0;
+  double ppdLat = 0.0;
+  /// 兼容字段：片元线性模式下与 `ppdLon` 相同；等积圆柱经向尺度；供 JSON `pixelsPerDegreeLonApprox` 等。
   double ppdEq = 0.0;
   /// 等积圆柱：R_pix = ppdEq * 180/π，用于 (sin φ - sin φ₀) 项。
   double rPixCea = 0.0;
@@ -1435,6 +1560,53 @@ static void SlippyPixelCenterToFractionalTile(const RECT& img, int px, int py, c
   *outTileY = lay.worldTop + v * lay.worldH;
 }
 
+/// 与 `SlippyPixelCenterToFractionalTile` 互逆：片元浮点坐标 → 客户区像素中心（双精度）。
+/// 等经纬模式下橙框/无 GDAL 拼贴与整视口 PROJ 重采样均用此映射，使「屏上位置 ↔ 片元 (tx,ty)」与墨卡托纬向非线性一致，避免仿射 lat∝屏 Y 导致底图竖向拉伸。
+static void SlippyFractionalTileToClientPixelCenter(const TileSlippyPaintLayout& lay, double tileX, double tileY,
+                                                    double* outCx, double* outCy) {
+  if (!outCx || !outCy) {
+    return;
+  }
+  const RECT& img = lay.imgArea;
+  const double aw = static_cast<double>((std::max)(1, lay.aw));
+  const double ah = static_cast<double>((std::max)(1, lay.ah));
+  double u = (tileX - lay.worldLeft) / lay.worldW;
+  double v = (tileY - lay.worldTop) / lay.worldH;
+  u = (std::clamp)(u, 0.0, 1.0);
+  v = (std::clamp)(v, 0.0, 1.0);
+  *outCx = static_cast<double>(img.left) + u * aw;
+  *outCy = static_cast<double>(img.top) + v * ah;
+}
+
+/// 片元 X 可小于 0 或大于 dim（平移视口），反算经度会落在 [-180,180] 之外；折叠到主经度范围。
+static double SlippyWrapLongitudeDeg(double lonDeg) {
+  double x = std::fmod(lonDeg + 180.0, 360.0);
+  if (x < 0.0) {
+    x += 360.0;
+  }
+  return x - 180.0;
+}
+
+/// 与球面 Web 墨卡托瓦片常用裁剪纬度一致，避免 JSON 中出现不可地图化的极区纬度。
+static double SlippyClampLatitudeDeg(double latDeg) {
+  constexpr double kMax = 85.0511287798;
+  return (std::clamp)(latDeg, -kMax, kMax);
+}
+
+/// 与 `SlippyLonLatToScreenCea` 互逆（横轴经度线性、纵轴 sinφ 线性）。
+static void SlippyScreenToLonLatInverseCea(const TileSlippyPaintLayout& lay, double clientX, double clientY,
+                                           double* lonDeg, double* latDeg) {
+  if (!lonDeg || !latDeg) {
+    return;
+  }
+  *lonDeg = lay.viewCenterLon + (clientX - lay.imgCenterX) / lay.ppdLon;
+  const double cLatR = lay.viewCenterLat * kTileGeoPi / 180.0;
+  const double s0 = std::sin(cLatR);
+  const double sAt = s0 - (clientY - lay.imgCenterY) / lay.rPixCea;
+  const double cl = (std::clamp)(sAt, -1.0, 1.0);
+  *latDeg = std::asin(cl) * 180.0 / kTileGeoPi;
+}
+
 #if GIS_DESKTOP_HAVE_GDAL
 static constexpr double kWebMercatorOriginShiftM = 20037508.342789244;
 
@@ -1469,8 +1641,55 @@ static void TileSlippyProjDestroyForTilePreview() {
   }
 }
 
-static bool TileSlippyProjEnsurePipelines() {
-  if (g_tileSlippyPj4326To3857) {
+/// 供 `proj_context_set_search_paths` 使用，指针需在 context 存活期内有效。
+static std::string g_tileSlippyProjSearchPathUtf8;
+
+static void TileSlippyProjApplySearchPaths(PJ_CONTEXT* ctx) {
+  if (!ctx) {
+    return;
+  }
+  wchar_t modulePath[MAX_PATH]{};
+  if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) == 0) {
+    return;
+  }
+  const std::filesystem::path exeDir = std::filesystem::path(modulePath).parent_path();
+  static constexpr const wchar_t* kSubdirs[] = {L"proj_data", L"share\\proj"};
+  const std::filesystem::path markerDb = L"proj.db";
+  std::filesystem::path probeDir = exeDir;
+  for (int i = 0; i < 16; ++i) {
+    for (const wchar_t* sub : kSubdirs) {
+      const std::filesystem::path base = probeDir / sub;
+      std::error_code ec;
+      if (!std::filesystem::is_regular_file(base / markerDb, ec)) {
+        continue;
+      }
+      std::filesystem::path dir = std::filesystem::weakly_canonical(base, ec);
+      if (ec) {
+        dir = base;
+      }
+      const std::wstring w = dir.wstring();
+      const int n =
+          WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+      if (n <= 0) {
+        return;
+      }
+      g_tileSlippyProjSearchPathUtf8.assign(static_cast<size_t>(n), '\0');
+      WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), g_tileSlippyProjSearchPathUtf8.data(), n,
+                          nullptr, nullptr);
+      const char* paths[1] = {g_tileSlippyProjSearchPathUtf8.c_str()};
+      proj_context_set_search_paths(ctx, 1, paths);
+      return;
+    }
+    std::filesystem::path parent = probeDir.parent_path();
+    if (parent == probeDir) {
+      break;
+    }
+    probeDir = std::move(parent);
+  }
+}
+
+static bool TileSlippyProjEnsureContext() {
+  if (g_tileSlippyProjCtx) {
     return true;
   }
   AgisEnsureGdalDataPath();
@@ -1478,12 +1697,71 @@ static bool TileSlippyProjEnsurePipelines() {
   if (!g_tileSlippyProjCtx) {
     return false;
   }
-  g_tileSlippyPj4326To3857 = proj_create_crs_to_crs(g_tileSlippyProjCtx, "EPSG:4326", "EPSG:3857", nullptr);
-  g_tileSlippyPjCeaTo3857 =
-      proj_create_crs_to_crs(g_tileSlippyProjCtx, kTileSlippyCeaWgs84Proj, "EPSG:3857", nullptr);
-  g_tileSlippyPj4326ToCea = proj_create_crs_to_crs(g_tileSlippyProjCtx, "EPSG:4326", kTileSlippyCeaWgs84Proj, nullptr);
-  g_tileSlippyPjCeaTo4326 = proj_create_crs_to_crs(g_tileSlippyProjCtx, kTileSlippyCeaWgs84Proj, "EPSG:4326", nullptr);
-  return g_tileSlippyPj4326To3857 && g_tileSlippyPjCeaTo3857 && g_tileSlippyPj4326ToCea && g_tileSlippyPjCeaTo4326;
+  TileSlippyProjApplySearchPaths(g_tileSlippyProjCtx);
+  return true;
+}
+
+/// EPSG:4326 在 EPSG 库内轴序为「纬度、经度」；`proj_coord(lon,lat,...)` 为 GIS 惯用「经度、纬度」。
+/// `proj_normalize_for_visualization` 得到接受 lon/lat 输入的变换（否则会把 λ 当 φ、φ 当 λ，整幅图呈 90° 量级错乱/纵向条带）。
+static PJ* TileSlippyProjCreateLonLatNormalized(PJ_CONTEXT* ctx, const char* srcCrs, const char* dstCrs) {
+  PJ* raw = proj_create_crs_to_crs(ctx, srcCrs, dstCrs, nullptr);
+  if (!raw) {
+    return nullptr;
+  }
+  PJ* norm = proj_normalize_for_visualization(ctx, raw);
+  if (!norm) {
+    return raw;
+  }
+  proj_destroy(raw);
+  return norm;
+}
+
+static bool TileSlippyProjEnsure4326To3857() {
+  if (g_tileSlippyPj4326To3857) {
+    return true;
+  }
+  if (!TileSlippyProjEnsureContext()) {
+    return false;
+  }
+  g_tileSlippyPj4326To3857 =
+      TileSlippyProjCreateLonLatNormalized(g_tileSlippyProjCtx, "EPSG:4326", "EPSG:3857");
+  return g_tileSlippyPj4326To3857 != nullptr;
+}
+
+static bool TileSlippyProjEnsureCeaPipelines() {
+  if (g_tileSlippyPjCeaTo3857 && g_tileSlippyPj4326ToCea && g_tileSlippyPjCeaTo4326) {
+    return true;
+  }
+  if (!TileSlippyProjEnsureContext()) {
+    return false;
+  }
+  if (!g_tileSlippyPjCeaTo3857) {
+    g_tileSlippyPjCeaTo3857 =
+        proj_create_crs_to_crs(g_tileSlippyProjCtx, kTileSlippyCeaWgs84Proj, "EPSG:3857", nullptr);
+  }
+  if (!g_tileSlippyPj4326ToCea) {
+    g_tileSlippyPj4326ToCea =
+        TileSlippyProjCreateLonLatNormalized(g_tileSlippyProjCtx, "EPSG:4326", kTileSlippyCeaWgs84Proj);
+  }
+  if (!g_tileSlippyPjCeaTo4326) {
+    g_tileSlippyPjCeaTo4326 =
+        TileSlippyProjCreateLonLatNormalized(g_tileSlippyProjCtx, kTileSlippyCeaWgs84Proj, "EPSG:4326");
+  }
+  return g_tileSlippyPjCeaTo3857 && g_tileSlippyPj4326ToCea && g_tileSlippyPjCeaTo4326;
+}
+
+/// 当前「显示投影」下整视口 PROJ 重采样是否具备全部变换（与场景 JSON 一致）。
+static bool TileSlippyProjLayoutPipelinesReady(TileSlippyProjection proj) {
+  switch (proj) {
+  case TileSlippyProjection::kWebMercatorGrid:
+    return true;
+  case TileSlippyProjection::kEquirectangular:
+    return TileSlippyProjEnsure4326To3857();
+  case TileSlippyProjection::kCylindricalEqualArea:
+    return TileSlippyProjEnsureCeaPipelines();
+  default:
+    return false;
+  }
 }
 
 static void TileSlippyFillDispCornersFromGeo(TilePreviewState* st, TileSlippyPaintLayout* lay) {
@@ -1500,7 +1778,7 @@ static void TileSlippyFillDispCornersFromGeo(TilePreviewState* st, TileSlippyPai
     }
     return;
   }
-  if (!TileSlippyProjEnsurePipelines() || !g_tileSlippyPj4326ToCea) {
+  if (!TileSlippyProjEnsureCeaPipelines()) {
     return;
   }
   for (int i = 0; i < 4; ++i) {
@@ -1593,11 +1871,18 @@ static bool SlippySampleTileBilinearUv(TilePreviewState* st, int z, int tx, int 
 }
 
 static bool TileSlippyPaintProjResampled(HDC hdc, TilePreviewState* st, const TileSlippyPaintLayout& lay) {
-  if (!st || !TileSlippyProjEnsurePipelines()) {
+  if (!st) {
     return false;
   }
-  if (st->slippyProjection != TileSlippyProjection::kEquirectangular &&
-      st->slippyProjection != TileSlippyProjection::kCylindricalEqualArea) {
+  if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
+    if (!TileSlippyProjEnsure4326To3857()) {
+      return false;
+    }
+  } else if (st->slippyProjection == TileSlippyProjection::kCylindricalEqualArea) {
+    if (!TileSlippyProjEnsureCeaPipelines()) {
+      return false;
+    }
+  } else {
     return false;
   }
   const RECT& img = lay.imgArea;
@@ -1623,12 +1908,24 @@ static bool TileSlippyPaintProjResampled(HDC hdc, TilePreviewState* st, const Ti
     const int py = img.top + j;
     for (int i = 0; i < aw; ++i) {
       const int px = img.left + i;
-      double tileX = 0;
-      double tileY = 0;
-      SlippyPixelCenterToFractionalTile(img, px, py, lay, &tileX, &tileY);
       double lonDeg = 0;
       double latDeg = 0;
-      SlippyTileXYToLonLat(tileX, tileY, z, &lonDeg, &latDeg);
+      if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
+        double tileX = 0;
+        double tileY = 0;
+        SlippyPixelCenterToFractionalTile(img, px, py, lay, &tileX, &tileY);
+        lonDeg = tileX / n * 360.0 - 180.0;
+        const double latRad = std::atan(std::sinh(kTileGeoPi * (1.0 - 2.0 * tileY / n)));
+        latDeg = latRad * 180.0 / kTileGeoPi;
+      } else {
+        const double cx = static_cast<double>(px) + 0.5;
+        const double cy = static_cast<double>(py) + 0.5;
+        SlippyScreenToLonLatInverseCea(lay, cx, cy, &lonDeg, &latDeg);
+      }
+      if (st->slippyProjection != TileSlippyProjection::kEquirectangular) {
+        lonDeg = SlippyWrapLongitudeDeg(lonDeg);
+      }
+      latDeg = SlippyClampLatitudeDeg(latDeg);
       double mx = 0;
       double my = 0;
       if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
@@ -1702,22 +1999,39 @@ static void TileSlippyPaintLayoutFillGeo(TilePreviewState* st, TileSlippyPaintLa
   SlippyTileXYToLonLat(wr, wt, z, &lay->cornerLon[1], &lay->cornerLat[1]);
   SlippyTileXYToLonLat(wl, wb, z, &lay->cornerLon[2], &lay->cornerLat[2]);
   SlippyTileXYToLonLat(wr, wb, z, &lay->cornerLon[3], &lay->cornerLat[3]);
-  SlippyTileXYToLonLat(st->centerTx, st->centerTy, z, &lay->viewCenterLon, &lay->viewCenterLat);
+  double centerLon = 0.0;
+  double centerLat = 0.0;
+  SlippyTileXYToLonLat(st->centerTx, st->centerTy, z, &centerLon, &centerLat);
   lay->ppdEq = static_cast<double>(st->pixelsPerTile) * static_cast<double>(lay->dim) / 360.0;
   lay->rPixCea = lay->ppdEq * (180.0 / kTileGeoPi);
   lay->imgCenterX = static_cast<double>(lay->imgArea.left + lay->imgArea.right) * 0.5;
   lay->imgCenterY = static_cast<double>(lay->imgArea.top + lay->imgArea.bottom) * 0.5;
+  if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
+    const double minLa =
+        (std::min)({lay->cornerLat[0], lay->cornerLat[1], lay->cornerLat[2], lay->cornerLat[3]});
+    const double maxLa =
+        (std::max)({lay->cornerLat[0], lay->cornerLat[1], lay->cornerLat[2], lay->cornerLat[3]});
+    double latSpan = maxLa - minLa;
+    constexpr double kSpanEps = 1e-9;
+    if (latSpan < kSpanEps) {
+      latSpan = kSpanEps;
+    }
+    const double n = static_cast<double>(lay->dim);
+    const double lonLinearDeg = (std::max)(std::abs(lay->worldW * 360.0 / n), kSpanEps);
+    lay->ppdLon = static_cast<double>(lay->aw) / lonLinearDeg;
+    lay->ppdLat = static_cast<double>(lay->ah) / latSpan;
+    lay->viewCenterLon = centerLon;
+    lay->viewCenterLat = centerLat;
+    lay->ppdEq = lay->ppdLon;
+  } else {
+    lay->viewCenterLon = centerLon;
+    lay->viewCenterLat = centerLat;
+    lay->ppdLon = lay->ppdEq;
+    lay->ppdLat = lay->ppdEq;
+  }
 #if GIS_DESKTOP_HAVE_GDAL
   TileSlippyFillDispCornersFromGeo(st, lay);
 #endif
-}
-
-static void SlippyLonLatToScreenEq(const TileSlippyPaintLayout& lay, double lonDeg, double latDeg, int* sx, int* sy) {
-  if (!sx || !sy) {
-    return;
-  }
-  *sx = static_cast<int>(std::lround(lay.imgCenterX + (lonDeg - lay.viewCenterLon) * lay.ppdEq));
-  *sy = static_cast<int>(std::lround(lay.imgCenterY - (latDeg - lay.viewCenterLat) * lay.ppdEq));
 }
 
 static void SlippyLonLatToScreenCea(const TileSlippyPaintLayout& lay, double lonDeg, double latDeg, int* sx, int* sy) {
@@ -1726,8 +2040,24 @@ static void SlippyLonLatToScreenCea(const TileSlippyPaintLayout& lay, double lon
   }
   const double latR = latDeg * kTileGeoPi / 180.0;
   const double cLatR = lay.viewCenterLat * kTileGeoPi / 180.0;
-  *sx = static_cast<int>(std::lround(lay.imgCenterX + (lonDeg - lay.viewCenterLon) * lay.ppdEq));
+  *sx = static_cast<int>(std::lround(lay.imgCenterX + (lonDeg - lay.viewCenterLon) * lay.ppdLon));
   *sy = static_cast<int>(std::lround(lay.imgCenterY - (std::sin(latR) - std::sin(cLatR)) * lay.rPixCea));
+}
+
+/// 橘色瓦片 HUD：在片元屏上外接框外包一层轴对齐矩形，且 **宽:高 = 2:1**（经典经纬画布比），居中；底图拼贴/PROJ 几何不变。
+static void SlippyOrangeHudRect2to1AroundAabb(int minx, int miny, int maxx, int maxy, RECT* out) {
+  if (!out) {
+    return;
+  }
+  const int ow = (std::max)(1, maxx - minx);
+  const int oh = (std::max)(1, maxy - miny);
+  const int cx = (minx + maxx) / 2;
+  const int cy = (miny + maxy) / 2;
+  const int H = (std::max)(oh, (ow + 1) / 2);
+  const int W = 2 * H;
+  const int left = cx - W / 2;
+  const int top = cy - H / 2;
+  *out = {left, top, left + W, top + H};
 }
 
 static void SlippyGetTileScreenBounds(const TilePreviewState* st, const TileSlippyPaintLayout& lay, int tx, int ty, RECT* out) {
@@ -1741,22 +2071,31 @@ static void SlippyGetTileScreenBounds(const TilePreviewState* st, const TileSlip
     const int sy =
         imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
     const int sw = (std::max)(1, static_cast<int>((std::ceil)(st->pixelsPerTile)) + 1);
-    *out = {sx, sy, sx + sw, sy + sw};
+    SlippyOrangeHudRect2to1AroundAabb(sx, sy, sx + sw, sy + sw, out);
     return;
   }
-  const int z = st->viewZ;
-  double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
-  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
-  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
-  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
-  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
   int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
   if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
-    SlippyLonLatToScreenEq(lay, lon0, lat0, &sxa, &sya);
-    SlippyLonLatToScreenEq(lay, lon1, lat1, &sxb, &syb);
-    SlippyLonLatToScreenEq(lay, lon2, lat2, &sxc, &syc);
-    SlippyLonLatToScreenEq(lay, lon3, lat3, &sxd, &syd);
+    double cxa, cya, cxb, cyb, cxc, cyc, cxd, cyd;
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd);
+    sxa = static_cast<int>(std::lround(cxa));
+    sya = static_cast<int>(std::lround(cya));
+    sxb = static_cast<int>(std::lround(cxb));
+    syb = static_cast<int>(std::lround(cyb));
+    sxc = static_cast<int>(std::lround(cxc));
+    syc = static_cast<int>(std::lround(cyc));
+    sxd = static_cast<int>(std::lround(cxd));
+    syd = static_cast<int>(std::lround(cyd));
   } else {
+    const int z = st->viewZ;
+    double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
+    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
+    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
+    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
+    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
     SlippyLonLatToScreenCea(lay, lon0, lat0, &sxa, &sya);
     SlippyLonLatToScreenCea(lay, lon1, lat1, &sxb, &syb);
     SlippyLonLatToScreenCea(lay, lon2, lat2, &sxc, &syc);
@@ -1766,7 +2105,7 @@ static void SlippyGetTileScreenBounds(const TilePreviewState* st, const TileSlip
   const int maxx = (std::max)({sxa, sxb, sxc, sxd});
   const int miny = (std::min)({sya, syb, syc, syd});
   const int maxy = (std::max)({sya, syb, syc, syd});
-  *out = {minx, miny, (std::max)(minx + 1, maxx), (std::max)(miny + 1, maxy)};
+  SlippyOrangeHudRect2to1AroundAabb(minx, miny, maxx, maxy, out);
 }
 
 /// 与 TilePaintSlippyTiles / TilePaintOneSlippyTileGeo 一致，供场景 JSON 描述「橙色网格」与「光栅绘制目的地」。
@@ -1804,20 +2143,29 @@ static void SlippyGetTileRasterBlitRectForExport(TilePreviewState* st, const Til
     }
     return;
   }
-  const int z = st->viewZ;
   const TileSlippyProjection proj = st->slippyProjection;
-  double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
-  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
-  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
-  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
-  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
   int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
   if (proj == TileSlippyProjection::kEquirectangular) {
-    SlippyLonLatToScreenEq(lay, lon0, lat0, &sxa, &sya);
-    SlippyLonLatToScreenEq(lay, lon1, lat1, &sxb, &syb);
-    SlippyLonLatToScreenEq(lay, lon2, lat2, &sxc, &syc);
-    SlippyLonLatToScreenEq(lay, lon3, lat3, &sxd, &syd);
+    double cxa, cya, cxb, cyb, cxc, cyc, cxd, cyd;
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd);
+    sxa = static_cast<int>(std::lround(cxa));
+    sya = static_cast<int>(std::lround(cya));
+    sxb = static_cast<int>(std::lround(cxb));
+    syb = static_cast<int>(std::lround(cyb));
+    sxc = static_cast<int>(std::lround(cxc));
+    syc = static_cast<int>(std::lround(cyc));
+    sxd = static_cast<int>(std::lround(cxd));
+    syd = static_cast<int>(std::lround(cyd));
   } else {
+    const int z = st->viewZ;
+    double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
+    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
+    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
+    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
+    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
     SlippyLonLatToScreenCea(lay, lon0, lat0, &sxa, &sya);
     SlippyLonLatToScreenCea(lay, lon1, lat1, &sxb, &syb);
     SlippyLonLatToScreenCea(lay, lon2, lat2, &sxc, &syc);
@@ -1836,13 +2184,16 @@ static bool TileSlippyBuildPaintLayout(RECT cr, TilePreviewState* st, TileSlippy
   if (!st || !out || st->slippyPaths.empty()) {
     return false;
   }
-  out->imgArea = TileSlippyImageArea(cr, st);
+  SlippyViewFrame vf{};
+  TileSlippyComputeViewFrame(cr, st, &vf);
+  out->fullImgArea = vf.fullImg;
+  out->imgArea = vf.mapImg;
   out->aw = (std::max)(1, static_cast<int>(out->imgArea.right - out->imgArea.left));
   out->ah = (std::max)(1, static_cast<int>(out->imgArea.bottom - out->imgArea.top));
-  out->worldW = static_cast<double>(out->aw) / static_cast<double>(st->pixelsPerTile);
-  out->worldH = static_cast<double>(out->ah) / static_cast<double>(st->pixelsPerTile);
-  out->worldLeft = st->centerTx - out->worldW * 0.5;
-  out->worldTop = st->centerTy - out->worldH * 0.5;
+  out->worldW = vf.worldW;
+  out->worldH = vf.worldH;
+  out->worldLeft = vf.worldLeft;
+  out->worldTop = vf.worldTop;
   out->dim = 1 << st->viewZ;
   out->tx0 = static_cast<int>((std::floor)(out->worldLeft));
   out->ty0 = static_cast<int>((std::floor)(out->worldTop));
@@ -1858,21 +2209,6 @@ static bool TileSlippyBuildPaintLayout(RECT cr, TilePreviewState* st, TileSlippy
   out->valid = true;
   TileSlippyPaintLayoutFillGeo(st, out);
   return true;
-}
-
-/// 片元 X 可小于 0 或大于 dim（平移视口），反算经度会落在 [-180,180] 之外；折叠到主经度范围。
-static double SlippyWrapLongitudeDeg(double lonDeg) {
-  double x = std::fmod(lonDeg + 180.0, 360.0);
-  if (x < 0.0) {
-    x += 360.0;
-  }
-  return x - 180.0;
-}
-
-/// 与球面 Web 墨卡托瓦片常用裁剪纬度一致，避免 JSON 中出现不可地图化的极区纬度。
-static double SlippyClampLatitudeDeg(double latDeg) {
-  constexpr double kMax = 85.0511287798;
-  return (std::clamp)(latDeg, -kMax, kMax);
 }
 
 static void JsonAppendRectClient(std::string& j, const RECT& r) {
@@ -2000,7 +2336,7 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
   std::string j;
   j += "{\n";
   j += "  \"app\": \"agis.tile_raster_preview\",\n";
-  j += "  \"schemaVersion\": 5,\n";
+  j += "  \"schemaVersion\": 11,\n";
   SYSTEMTIME lt{};
   GetLocalTime(&lt);
   {
@@ -2032,7 +2368,7 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
 #if GIS_DESKTOP_HAVE_GDAL
   bool slippyProjPipelinesReady = false;
   if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
-    slippyProjPipelinesReady = TileSlippyProjEnsurePipelines();
+    slippyProjPipelinesReady = TileSlippyProjLayoutPipelinesReady(st->slippyProjection);
     if (st->slippyProjection != TileSlippyProjection::kWebMercatorGrid) {
       slippyRasterFullViewportProj = slippyProjPipelinesReady;
     }
@@ -2120,7 +2456,22 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
 #else
   j += "false";
 #endif
-  j += ",\n    \"textureTileAssumption\": ";
+  j += ",\n    \"pipeline\": {\n      \"conceptualFlowZh\": ";
+  Utf8AppendJsonEscapedString(
+      &j, L"【语义顺序】输入源投影（Slippy 纹理 EPSG:3857）→ 重投影/重采样算法 → 显示用几何（选项中的 TileSlippyProjection）→ 光栅合成到屏幕。"
+      L"【实现顺序】对每个输出像素：屏幕 → 逆入显示几何 → PROJ 到 EPSG:3857 → 读源纹理（与语义链等价、方向相反）。");
+  j += ",\n      \"sourceTextureCrs\": \"EPSG:3857\",\n      \"sourceRoleZh\": ";
+  Utf8AppendJsonEscapedString(
+      &j, L"Slippy 标准瓦片：磁盘 z/x/y 纹理的地理语义为 Web 墨卡托（输入源投影/CRS）；与 textureTileAssumption 一致。");
+  j += ",\n      \"algorithmZh\": ";
+  Utf8AppendJsonEscapedString(
+      &j,
+      L"桥接「显示几何坐标」与「输入源 EPSG:3857」：逆映射 + PROJ + 双线性/拼贴；整视口可为单遍重采样。"
+      L"「XYZ 片元线性」下显示与源索引一致，无额外 CRS 变换（恒等）。");
+  j += ",\n      \"displayRoleZh\": ";
+  Utf8AppendJsonEscapedString(
+      &j, L"viewportDisplay 与选项单选：用户所选「显示用」平面或索引展开（显示投影/几何语义），不改写源文件。");
+  j += "\n    },\n    \"textureTileAssumption\": ";
   if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
     j += "{\n      \"pixelGridInterpretation\": \"web_mercator_slippy_xyz_texture\",\n";
     j += "      \"crsAuthority\": \"EPSG:3857\",\n";
@@ -2145,8 +2496,9 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
       j += " }";
       break;
     case TileSlippyProjection::kEquirectangular:
-      j += "{ \"type\": \"plate_carree_lon_lat_degrees\", \"equivalentCrs\": \"EPSG:4326\", \"axisZh\": ";
-      Utf8AppendJsonEscapedString(&j, L"显示平面横轴经度、纵轴纬度（度）；与瓦片 3857 纹理的合成在启用 GDAL 时经 PROJ 重采样。");
+      j += "{ \"type\": \"slippy_fractional_tile_linear_screen\", \"samplingCrs\": \"EPSG:4326\", \"axisZh\": ";
+      Utf8AppendJsonEscapedString(
+          &j, L"等比例经纬度（Plate Carrée）语义：采样用 WGS84 经纬度度。屏上与 XYZ 片元网格同拓扑——片元浮点矩形线性对应地图区；每点经 SlippyTileXYToLonLat（纬向墨卡托非线性）得 WGS84，GDAL 下 PROJ→EPSG:3857 双线性取纹理。非整屏仿射 Plate Carrée，故 JSON 中 pixelsPerDegreeLon/Lat 可不等。");
       j += " }";
       break;
     case TileSlippyProjection::kCylindricalEqualArea:
@@ -2165,7 +2517,7 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     j += ",\n      \"projResamplePipelineZh\": ";
 #if GIS_DESKTOP_HAVE_GDAL
     Utf8AppendJsonEscapedString(
-        &j, L"非「XYZ 网格」时：每像素按视口 world 矩形与屏幕线性对应得到片元浮点坐标，再 SlippyTileXYToLonLat→WGS84，等经纬经 PROJ EPSG:4326→EPSG:3857，等积圆柱经 WGS84→CEA→EPSG:3857，最后在瓦片纹理双线性取色；与瓦片角点几何一致。橙框为四角轴对齐外接矩形，非斜边包络。");
+        &j, L"非「XYZ 网格」时：等比例经纬度模式每像素 SlippyPixelCenterToFractionalTile→SlippyTileXYToLonLat 得 WGS84，经 PROJ EPSG:4326→EPSG:3857 再 Slippy3857MetersToFractionalTile 纹理双线性（屏上映射与 XYZ 片元拓扑一致，非整屏「1°经像素长=1°纬像素长」的仿射 Plate Carrée）。等积圆柱为客户区像素与 SlippyLonLatToScreenCea 互逆得 WGS84 后走 WGS84→CEA→EPSG:3857。橘色 HUD 为片元屏上外接框外包宽:高=2:1 轴对齐矩形（底图拓扑不变）。");
 #else
     Utf8AppendJsonEscapedString(&j, L"当前构建无 GDAL/PROJ：等经纬/等积圆柱为示意几何，非严格重采样。");
 #endif
@@ -2327,6 +2679,15 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     j += ", \"bottom\": ";
     j += std::to_string(lay.imgArea.bottom);
     j += " },\n";
+    j += "    \"fullImageArea\": { \"left\": ";
+    j += std::to_string(lay.fullImgArea.left);
+    j += ", \"top\": ";
+    j += std::to_string(lay.fullImgArea.top);
+    j += ", \"right\": ";
+    j += std::to_string(lay.fullImgArea.right);
+    j += ", \"bottom\": ";
+    j += std::to_string(lay.fullImgArea.bottom);
+    j += " },\n";
     j += "    \"imagePixels\": { \"width\": ";
     j += std::to_string(lay.aw);
     j += ", \"height\": ";
@@ -2384,8 +2745,8 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     }
     j += ",\n      \"exportNoteZh\": ";
     Utf8AppendJsonEscapedString(
-        &j, L"gridHudRectClient：与橙色瓦片网格线外接矩形一致（SlippyGetTileScreenBounds）。rasterBlitDestClient：与 "
-            L"GDI+ DrawImage 目标矩形一致；per_pixel_proj_full_viewport 时为 null（整幅 imageArea 单遍 PROJ 重采样）。"
+        &j, L"gridHudRectClient：与橙色瓦片框一致（SlippyGetTileScreenBounds）；各显示模式下均为宽:高=2:1、轴对齐且包住本格屏上外接框（底图拓扑不变）。"
+            L"rasterBlitDestClient：与 GDI+ DrawImage 目标矩形一致；per_pixel_proj_full_viewport 时为 null（整幅 imageArea 单遍 PROJ 重采样）。"
             L"textureDecodeCached：仅 LRU 已缓存时非 null。"
             L"bbox3857Meters：该片在球面 Web 墨卡托 XYZ 下的纹理空间外包（米），与瓦片 PNG 的 EPSG:3857 覆盖一致；PROJ 椭球 3857 边界略有差异。");
     j += ",\n";
@@ -2514,7 +2875,13 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     j += "    \"pixelsPerDegreeLonApprox\": ";
     {
       char b[64]{};
-      snprintf(b, sizeof(b), "%.9g", lay.ppdEq);
+      snprintf(b, sizeof(b), "%.9g", lay.ppdLon);
+      j += b;
+    }
+    j += ",\n    \"pixelsPerDegreeLatApprox\": ";
+    {
+      char b[64]{};
+      snprintf(b, sizeof(b), "%.9g", lay.ppdLat);
       j += b;
     }
     j += ",\n    \"rPixCeaApprox\": ";
@@ -2637,75 +3004,65 @@ static void TilePreviewUpdateSlippyPointerGeo(TilePreviewState* st, const RECT& 
     return;
   }
   if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
-    const int aw = (std::max)(1, static_cast<int>(img.right - img.left));
-    const int ah = (std::max)(1, static_cast<int>(img.bottom - img.top));
-    const double worldW = static_cast<double>(aw) / static_cast<double>(st->pixelsPerTile);
-    const double worldH = static_cast<double>(ah) / static_cast<double>(st->pixelsPerTile);
-    const double worldLeft = st->centerTx - worldW * 0.5;
-    const double worldTop = st->centerTy - worldH * 0.5;
+    const int iw = (std::max)(1, lay.aw);
+    const int ih = (std::max)(1, lay.ah);
+    const double worldW = lay.worldW;
+    const double worldH = lay.worldH;
+    const double worldLeft = lay.worldLeft;
+    const double worldTop = lay.worldTop;
     const double tileX =
-        worldLeft + static_cast<double>(clientPt.x - img.left) / static_cast<double>(st->pixelsPerTile);
+        worldLeft + static_cast<double>(clientPt.x - img.left) * worldW / static_cast<double>(iw);
     const double tileY =
-        worldTop + static_cast<double>(clientPt.y - img.top) / static_cast<double>(st->pixelsPerTile);
+        worldTop + static_cast<double>(clientPt.y - img.top) * worldH / static_cast<double>(ih);
     SlippyTileXYToLonLat(tileX, tileY, st->viewZ, &st->pointerLon, &st->pointerLat);
   } else if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
-#if GIS_DESKTOP_HAVE_GDAL
     double tileX = 0;
     double tileY = 0;
     SlippyPixelCenterToFractionalTile(img, clientPt.x, clientPt.y, lay, &tileX, &tileY);
     SlippyTileXYToLonLat(tileX, tileY, st->viewZ, &st->pointerLon, &st->pointerLat);
-#else
-    st->pointerLon = lay.viewCenterLon + (static_cast<double>(clientPt.x) - lay.imgCenterX) / lay.ppdEq;
-    st->pointerLat = lay.viewCenterLat - (static_cast<double>(clientPt.y) - lay.imgCenterY) / lay.ppdEq;
-#endif
   } else {
-    bool ceaPtrOk = false;
-#if GIS_DESKTOP_HAVE_GDAL
-    if (TileSlippyProjEnsurePipelines()) {
-      double tileX = 0;
-      double tileY = 0;
-      SlippyPixelCenterToFractionalTile(img, clientPt.x, clientPt.y, lay, &tileX, &tileY);
-      SlippyTileXYToLonLat(tileX, tileY, st->viewZ, &st->pointerLon, &st->pointerLat);
-      if (std::isfinite(st->pointerLon) && std::isfinite(st->pointerLat)) {
-        ceaPtrOk = true;
-      }
-    }
-#endif
-    if (!ceaPtrOk) {
-      const double s0 = std::sin(lay.viewCenterLat * kTileGeoPi / 180.0);
-      const double sAt = s0 - (static_cast<double>(clientPt.y) - lay.imgCenterY) / lay.rPixCea;
-      const double clamped = (std::clamp)(sAt, -1.0, 1.0);
-      st->pointerLat = std::asin(clamped) * 180.0 / kTileGeoPi;
-      st->pointerLon = lay.viewCenterLon + (static_cast<double>(clientPt.x) - lay.imgCenterX) / lay.ppdEq;
-    }
+    const double cx = static_cast<double>(clientPt.x) + 0.5;
+    const double cy = static_cast<double>(clientPt.y) + 0.5;
+    SlippyScreenToLonLatInverseCea(lay, cx, cy, &st->pointerLon, &st->pointerLat);
   }
   st->pointerGeoValid = true;
+  const double ptrLonDisp = SlippyWrapLongitudeDeg(st->pointerLon);
+  const double ptrLatDisp = SlippyClampLatitudeDeg(st->pointerLat);
   swprintf_s(lineBuf, lineCap,
 #if GIS_DESKTOP_HAVE_GDAL
              L"客户区 (%d, %d) | λ %.6f° φ %.6f°（WGS84）| 显示 %s | 数据 EPSG:3857 | PROJ | 椭球高 —",
 #else
              L"客户区 (%d, %d) | λ %.6f° φ %.6f° | 显示 %s | 数据 EPSG:3857 | 椭球高 —",
 #endif
-             clientPt.x, clientPt.y, st->pointerLon, st->pointerLat, TileSlippyProjectionShortLabel(st->slippyProjection));
+             clientPt.x, clientPt.y, ptrLonDisp, ptrLatDisp, TileSlippyProjectionShortLabel(st->slippyProjection));
 }
 
 static void TilePaintOneSlippyTileGeo(Gdiplus::Graphics& g, TilePreviewState* st, const TileSlippyPaintLayout& lay,
                                       int tx, int ty, TileSlippyProjection proj, Gdiplus::SolidBrush& miss) {
   const uint64_t key = PackTileKey(st->viewZ, tx, ty);
   auto pit = st->slippyPaths.find(key);
-  const int z = st->viewZ;
-  double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
-  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
-  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
-  SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
-  SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
   int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
   if (proj == TileSlippyProjection::kEquirectangular) {
-    SlippyLonLatToScreenEq(lay, lon0, lat0, &sxa, &sya);
-    SlippyLonLatToScreenEq(lay, lon1, lat1, &sxb, &syb);
-    SlippyLonLatToScreenEq(lay, lon2, lat2, &sxc, &syc);
-    SlippyLonLatToScreenEq(lay, lon3, lat3, &sxd, &syd);
+    double cxa, cya, cxb, cyb, cxc, cyc, cxd, cyd;
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc);
+    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd);
+    sxa = static_cast<int>(std::lround(cxa));
+    sya = static_cast<int>(std::lround(cya));
+    sxb = static_cast<int>(std::lround(cxb));
+    syb = static_cast<int>(std::lround(cyb));
+    sxc = static_cast<int>(std::lround(cxc));
+    syc = static_cast<int>(std::lround(cyc));
+    sxd = static_cast<int>(std::lround(cxd));
+    syd = static_cast<int>(std::lround(cyd));
   } else {
+    const int z = st->viewZ;
+    double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
+    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
+    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
+    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
+    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
     SlippyLonLatToScreenCea(lay, lon0, lat0, &sxa, &sya);
     SlippyLonLatToScreenCea(lay, lon1, lat1, &sxb, &syb);
     SlippyLonLatToScreenCea(lay, lon2, lat2, &sxc, &syc);
@@ -2729,10 +3086,43 @@ static void TilePaintOneSlippyTileGeo(Gdiplus::Graphics& g, TilePreviewState* st
   }
 }
 
+/// fullImg 与 mapImg 之间填中性色，避免 letterbox 条带露出窗口底或误以为是数据区。
+static void TileFillSlippyLetterboxGaps(HDC hdc, const RECT& full, const RECT& inner) {
+  if (!hdc || full.left >= full.right || full.top >= full.bottom) {
+    return;
+  }
+  if (full.left == inner.left && full.right == inner.right && full.top == inner.top && full.bottom == inner.bottom) {
+    return;
+  }
+  HBRUSH br = CreateSolidBrush(RGB(236, 240, 245));
+  if (inner.top > full.top) {
+    RECT r{full.left, full.top, full.right, inner.top};
+    FillRect(hdc, &r, br);
+  }
+  if (inner.bottom < full.bottom) {
+    RECT r{full.left, inner.bottom, full.right, full.bottom};
+    FillRect(hdc, &r, br);
+  }
+  const int midTop = (std::max)(full.top, inner.top);
+  const int midBot = (std::min)(full.bottom, inner.bottom);
+  if (midBot > midTop) {
+    if (inner.left > full.left) {
+      RECT r{full.left, midTop, inner.left, midBot};
+      FillRect(hdc, &r, br);
+    }
+    if (inner.right < full.right) {
+      RECT r{inner.right, midTop, full.right, midBot};
+      FillRect(hdc, &r, br);
+    }
+  }
+  DeleteObject(br);
+}
+
 static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippyPaintLayout& lay) {
   if (!lay.valid || lay.tooMany) {
     return;
   }
+  TileFillSlippyLetterboxGaps(hdc, lay.fullImgArea, lay.imgArea);
   const RECT& imgArea = lay.imgArea;
   Gdiplus::Graphics g(hdc);
   g.SetInterpolationMode(Gdiplus::InterpolationModeLowQuality);
@@ -2806,13 +3196,15 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
                L"输入：EPSG:3857 → 显示：%s（无 GDAL 时为近似拼贴）\n"
 #endif
                L"Z = %d（最大 %d）| 片元约 %.0f×%.0f px | 可视列 [%d..%d] 行 [%d..%d] | 已索引 %zu 块\n"
+               L"%s"
                L"拖拽平移 | 滚轮 | Shift/Ctrl+滚轮 | 「选项」",
                TileSlippyProjectionLongLabel(st->slippyProjection), st->viewZ, st->indexMaxZ,
                static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile), lay.tx0, lay.tx1, lay.ty0,
-               lay.ty1, st->tileCount);
+               lay.ty1, st->tileCount,
+               L"橙框：宽:高=2:1（经典经纬画布比），轴对齐包住本格屏上外接矩形；底图几何仍为 Slippy+PROJ/XYZ 拓扑。\n");
   }
   const int zPad = 6;
-  const int zBandH = lay.tooMany ? 68 : (st->uiShowSlippyMapHud ? 88 : 0);
+  const int zBandH = lay.tooMany ? 68 : (st->uiShowSlippyMapHud ? 102 : 0);
   if (lay.tooMany || st->uiShowSlippyMapHud) {
     RECT zRc{imgArea.left + zPad, imgArea.top + zPad, imgArea.right - zPad, imgArea.top + zPad + zBandH};
     if (zRc.bottom > imgArea.bottom - 10) {
@@ -2909,7 +3301,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           PostMessageW(hwnd, kTilePreviewRequestOpenMsg, 0, 0);
           return 0;
         }
-        {
+        const RECT closeRc = TileCloseButtonRect(cr);
+        if (PtInRect(&closeRc, pt)) {
+          PostMessageW(hwnd, WM_CLOSE, 0, 0);
+          return 0;
+        }
+        if (TilePreviewHasLoadedPreviewContent(st)) {
           const RECT copyRc = TileCopySceneInfoButtonRect(cr, st);
           if (PtInRect(&copyRc, pt)) {
             const std::string json = TilePreviewBuildSceneJsonUtf8(hwnd, st);
@@ -2976,10 +3373,16 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           }
         }
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree && st->dragging) {
+          RECT crDrag{};
+          GetClientRect(hwnd, &crDrag);
+          SlippyViewFrame vfDrag{};
+          TileSlippyComputeViewFrame(crDrag, st, &vfDrag);
+          const int diw = (std::max)(1, static_cast<int>(vfDrag.mapImg.right - vfDrag.mapImg.left));
+          const int dih = (std::max)(1, static_cast<int>(vfDrag.mapImg.bottom - vfDrag.mapImg.top));
           const double dx = static_cast<double>(x - st->lastDragPt.x);
           const double dy = static_cast<double>(y - st->lastDragPt.y);
-          st->centerTx -= dx / static_cast<double>(st->pixelsPerTile);
-          st->centerTy -= dy / static_cast<double>(st->pixelsPerTile);
+          st->centerTx -= dx * vfDrag.worldW / static_cast<double>(diw);
+          st->centerTy -= dy * vfDrag.worldH / static_cast<double>(dih);
           st->lastDragPt.x = x;
           st->lastDragPt.y = y;
           const double lim = double(1 << st->viewZ) + 2.0;
@@ -3049,7 +3452,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       std::wstring pickerErr;
       if (!TilePreviewShowProtocolAndPickPath(hwnd, &path, &proto, &pickerErr)) {
         if (!pickerErr.empty()) {
-          MessageBoxW(hwnd, pickerErr.c_str(), L"打开瓦片", MB_OK | MB_ICONWARNING);
+          MessageBoxW(hwnd, pickerErr.c_str(), L"打开本地瓦片", MB_OK | MB_ICONWARNING);
         }
         return 0;
       }
@@ -3096,6 +3499,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         DeleteObject(btnBg);
         Rectangle(hdc, openRc.left, openRc.top, openRc.right, openRc.bottom);
         DrawTextW(hdc, L"Open...", -1, &openRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        RECT closeRc = TileCloseButtonRect(cr);
+        HBRUSH closeBg = CreateSolidBrush(RGB(252, 236, 236));
+        FillRect(hdc, &closeRc, closeBg);
+        DeleteObject(closeBg);
+        Rectangle(hdc, closeRc.left, closeRc.top, closeRc.right, closeRc.bottom);
+        DrawTextW(hdc, L"关闭", -1, &closeRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
           RECT optBtnRc = TileOptionsButtonRect(cr);
           HBRUSH optBg = CreateSolidBrush(st->showOptionsPanel ? RGB(200, 216, 248) : RGB(236, 242, 252));
@@ -3104,7 +3513,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           Rectangle(hdc, optBtnRc.left, optBtnRc.top, optBtnRc.right, optBtnRc.bottom);
           DrawTextW(hdc, L"选项", -1, &optBtnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
-        {
+        if (TilePreviewHasLoadedPreviewContent(st)) {
           RECT copyBtnRc = TileCopySceneInfoButtonRect(cr, st);
           HBRUSH copyBg = CreateSolidBrush(RGB(236, 242, 252));
           FillRect(hdc, &copyBtnRc, copyBg);
@@ -3112,11 +3521,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           Rectangle(hdc, copyBtnRc.left, copyBtnRc.top, copyBtnRc.right, copyBtnRc.bottom);
           DrawTextW(hdc, L"复制场景信息", -1, &copyBtnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
-        const RECT optBtnRc = TileOptionsButtonRect(cr);
-        const RECT copyBtnRc = TileCopySceneInfoButtonRect(cr, st);
-        int rightMost = (std::max)(static_cast<int>(openRc.right), static_cast<int>(copyBtnRc.right));
+        int rightMost = static_cast<int>(closeRc.right);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
-          rightMost = (std::max)(rightMost, static_cast<int>(optBtnRc.right));
+          rightMost = (std::max)(rightMost, static_cast<int>(TileOptionsButtonRect(cr).right));
+        }
+        if (TilePreviewHasLoadedPreviewContent(st)) {
+          rightMost = (std::max)(rightMost, static_cast<int>(TileCopySceneInfoButtonRect(cr, st).right));
         }
         const int hintLeft = rightMost + 8;
         RECT hintRc{hintLeft, 8, cr.right - 10, cr.top + TilePreviewTopBarPx(st) - 6};
@@ -3132,9 +3542,12 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
               panel = st->hint.empty() ? L"顶栏说明已关闭（「选项」可再打开）。" : st->hint;
             }
           } else {
-            panel = std::wstring(kTilePreviewOpenMethods) + L"\n\n──\n" + st->hint;
+            // 未加载/已加载均不再在顶栏固定展示「打开方式 / 支持的数据」长文；仅显示当前 hint（如错误说明、单图说明等）。
+            panel = st->hint;
           }
-          TileDrawTextBlockSemiBg(hdc, panel.c_str(), hintRc, 6, 218);
+          if (!panel.empty()) {
+            TileDrawTextBlockSemiBg(hdc, panel.c_str(), hintRc, 6, 218);
+          }
         }
         if (slippyPaint) {
           TilePaintSlippyHud(hdc, st, slippyLay);
@@ -3204,7 +3617,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingTilePreviewRoot = path;
   const DWORD exStyle = owner ? WS_EX_TOOLWINDOW : 0;
-  HWND tw = CreateWindowExW(exStyle, kTilePreviewClass, L"瓦片预览 · 四叉树 / BVH 元数据",
+  HWND tw = CreateWindowExW(exStyle, kTilePreviewClass, L"本地瓦片预览 · XYZ / 3D Tiles 元数据",
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
                             nullptr, GetModuleHandleW(nullptr), nullptr);
   if (tw) {

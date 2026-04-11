@@ -10,6 +10,8 @@
 #include "common/ui/ui_debug_pick.h"
 #include "ui_engine/gdiplus_ui.h"
 
+// 独立进程入口：本地瓦片/栅格采样预览（`OpenTileRasterPreviewWindow`）；无网络拉流。
+
 static bool RegisterTilePreviewClass(HINSTANCE inst) {
   WNDCLASSW wc{};
   wc.lpfnWndProc = TilePreviewWndProc;

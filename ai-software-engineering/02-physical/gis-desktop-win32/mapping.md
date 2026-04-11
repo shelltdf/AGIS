@@ -17,7 +17,8 @@
 | `.gis` 读写 / 菜单动作 | `gis-desktop-win32/src/app/gis_document/main_gis_document.cpp` → `LoadGisXmlFrom`、`SaveGisXmlTo`、`GisNew`、`GisOpen`、`GisSave`、`GisSaveAs`、`CurrentWindowTitle`、`RefreshUiAfterDocumentReload` 等（声明见 `main_app.h`） |
 | 数据转换窗口过程 | `gis-desktop-win32/src/app/main_convert.cpp` → `ConvertWndProc` |
 | 转换后端调度 | `gis-desktop-win32/src/app/main_convert.cpp` → `RunConvertBackendAsync`、`BuildConvertCommandLine` |
-| 模型 / 3D Tiles / 瓦片栅格预览窗口 | `gis-desktop-win32/src/app/preview/main_model_preview.cpp` → `ModelPreviewWndProc`、`TilePreviewWndProc`、`OpenModelPreviewWindow`、`OpenTileRasterPreviewWindow` |
+| 模型 / 3D Tiles 预览窗口 | `gis-desktop-win32/src/app/preview/main_model_preview.cpp` → `ModelPreviewWndProc`、`OpenModelPreviewWindow` |
+| 瓦片栅格本地预览（仅本机路径；无网络拉流） | `gis-desktop-win32/src/app/preview/tile_preview/tile_raster_preview.cpp` → `TilePreviewWndProc`、`OpenTileRasterPreviewWindow`；`tile_preview/tile_preview_protocol_picker.*` |
 | 模型预览类型 / 抽稀步长 | `gis-desktop-win32/src/app/preview/model_preview_types.h` → `ObjPreviewModel`、`ModelPreviewFaceStride` |
 | 模型预览 bgfx 路径（CMake 固定 `AGIS_USE_BGFX=ON`） | `gis-desktop-win32/src/app/preview/model_preview_bgfx.cpp/.h` → `agis_bgfx_preview_init`、`agis_bgfx_preview_draw`、`agis_bgfx_preview_shutdown` |
 | 3D Tiles → `ObjPreviewModel`（tinygltf） | `gis-desktop-win32/src/app/preview/tiles_gltf_loader.cpp` → `AgisLoad3DTilesForPreview` |
