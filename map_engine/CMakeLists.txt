@@ -8,28 +8,34 @@ if(NOT DEFINED AGIS_UI_ENGINE_DIR)
   message(FATAL_ERROR "agis_map_engine: 请从 gis-desktop-win32 工程内 add_subdirectory(../map_engine)。")
 endif()
 if(NOT TARGET agis_bgfx_vendor)
-  message(FATAL_ERROR "agis_map_engine: 父工程须先于本目录定义目标 agis_bgfx_vendor。")
+  message(FATAL_ERROR "agis_map_engine: 须先于本目录定义目标 agis_bgfx_vendor。")
 endif()
 
 set(_ME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_ME_DESKTOP_SRC "${_ME_ROOT}/../gis-desktop-win32/src")
 set(_ME_THIRDPARTY "${_ME_ROOT}/../3rdparty")
 
+# 按功能组划分：每组 <组>/include/map_engine/*.h + <组>/src/*.cpp
+# PUBLIC 聚合各组 include，对外仍为 #include "map_engine/map_*.h"
 add_library(agis_map_engine STATIC
-  src/map_layer.cpp
-  src/map_layer_driver.cpp
-  src/map_layer_driver_gdal.cpp
-  src/map_document.cpp
-  src/map_engine.cpp
-  src/map_gpu.cpp
-  src/map_gpu_d2d.cpp
-  src/map_gpu_bgfx.cpp
-  src/map_projection.cpp
+  layer/src/map_layer.cpp
+  layer/src/map_layer_driver.cpp
+  layer/src/map_layer_driver_gdal.cpp
+  document/src/map_document.cpp
+  projection/src/map_projection.cpp
+  gpu/src/map_gpu.cpp
+  gpu/src/map_gpu_d2d.cpp
+  gpu/src/map_gpu_bgfx.cpp
+  shell/src/map_engine.cpp
 )
 
 target_include_directories(agis_map_engine
   PUBLIC
-    "${_ME_ROOT}/include"
+    "${_ME_ROOT}/layer/include"
+    "${_ME_ROOT}/document/include"
+    "${_ME_ROOT}/projection/include"
+    "${_ME_ROOT}/gpu/include"
+    "${_ME_ROOT}/shell/include"
   PRIVATE
     "${_ME_DESKTOP_SRC}"
     "${_ME_DESKTOP_SRC}/app"
