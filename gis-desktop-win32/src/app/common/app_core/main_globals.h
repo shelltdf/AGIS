@@ -21,6 +21,8 @@ extern HWND g_hwndToolbar;
 extern HWND g_hwndLayerStrip;
 extern HWND g_hwndLayer;
 extern HWND g_hwndMap;
+/** 地图区外壳：`SetMenu` 需非子窗口，故用 WS_POPUP+owner=主窗；客户区内为 `g_hwndMap`（AGISMapHost）。 */
+extern HWND g_hwndMapShell;
 extern HWND g_hwndProps;
 extern HWND g_hwndPropsStrip;
 extern HWND g_hwndStatus;
@@ -48,6 +50,7 @@ extern bool g_pendingPreviewLoadAs3DTiles;
 extern const wchar_t kMainClass[];
 extern const wchar_t kLayerClass[];
 extern const wchar_t kMapClass[];
+extern const wchar_t kMapShellClass[];
 extern const wchar_t kPropsClass[];
 extern const wchar_t kLogClass[];
 extern const wchar_t kConvertClass[];

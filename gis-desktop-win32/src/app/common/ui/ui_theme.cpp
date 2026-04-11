@@ -102,6 +102,9 @@ void AgisApplyTheme(HWND mainHwnd) {
     if (g_hwndPropsStrip) {
       ApplySetWindowTheme(g_hwndPropsStrip, dark);
     }
+    if (g_hwndMapShell && IsWindow(g_hwndMapShell)) {
+      AgisApplyDwmDark(g_hwndMapShell, dark);
+    }
 
     HMENU bar = GetMenu(mainHwnd);
     if (bar) {

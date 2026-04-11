@@ -9,6 +9,7 @@
 #include "common/app_core/main_app.h"
 #include "common/app_core/main_globals.h"
 #include "map_engine/map_engine.h"
+#include "map_engine/map_gpu.h"
 #include "map_engine/map_projection.h"
 
 #include <cstring>
@@ -48,12 +49,18 @@ void SyncViewMenu(HWND hwnd) {
                        g_view3d ? ID_VIEW_MODE_3D : ID_VIEW_MODE_2D, MF_BYCOMMAND);
   const MapRenderBackend rb = MapEngine::Instance().GetRenderBackend();
   UINT rid = ID_VIEW_RENDER_GDI;
-  if (rb == MapRenderBackend::kD3d11) {
-    rid = ID_VIEW_RENDER_D3D11;
-  } else if (rb == MapRenderBackend::kOpenGL) {
-    rid = ID_VIEW_RENDER_GL;
+  if (rb == MapRenderBackend::kGdiPlus) {
+    rid = ID_VIEW_RENDER_GDIPLUS;
+  } else if (rb == MapRenderBackend::kD2d) {
+    rid = ID_VIEW_RENDER_D2D;
+  } else if (rb == MapRenderBackend::kBgfxD3d11) {
+    rid = ID_VIEW_RENDER_BGFX_D3D11;
+  } else if (rb == MapRenderBackend::kBgfxOpenGL) {
+    rid = ID_VIEW_RENDER_BGFX_OPENGL;
+  } else if (rb == MapRenderBackend::kBgfxAuto) {
+    rid = ID_VIEW_RENDER_BGFX_AUTO;
   }
-  CheckMenuRadioItem(view, ID_VIEW_RENDER_GDI, ID_VIEW_RENDER_GL, rid, MF_BYCOMMAND);
+  CheckMenuRadioItem(view, ID_VIEW_RENDER_FIRST, ID_VIEW_RENDER_LAST, rid, MF_BYCOMMAND);
   if (g_hmenuProjSub) {
     const int pi = static_cast<int>(MapEngine::Instance().Document().GetDisplayProjection());
     if (pi >= 0 && pi < static_cast<int>(MapDisplayProjection::kCount)) {
@@ -211,9 +218,31 @@ void LayoutChildren() {
       ShowWindow(g_hwndLayer, SW_HIDE);
     }
   }
-  if (g_hwndMap) {
-    ShowWindow(g_hwndMap, SW_SHOW);
-    MoveWindow(g_hwndMap, mapLeft, top, mapW, innerH, TRUE);
+  if (g_hwndMapShell) {
+    if (mapW <= 0 || innerH <= 0) {
+      ShowWindow(g_hwndMapShell, SW_HIDE);
+    } else {
+      auto menuBarH = [](HWND ref) -> int {
+        using GetSmfw = int(WINAPI*)(HWND, int);
+        static GetSmfw pfn = reinterpret_cast<GetSmfw>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForWindow"));
+        if (pfn && ref) {
+          return pfn(ref, SM_CYMENU);
+        }
+        return GetSystemMetrics(SM_CYMENU);
+      };
+      const int mb = menuBarH(g_hwndMain);
+      const int mapClientH = (std::max)(1, innerH - mb);
+      RECT rc{0, 0, mapW, mapClientH};
+      const DWORD popStyle = WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+      AdjustWindowRectEx(&rc, popStyle, TRUE, WS_EX_TOOLWINDOW);
+      const int ow = rc.right - rc.left;
+      const int oh = rc.bottom - rc.top;
+      POINT pt{mapLeft, top};
+      ClientToScreen(g_hwndMain, &pt);
+      SetWindowPos(g_hwndMapShell, nullptr, pt.x, pt.y, ow, oh, SWP_NOZORDER | SWP_NOACTIVATE);
+      ShowWindow(g_hwndMapShell, SW_SHOW);
+      DrawMenuBar(g_hwndMapShell);
+    }
   }
   if (g_hwndPropsStrip) {
     if (g_showPropsDock) {
@@ -332,4 +361,132 @@ HWND CreateMainToolbar(HWND parent, HINSTANCE inst) {
   SendMessageW(tb, TB_ADDBUTTONS, 8, reinterpret_cast<LPARAM>(bt));
   SendMessageW(tb, TB_AUTOSIZE, 0, 0);
   return tb;
+}
+
+HMENU BuildMapHostMenu() {
+  HMENU bar = CreateMenu();
+  if (!bar) {
+    return nullptr;
+  }
+  HMENU render = CreateMenu();
+  if (!render) {
+    DestroyMenu(bar);
+    return nullptr;
+  }
+  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_GDI, L"GDI");
+  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_GDIPLUS, L"GDI+");
+  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_D2D, L"Direct2D");
+  AppendMenuW(render, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_BGFX_D3D11, L"Bgfx + D3D11");
+  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_BGFX_OPENGL, L"Bgfx + OpenGL");
+  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_BGFX_AUTO, L"Bgfx 自动");
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(render), L"渲染(&R)");
+
+  HMENU view = CreateMenu();
+  if (!view) {
+    DestroyMenu(bar);
+    return nullptr;
+  }
+  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_SHORTCUT, L"快捷键区");
+  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_VIS, L"可见性与经纬网");
+  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_BOTTOM, L"底部缩放与适应栏");
+  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_HINT, L"操作提示文字");
+  AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(view, MF_STRING, IDC_MAP_UI_GRID, L"绘制经纬网");
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"界面(&V)");
+  return bar;
+}
+
+void SyncMapHostMenuPopup(HWND mapShell, HMENU popup) {
+  HMENU bar = GetMenu(mapShell);
+  if (!bar || !popup) {
+    return;
+  }
+  HMENU sm0 = GetSubMenu(bar, 0);
+  HMENU sm1 = GetSubMenu(bar, 1);
+  MapEngine& eg = MapEngine::Instance();
+  if (popup == sm0) {
+    const MapRenderBackend cur = MapGpu_GetActiveBackend();
+    UINT rid = ID_VIEW_RENDER_GDI;
+    if (cur == MapRenderBackend::kGdiPlus) {
+      rid = ID_VIEW_RENDER_GDIPLUS;
+    } else if (cur == MapRenderBackend::kD2d) {
+      rid = ID_VIEW_RENDER_D2D;
+    } else if (cur == MapRenderBackend::kBgfxD3d11) {
+      rid = ID_VIEW_RENDER_BGFX_D3D11;
+    } else if (cur == MapRenderBackend::kBgfxOpenGL) {
+      rid = ID_VIEW_RENDER_BGFX_OPENGL;
+    } else if (cur == MapRenderBackend::kBgfxAuto) {
+      rid = ID_VIEW_RENDER_BGFX_AUTO;
+    }
+    CheckMenuRadioItem(popup, ID_VIEW_RENDER_FIRST, ID_VIEW_RENDER_LAST, rid, MF_BYCOMMAND);
+  } else if (popup == sm1) {
+    CheckMenuItem(popup, IDC_MAP_UI_SHOW_SHORTCUT,
+                  MF_BYCOMMAND | (eg.IsMapUiShowShortcutChrome() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(popup, IDC_MAP_UI_SHOW_VIS,
+                  MF_BYCOMMAND | (eg.IsMapUiShowVisChrome() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(popup, IDC_MAP_UI_SHOW_BOTTOM,
+                  MF_BYCOMMAND | (eg.IsMapUiShowBottomChrome() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(popup, IDC_MAP_UI_SHOW_HINT,
+                  MF_BYCOMMAND | (eg.IsMapUiShowHintOverlay() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(popup, IDC_MAP_UI_GRID,
+                  MF_BYCOMMAND | (eg.Document().GetShowLatLonGrid() ? MF_CHECKED : MF_UNCHECKED));
+  }
+}
+
+void LayoutMapShellClient(HWND mapShell) {
+  if (!g_hwndMap || !IsWindow(g_hwndMap)) {
+    return;
+  }
+  RECT cr{};
+  GetClientRect(mapShell, &cr);
+  const int cw = std::max(0, static_cast<int>(cr.right));
+  const int ch = std::max(0, static_cast<int>(cr.bottom));
+  MoveWindow(g_hwndMap, 0, 0, cw, ch, TRUE);
+}
+
+LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  switch (msg) {
+    case WM_CREATE: {
+      auto* cs = reinterpret_cast<LPCREATESTRUCT>(lParam);
+      HINSTANCE inst = cs->hInstance;
+      HMENU menu = BuildMapHostMenu();
+      if (menu) {
+        SetMenu(hwnd, menu);
+      }
+      g_hwndMap = CreateWindowExW(WS_EX_CLIENTEDGE | WS_EX_COMPOSITED, kMapClass, L"",
+                                  WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 200, 200, hwnd, nullptr, inst,
+                                  nullptr);
+      if (!g_hwndMap) {
+        return -1;
+      }
+      LayoutMapShellClient(hwnd);
+      return 0;
+    }
+    case WM_DESTROY: {
+      HMENU m = GetMenu(hwnd);
+      SetMenu(hwnd, nullptr);
+      if (m) {
+        DestroyMenu(m);
+      }
+      g_hwndMap = nullptr;
+      g_hwndMapShell = nullptr;
+      return 0;
+    }
+    case WM_SIZE:
+      LayoutMapShellClient(hwnd);
+      return 0;
+    case WM_INITMENUPOPUP:
+      SyncMapHostMenuPopup(hwnd, reinterpret_cast<HMENU>(wParam));
+      break;
+    case WM_COMMAND:
+      if (HIWORD(wParam) == 0 && lParam == 0 && g_hwndMap && IsWindow(g_hwndMap)) {
+        SendMessageW(g_hwndMap, WM_COMMAND, wParam, 0);
+        return 0;
+      }
+      break;
+    default:
+      break;
+  }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
 }

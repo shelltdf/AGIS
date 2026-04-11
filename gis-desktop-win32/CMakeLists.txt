@@ -337,6 +337,7 @@ add_library(agis_workbench_app STATIC
   src/app/common/gis_document/main_gis_xml.cpp
   src/app/common/gis_document/main_gis_document.cpp
   src/app/workbench/main_chrome.cpp
+  src/app/workbench/main_debug.cpp
   src/app/workbench/main_panels.cpp
   src/app/converter/main_convert.cpp
   src/app/preview/model_preview/main_model_preview.cpp
@@ -357,6 +358,8 @@ add_library(agis_workbench_app STATIC
   src/map_engine/map_document.cpp
   src/map_engine/map_engine.cpp
   src/map_engine/map_gpu.cpp
+  src/map_engine/map_gpu_d2d.cpp
+  src/map_engine/map_gpu_bgfx.cpp
   src/map_engine/map_projection.cpp
 )
 target_include_directories(agis_workbench_app PRIVATE
@@ -423,6 +426,7 @@ target_link_libraries(agis_desktop PRIVATE
   d3d11
   dxgi
   d3dcompiler
+  d2d1
   opengl32
 )
 

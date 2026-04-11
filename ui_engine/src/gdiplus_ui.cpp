@@ -70,39 +70,13 @@ void UiPaintLayerPanel(HDC hdc, const RECT& rc) {
   Gdiplus::SolidBrush titleBrush(
       g_panelThemeDark ? Gdiplus::Color(255, 230, 234, 242) : Gdiplus::Color(255, 30, 55, 95));
   Gdiplus::SolidBrush subBrush(g_panelThemeDark ? Gdiplus::Color(220, 168, 176, 190) : Gdiplus::Color(220, 90, 105, 130));
-  Gdiplus::SolidBrush chipBg(g_panelThemeDark ? Gdiplus::Color(180, 64, 72, 88) : Gdiplus::Color(180, 230, 240, 255));
-  Gdiplus::SolidBrush chipFg(g_panelThemeDark ? Gdiplus::Color(255, 130, 210, 255) : Gdiplus::Color(255, 55, 95, 140));
   Gdiplus::StringFormat fmt{};
   fmt.SetAlignment(Gdiplus::StringAlignmentNear);
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
 
-  const float chipW = 52.0f;
-  const float chipH = 18.0f;
-  const bool showChip = static_cast<float>(w) >= chipW + 100.0f;
-  const float reserveRight = showChip ? (chipW + 16.0f) : 12.0f;
-  const float textW = std::max(40.0f, static_cast<float>(w) - 24.0f - reserveRight);
+  const float textW = std::max(40.0f, static_cast<float>(w) - 24.0f - 12.0f);
   g.DrawString(L"图层", -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBrush);
   g.DrawString(L"Dock · 数据列表", -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 18.0f), &fmt, &subBrush);
-
-  if (showChip) {
-    const float chipX = x0 + static_cast<float>(w) - chipW - 12.0f;
-    const float chipY = y0 + 10.0f;
-    Gdiplus::GraphicsPath chip;
-    const float r = 4.0f;
-    chip.AddArc(chipX + chipW - 2.0f * r, chipY, 2.0f * r, 2.0f * r, 270, 90);
-    chip.AddLine(chipX + chipW, chipY + r, chipX + chipW, chipY + chipH - r);
-    chip.AddArc(chipX + chipW - 2.0f * r, chipY + chipH - 2.0f * r, 2.0f * r, 2.0f * r, 0, 90);
-    chip.AddLine(chipX + chipW - r, chipY + chipH, chipX + r, chipY + chipH);
-    chip.AddArc(chipX, chipY + chipH - 2.0f * r, 2.0f * r, 2.0f * r, 90, 90);
-    chip.AddLine(chipX, chipY + chipH - r, chipX, chipY + r);
-    chip.AddArc(chipX, chipY, 2.0f * r, 2.0f * r, 180, 90);
-    chip.CloseFigure();
-    g.FillPath(&chipBg, &chip);
-    Gdiplus::StringFormat cfmt{};
-    cfmt.SetAlignment(Gdiplus::StringAlignmentCenter);
-    cfmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    g.DrawString(L"左", -1, &subFont, Gdiplus::RectF(chipX, chipY, chipW, chipH), &cfmt, &chipFg);
-  }
 }
 
 void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, const wchar_t* body) {

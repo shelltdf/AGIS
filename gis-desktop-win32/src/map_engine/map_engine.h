@@ -44,6 +44,13 @@ class MapEngine {
 
   void UpdateMapChrome();
 
+  bool IsMapShortcutHelpExpanded() const { return mapShortcutExpanded_; }
+  bool IsMapVisibilityPanelExpanded() const { return mapVisExpanded_; }
+  bool IsMapUiShowHintOverlay() const { return mapUiShowHint_; }
+  bool IsMapUiShowShortcutChrome() const { return mapUiShowShortcut_; }
+  bool IsMapUiShowVisChrome() const { return mapUiShowVis_; }
+  bool IsMapUiShowBottomChrome() const { return mapUiShowBottom_; }
+
  private:
   MapEngine() = default;
   friend LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -56,6 +63,12 @@ class MapEngine {
   bool mapVisExpanded_{true};
   POINT mlast_{};
   bool mdrag_{false};
+
+  /** 地图宿主内叠加 UI 是否显示（顶栏「界面」菜单可切换）。 */
+  bool mapUiShowShortcut_{true};
+  bool mapUiShowVis_{true};
+  bool mapUiShowBottom_{true};
+  bool mapUiShowHint_{true};
 };
 
 LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

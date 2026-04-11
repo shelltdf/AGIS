@@ -44,8 +44,12 @@ HMENU BuildMenu() {
   AppendMenuW(view, MF_STRING, ID_VIEW_MODE_3D, L"3D 模式(&3)");
   AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(view, MF_STRING | MF_CHECKED, ID_VIEW_RENDER_GDI, L"2D 渲染：GDI(&G)");
-  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_D3D11, L"2D 渲染：Direct3D 11(&D)");
-  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_GL, L"2D 渲染：OpenGL(&O)");
+  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_GDIPLUS, L"2D 渲染：GDI+(&I)");
+  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_D2D, L"2D 渲染：Direct2D(&2)");
+  AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_BGFX_D3D11, L"2D 渲染：Bgfx + D3D11(&D)");
+  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_BGFX_OPENGL, L"2D 渲染：Bgfx + OpenGL(&O)");
+  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_BGFX_AUTO, L"2D 渲染：Bgfx 自动(&B)");
   AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
   {
     HMENU projSub = CreateMenu();
@@ -89,6 +93,11 @@ HMENU BuildMenu() {
   AppendMenuW(help, MF_STRING, ID_HELP_DATA_DRIVERS, L"数据驱动说明(&D)...");
   AppendMenuW(help, MF_STRING, ID_HELP_ABOUT, L"关于(&A)...");
   AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"帮助(&H)");
+
+  HMENU debug = CreateMenu();
+  AppendMenuW(debug, MF_STRING, ID_DEBUG_CLIPBOARD_SCREENSHOT, L"截图到剪贴板(&S)");
+  AppendMenuW(debug, MF_STRING, ID_DEBUG_COPY_UI_JSON, L"复制界面信息 JSON(&J)");
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(debug), L"调试(&G)");
 
   return bar;
 }
@@ -136,9 +145,12 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       g_hwndLayer = CreateWindowExW(0, kLayerClass, L"",
                                       WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                       0, 0, 100, 100, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-      g_hwndMap = CreateWindowExW(WS_EX_CLIENTEDGE | WS_EX_COMPOSITED, kMapClass, L"",
-                                   WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-                                   0, 0, 100, 100, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+      g_hwndMapShell = CreateWindowExW(WS_EX_TOOLWINDOW, kMapShellClass, L"",
+                                       WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 120, 120, hwnd,
+                                       nullptr, GetModuleHandleW(nullptr), nullptr);
+      if (!g_hwndMapShell || !g_hwndMap) {
+        return -1;
+      }
       g_hwndProps =
           CreateWindowExW(0, kPropsClass, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 100, 100,
                           hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -337,19 +349,21 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         AppLogLine(L"[视图] 已切换到 3D 模式（占位）。");
         return 0;
       }
-      if (id == ID_VIEW_RENDER_GDI || id == ID_VIEW_RENDER_D3D11 || id == ID_VIEW_RENDER_GL) {
+      if (id >= ID_VIEW_RENDER_FIRST && id <= ID_VIEW_RENDER_LAST) {
         MapRenderBackend b = MapRenderBackend::kGdi;
-        if (id == ID_VIEW_RENDER_D3D11) {
-          b = MapRenderBackend::kD3d11;
-        } else if (id == ID_VIEW_RENDER_GL) {
-          b = MapRenderBackend::kOpenGL;
+        if (id == ID_VIEW_RENDER_GDIPLUS) {
+          b = MapRenderBackend::kGdiPlus;
+        } else if (id == ID_VIEW_RENDER_D2D) {
+          b = MapRenderBackend::kD2d;
+        } else if (id == ID_VIEW_RENDER_BGFX_D3D11) {
+          b = MapRenderBackend::kBgfxD3d11;
+        } else if (id == ID_VIEW_RENDER_BGFX_OPENGL) {
+          b = MapRenderBackend::kBgfxOpenGL;
+        } else if (id == ID_VIEW_RENDER_BGFX_AUTO) {
+          b = MapRenderBackend::kBgfxAuto;
         }
         MapEngine::Instance().SetRenderBackend(b);
         SyncViewMenu(hwnd);
-        AppLogLine(b == MapRenderBackend::kGdi
-                       ? L"[视图] 2D 呈现：GDI。"
-                       : b == MapRenderBackend::kD3d11 ? L"[视图] 2D 呈现：Direct3D 11。"
-                                                       : L"[视图] 2D 呈现：OpenGL。");
         return 0;
       }
       if (id >= ID_VIEW_PROJ_FIRST && id <= ID_VIEW_PROJ_LAST) {
@@ -391,6 +405,18 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       }
       if (id == ID_HELP_ABOUT) {
         ShowAbout(hwnd);
+        return 0;
+      }
+      if (id == ID_DEBUG_CLIPBOARD_SCREENSHOT) {
+        if (AgisCopyMainWindowScreenshotToClipboard(hwnd)) {
+          AppLogLine(L"[调试] 主窗口截图已复制到剪贴板（位图）。");
+        } else {
+          AppLogLine(L"[调试] 主窗口截图复制到剪贴板失败。");
+        }
+        return 0;
+      }
+      if (id == ID_DEBUG_COPY_UI_JSON) {
+        AgisCopyWorkbenchUiStateJsonToClipboard(hwnd);
         return 0;
       }
       if (id == ID_LANG_ZH || id == ID_LANG_EN) {
@@ -489,6 +515,11 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       }
       break;
     case WM_DESTROY:
+      if (g_hwndMapShell && IsWindow(g_hwndMapShell)) {
+        DestroyWindow(g_hwndMapShell);
+      }
+      g_hwndMapShell = nullptr;
+      g_hwndMap = nullptr;
       if (g_hwndToolbar) {
         RemoveWindowSubclass(g_hwndToolbar, ToolbarWheelSubclass, 3);
       }
@@ -531,6 +562,13 @@ bool RegisterClasses(HINSTANCE inst) {
   wc.lpszClassName = kMapClass;
   wc.style = CS_OWNDC;
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  if (!RegisterClassW(&wc)) {
+    return false;
+  }
+  wc.lpfnWndProc = MapShellProc;
+  wc.lpszClassName = kMapShellClass;
+  wc.style = 0;
+  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_3DFACE + 1);
   if (!RegisterClassW(&wc)) {
     return false;
   }

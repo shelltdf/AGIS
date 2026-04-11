@@ -918,16 +918,55 @@ void MapEngine::Shutdown() {
   doc_.refViewHeightDeg = 180.0;
 }
 
+namespace {
+
+const wchar_t* MapRenderBackendDisplayName(MapRenderBackend b) {
+  switch (b) {
+    case MapRenderBackend::kGdi:
+      return L"GDI";
+    case MapRenderBackend::kGdiPlus:
+      return L"GDI+";
+    case MapRenderBackend::kD2d:
+      return L"Direct2D";
+    case MapRenderBackend::kBgfxD3d11:
+      return L"Bgfx（D3D11）";
+    case MapRenderBackend::kBgfxOpenGL:
+      return L"Bgfx（OpenGL）";
+    case MapRenderBackend::kBgfxAuto:
+      return L"Bgfx（自动后端）";
+    default:
+      return L"未知";
+  }
+}
+
+}  // namespace
+
 void MapEngine::SetRenderBackend(MapRenderBackend backend) {
   mapRenderBackend_ = backend;
-  if (mapHwnd_ && IsWindow(mapHwnd_)) {
-    if (!MapGpu_Init(mapHwnd_, backend)) {
-      AppLogLine(L"[地图] GPU 呈现初始化失败，已回退为 GDI。");
-      mapRenderBackend_ = MapRenderBackend::kGdi;
-      MapGpu_Init(mapHwnd_, MapRenderBackend::kGdi);
-    }
-    InvalidateRect(mapHwnd_, nullptr, FALSE);
+  if (!mapHwnd_ || !IsWindow(mapHwnd_)) {
+    AppLogLine(std::wstring(L"[地图] 呈现方式已设为 ") + MapRenderBackendDisplayName(backend) +
+               L"（地图宿主尚未创建，将在窗口就绪后应用）。");
+    return;
   }
+
+  if (!MapGpu_Init(mapHwnd_, backend)) {
+    AppLogLine(std::wstring(L"[地图] 呈现切换失败：") + MapRenderBackendDisplayName(backend) +
+               L" 初始化未成功，正在回退为 GDI。");
+    mapRenderBackend_ = MapRenderBackend::kGdi;
+    if (!MapGpu_Init(mapHwnd_, MapRenderBackend::kGdi)) {
+      AppLogLine(L"[地图] 呈现切换失败：GDI 回退初始化仍失败，地图可能无法绘制。");
+    } else {
+      AppLogLine(L"[地图] 已回退为 GDI 并完成初始化。");
+    }
+  } else {
+    const MapRenderBackend active = MapGpu_GetActiveBackend();
+    AppLogLine(std::wstring(L"[地图] 呈现切换成功：") + MapRenderBackendDisplayName(active) + L"。");
+  }
+
+  RECT cr{};
+  GetClientRect(mapHwnd_, &cr);
+  SendMessageW(mapHwnd_, WM_SIZE, SIZE_RESTORED, MAKELPARAM(cr.right - cr.left, cr.bottom - cr.top));
+  InvalidateRect(mapHwnd_, nullptr, FALSE);
 }
 
 MapRenderBackend MapEngine::GetRenderBackend() const {
@@ -1774,6 +1813,36 @@ void LayoutMapOverlayControls(HWND hwnd) {
     MoveWindow(hSc, m + 30, bottomY2, scaleW, btnH, TRUE);
     MoveWindow(hZp, m + 30 + scaleW + rowGap, bottomY2, 28, btnH, TRUE);
   }
+
+  MapEngine& eg = MapEngine::Instance();
+  const MapRenderBackend mapRb = MapGpu_GetActiveBackend();
+  const bool hideNativeChrome = (mapRb == MapRenderBackend::kBgfxD3d11 || mapRb == MapRenderBackend::kBgfxOpenGL ||
+                                 mapRb == MapRenderBackend::kBgfxAuto);
+  if (hideNativeChrome) {
+    for (HWND h : {hShortcut, hEdit, hVis, hGrid, hFit, hOrig, hReset, hZm, hSc, hZp}) {
+      if (h) {
+        ShowWindow(h, SW_HIDE);
+      }
+    }
+    return;
+  }
+  if (hShortcut) {
+    ShowWindow(hShortcut, eg.IsMapUiShowShortcutChrome() ? SW_SHOW : SW_HIDE);
+  }
+  if (hEdit) {
+    ShowWindow(hEdit, (eg.IsMapUiShowShortcutChrome() && eg.IsMapShortcutHelpExpanded()) ? SW_SHOW : SW_HIDE);
+  }
+  if (hVis) {
+    ShowWindow(hVis, eg.IsMapUiShowVisChrome() ? SW_SHOW : SW_HIDE);
+  }
+  if (hGrid) {
+    ShowWindow(hGrid, (eg.IsMapUiShowVisChrome() && eg.IsMapVisibilityPanelExpanded()) ? SW_SHOW : SW_HIDE);
+  }
+  for (HWND h : {hFit, hOrig, hReset, hZm, hSc, hZp}) {
+    if (h) {
+      ShowWindow(h, eg.IsMapUiShowBottomChrome() ? SW_SHOW : SW_HIDE);
+    }
+  }
 }
 
 bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector<uint8_t>* outPixels) {
@@ -1811,7 +1880,9 @@ bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector
   const HGDIOBJ old = SelectObject(mem, dib);
   const RECT inner{0, 0, cw, ch};
   MapEngine::Instance().Document().Draw(mem, inner);
-  UiPaintMapHintOverlay(mem, inner, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+  if (MapEngine::Instance().IsMapUiShowHintOverlay()) {
+    UiPaintMapHintOverlay(mem, inner, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+  }
   const size_t nbytes = static_cast<size_t>(cw) * static_cast<size_t>(ch) * 4u;
   outPixels->resize(nbytes);
   std::memcpy(outPixels->data(), bits, nbytes);
@@ -1890,6 +1961,59 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     }
     case WM_COMMAND: {
       const int id = LOWORD(wParam);
+      HWND ctl = reinterpret_cast<HWND>(lParam);
+      if (ctl == nullptr) {
+        if (id >= ID_VIEW_RENDER_FIRST && id <= ID_VIEW_RENDER_LAST) {
+          MapRenderBackend b = MapRenderBackend::kGdi;
+          if (id == ID_VIEW_RENDER_GDIPLUS) {
+            b = MapRenderBackend::kGdiPlus;
+          } else if (id == ID_VIEW_RENDER_D2D) {
+            b = MapRenderBackend::kD2d;
+          } else if (id == ID_VIEW_RENDER_BGFX_D3D11) {
+            b = MapRenderBackend::kBgfxD3d11;
+          } else if (id == ID_VIEW_RENDER_BGFX_OPENGL) {
+            b = MapRenderBackend::kBgfxOpenGL;
+          } else if (id == ID_VIEW_RENDER_BGFX_AUTO) {
+            b = MapRenderBackend::kBgfxAuto;
+          }
+          eng.SetRenderBackend(b);
+          LayoutMapOverlayControls(hwnd);
+          return 0;
+        }
+        if (id == IDC_MAP_UI_SHOW_SHORTCUT) {
+          eng.mapUiShowShortcut_ = !eng.mapUiShowShortcut_;
+          LayoutMapOverlayControls(hwnd);
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
+        if (id == IDC_MAP_UI_SHOW_VIS) {
+          eng.mapUiShowVis_ = !eng.mapUiShowVis_;
+          LayoutMapOverlayControls(hwnd);
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
+        if (id == IDC_MAP_UI_SHOW_BOTTOM) {
+          eng.mapUiShowBottom_ = !eng.mapUiShowBottom_;
+          LayoutMapOverlayControls(hwnd);
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
+        if (id == IDC_MAP_UI_SHOW_HINT) {
+          eng.mapUiShowHint_ = !eng.mapUiShowHint_;
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
+        if (id == IDC_MAP_UI_GRID) {
+          const bool on = !eng.doc_.GetShowLatLonGrid();
+          eng.doc_.SetShowLatLonGrid(on);
+          if (HWND g = GetDlgItem(hwnd, IDC_MAP_VIS_GRID)) {
+            SendMessageW(g, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+          }
+          InvalidateRect(hwnd, nullptr, FALSE);
+          return 0;
+        }
+        break;
+      }
       const int code = HIWORD(wParam);
       if (code == BN_CLICKED) {
         RECT r{};
@@ -1961,6 +2085,9 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       SetFocus(hwnd);
       return 0;
     case WM_MBUTTONDOWN:
+      if (MapGpu_ImGuiMapToolbarHitClient(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam))) {
+        return 0;
+      }
       SetFocus(hwnd);
       eng.mdrag_ = true;
       eng.mlast_.x = GET_X_LPARAM(lParam);
@@ -1968,8 +2095,10 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       SetCapture(hwnd);
       return 0;
     case WM_MBUTTONUP:
-      eng.mdrag_ = false;
-      ReleaseCapture();
+      if (eng.mdrag_) {
+        eng.mdrag_ = false;
+        ReleaseCapture();
+      }
       return 0;
     case WM_MOUSEWHEEL: {
       int delta = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -1982,6 +2111,9 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       ScreenToClient(hwnd, &pt);
       const int mx = pt.x;
       const int my = pt.y;
+      if (MapGpu_ImGuiMapToolbarHitClient(mx, my)) {
+        return 0;
+      }
       const double factor = delta > 0 ? 1.1 : 1.0 / 1.1;
       eng.doc_.ZoomAt(mx, my, cw, ch, factor);
       RedrawWindow(hwnd, nullptr, nullptr,
@@ -2002,6 +2134,11 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         InvalidateRect(hwnd, nullptr, FALSE);
       }
       return 0;
+    case WM_CAPTURECHANGED:
+      if (reinterpret_cast<HWND>(lParam) != hwnd) {
+        eng.mdrag_ = false;
+      }
+      return 0;
     case WM_PAINT: {
       PAINTSTRUCT ps{};
       HDC hdc = BeginPaint(hwnd, &ps);
@@ -2009,16 +2146,32 @@ LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
       GetClientRect(hwnd, &client);
       const int cw = client.right - client.left;
       const int ch = client.bottom - client.top;
-      if (MapGpu_GetActiveBackend() == MapRenderBackend::kGdi) {
+      const MapRenderBackend paintRb = MapGpu_GetActiveBackend();
+      if (paintRb == MapRenderBackend::kGdi) {
         HDC mem = CreateCompatibleDC(hdc);
         HBITMAP bmp = CreateCompatibleBitmap(hdc, cw, ch);
         const HGDIOBJ oldBmp = SelectObject(mem, bmp);
         eng.doc_.Draw(mem, client);
-        UiPaintMapHintOverlay(mem, client, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+        if (eng.IsMapUiShowHintOverlay()) {
+          UiPaintMapHintOverlay(mem, client, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+        }
         BitBlt(hdc, 0, 0, cw, ch, mem, 0, 0, SRCCOPY);
         SelectObject(mem, oldBmp);
         DeleteObject(bmp);
         DeleteDC(mem);
+      } else if (paintRb == MapRenderBackend::kGdiPlus) {
+        Gdiplus::Bitmap off(cw, ch, PixelFormat32bppPARGB);
+        Gdiplus::Graphics gx(&off);
+        gx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        gx.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+        HDC memdc = gx.GetHDC();
+        eng.doc_.Draw(memdc, client);
+        if (eng.IsMapUiShowHintOverlay()) {
+          UiPaintMapHintOverlay(memdc, client, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+        }
+        gx.ReleaseHDC(memdc);
+        Gdiplus::Graphics screen(hdc);
+        screen.DrawImage(&off, 0, 0, cw, ch);
       } else {
         std::vector<uint8_t> pix;
         if (MapHostRenderClientToTopDownBgra(hwnd, client, &pix) && cw > 0 && ch > 0) {

@@ -14,6 +14,11 @@ void SyncWindowMenu(HWND hwnd);
 void GetInnerClient(HWND hwnd, RECT* out);
 void UpdateStatusParts();
 void LayoutChildren();
+
+HMENU BuildMapHostMenu();
+void SyncMapHostMenuPopup(HWND mapShell, HMENU popup);
+void LayoutMapShellClient(HWND mapShell);
+LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 bool HitLeftSplitter(int x, int y, int innerTop, int innerBottom);
 bool HitRightSplitter(int x, int y, int innerTop, int innerBottom);
 HIMAGELIST BuildToolbarImageList();
@@ -88,5 +93,8 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HMENU BuildMenu();
+
+bool AgisCopyMainWindowScreenshotToClipboard(HWND mainHwnd);
+void AgisCopyWorkbenchUiStateJsonToClipboard(HWND mainHwnd);
 LRESULT CALLBACK StatusSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR);
 bool RegisterClasses(HINSTANCE inst);
