@@ -26,7 +26,12 @@ option(AGIS_BUNDLE_GDAL
   "If GDAL is not found via find_package, build from ../3rdparty/gdal-3.12.3 (PROJ must be available in CMAKE_PREFIX_PATH)"
   ON)
 
-option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static" OFF)
+# 开发期默认动态链接捆绑的 PROJ/GDAL/curl/tiff，显著缩短链接时间；正式发版单目录便携包请关闭（见 CMakePresets.json release-static）。
+option(AGIS_BUNDLED_LIBS_SHARED
+  "When building bundled PROJ/GDAL: build libcurl/libtiff/PROJ/GDAL as shared libs (DLL) and copy next to exes. OFF = 全静态 .lib（链接慢、适合无 DLL 的发布目录）。"
+  ON)
+
+option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static (links into every exe)" ON)
 option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
 option(AGIS_USE_LASZIP
   "Bundle LASzip from ../3rdparty/LASzip for LAZ in model preview (AGIS_HAVE_LASZIP=1 when sources are present). Default ON; set OFF to skip."
@@ -124,6 +129,31 @@ if(AGIS_USE_GDAL)
       "See 3rdparty/README-GDAL-BUILD.md.")
   endif()
 endif()
+
+# 捆绑 GDAL/PROJ 等为 DLL 时，将运行时依赖复制到 exe 同目录（仅 TYPE=SHARED_LIBRARY 的目标）。
+function(agis_copy_bundled_gdal_deps_to_exe _exe)
+  if(NOT WIN32)
+    return()
+  endif()
+  if(NOT AGIS_USE_GDAL OR NOT GDAL_FOUND OR NOT AGIS_GDAL_BUNDLED OR NOT AGIS_BUNDLED_LIBS_SHARED)
+    return()
+  endif()
+  if(NOT TARGET "${_exe}")
+    return()
+  endif()
+  # curl 8.x 共享库目标名为 libcurl_shared（见 3rdparty/curl lib/CMakeLists.txt）
+  foreach(_dep IN ITEMS GDAL::GDAL PROJ::proj libcurl_shared tiff)
+    if(TARGET "${_dep}")
+      get_target_property(_t "${_dep}" TYPE)
+      if(_t STREQUAL "SHARED_LIBRARY")
+        add_custom_command(TARGET "${_exe}" POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:${_dep}>
+            $<TARGET_FILE_DIR:${_exe}>)
+      endif()
+    endif()
+  endforeach()
+endfunction()
 
 # --- LASzip（源码包解压到 ../3rdparty/LASzip，用于 LAZ 预览解压；非 git clone）---
 set(AGIS_HAVE_LASZIP FALSE)
@@ -600,34 +630,10 @@ if(MSVC)
 endif()
 
 if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
-  add_custom_command(TARGET agis_desktop POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_FILE:GDAL>
-      $<TARGET_FILE_DIR:agis_desktop>)
-  if(TARGET PROJ::proj)
-    add_custom_command(TARGET agis_desktop POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:PROJ::proj>
-        $<TARGET_FILE_DIR:agis_desktop>)
-  endif()
-  add_custom_command(TARGET agis_model_preview_gui POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_FILE:GDAL>
-      $<TARGET_FILE_DIR:agis_model_preview_gui>)
-  add_custom_command(TARGET agis_tile_preview_gui POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_FILE:GDAL>
-      $<TARGET_FILE_DIR:agis_tile_preview_gui>)
-  if(TARGET PROJ::proj)
-    add_custom_command(TARGET agis_model_preview_gui POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:PROJ::proj>
-        $<TARGET_FILE_DIR:agis_model_preview_gui>)
-    add_custom_command(TARGET agis_tile_preview_gui POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:PROJ::proj>
-        $<TARGET_FILE_DIR:agis_tile_preview_gui>)
-  endif()
+  agis_copy_bundled_gdal_deps_to_exe(agis_desktop)
+  agis_copy_bundled_gdal_deps_to_exe(agis_convert_gui)
+  agis_copy_bundled_gdal_deps_to_exe(agis_model_preview_gui)
+  agis_copy_bundled_gdal_deps_to_exe(agis_tile_preview_gui)
 endif()
 
 if(WIN32 AND AGIS_UI_ENGINE_SHARED)
@@ -635,6 +641,10 @@ if(WIN32 AND AGIS_UI_ENGINE_SHARED)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       $<TARGET_FILE:agis_ui_engine>
       $<TARGET_FILE_DIR:agis_desktop>)
+  add_custom_command(TARGET agis_convert_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:agis_ui_engine>
+      $<TARGET_FILE_DIR:agis_convert_gui>)
   add_custom_command(TARGET agis_model_preview_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       $<TARGET_FILE:agis_ui_engine>
@@ -765,6 +775,12 @@ foreach(_tool IN LISTS _agis_convert_tools)
     target_compile_options(${_tool} PRIVATE /utf-8)
   endif()
 endforeach()
+
+if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
+  foreach(_tool IN LISTS _agis_convert_tools)
+    agis_copy_bundled_gdal_deps_to_exe(${_tool})
+  endforeach()
+endif()
 
 # 捆绑 GDAL 运行时所需 gcore/data（如 tms_*.json）；复制到 build/gdal_data，并由 AgisEnsureGdalDataPath 探测。
 set(_AGIS_GDAL_GCORE_DATA "${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/gdal-3.12.3/gcore/data")

@@ -1,6 +1,14 @@
 # Build GDAL from ../3rdparty/gdal-3.12.3 when no preinstalled GDAL is found.
 # PROJ: prefer existing install (proj-install / AGIS_PROJ_PREFIX); else build ../3rdparty/proj-9.8.0.
 
+if(AGIS_BUNDLED_LIBS_SHARED)
+  set(BUILD_SHARED_LIBS ON CACHE BOOL "AGIS: bundled PROJ/GDAL/curl/tiff as DLL/SO" FORCE)
+  message(STATUS "AGIS: bundled PROJ/GDAL/curl/tiff = SHARED (dev fast link; -DAGIS_BUNDLED_LIBS_SHARED=OFF for static release)")
+else()
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "AGIS: bundled deps as static .lib" FORCE)
+  message(STATUS "AGIS: bundled PROJ/GDAL/curl/tiff = STATIC (release-style portable folder)")
+endif()
+
 set(_agis_gdal_src "${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/gdal-3.12.3")
 if(NOT EXISTS "${_agis_gdal_src}/CMakeLists.txt")
   return()

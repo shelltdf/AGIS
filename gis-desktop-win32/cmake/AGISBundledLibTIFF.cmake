@@ -4,7 +4,9 @@
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 
 set(_agis_tiff_local "${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/tiff-4.7.1")
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "libtiff: static" FORCE)
+if(NOT AGIS_BUNDLED_LIBS_SHARED)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "libtiff: static (AGIS)" FORCE)
+endif()
 set(tiff-install ON CACHE BOOL "libtiff: export TiffConfig (PROJ find_package)" FORCE)
 set(tiff-tools OFF CACHE BOOL "libtiff: skip tools" FORCE)
 set(tiff-tests OFF CACHE BOOL "libtiff: skip tests" FORCE)
