@@ -14,7 +14,7 @@
 #include <cpl_conv.h>
 #endif
 
-void AgisEnsureGdalDataPath() {
+AGIS_COMMON_API void AgisEnsureGdalDataPath() {
 #if !GIS_DESKTOP_HAVE_GDAL
   return;
 #else

@@ -4,13 +4,17 @@
 
 #include <string>
 
+#include "map_engine/export.h"
 #include "map_engine/map_document.h"
 #include "map_engine/map_gpu.h"
 
 /** 地图引擎：文档、图层列表 UI、地图宿主窗口状态与 GDAL 图层工厂（单例）。 */
-class MapEngine {
+class AGIS_MAP_ENGINE_API MapEngine {
  public:
   static MapEngine& Instance();
+
+  MapEngine(const MapEngine&) = delete;
+  MapEngine& operator=(const MapEngine&) = delete;
 
   void Init();
   void Shutdown();
@@ -53,7 +57,7 @@ class MapEngine {
 
  private:
   MapEngine() = default;
-  friend LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  friend AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
   MapDocument doc_{};
   HWND mapHwnd_{nullptr};
@@ -71,4 +75,4 @@ class MapEngine {
   bool mapUiShowHint_{true};
 };
 
-LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

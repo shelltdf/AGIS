@@ -8,9 +8,9 @@
 | 地图宿主 / GDAL+GDI | `map_engine/shell/include/map_engine/map_engine.h`、`map_engine/shell/src/map_engine.cpp` → **`MapEngine::Instance()`**、`MapHostProc`、`MapDocument`（引擎持有）、`agis_detail::RasterMapLayer` / `VectorMapLayer`；CMake 目标 **`agis_map_engine`**（`map_engine/CMakeLists.txt`） |
 | 投影 / 拾取 | `map_engine/projection/src/map_projection.cpp` / `map_engine/projection/include/map_engine/map_projection.h` |
 | GPU 呈现 | `map_engine/gpu/src/map_gpu*.cpp` / `map_engine/gpu/include/map_engine/map_gpu.h` |
-| GDI+ UI | `ui_engine/include/ui_engine/gdiplus_ui.h` / `ui_engine/src/gdiplus_ui.cpp` |
-| ui_engine 独立演示可执行文件 `ui_engine_demo` | `ui_engine/app/ui_engine_demo.h`、`ui_engine/app/ui_engine_demo.cpp`、`ui_engine/app/ui_engine_demo_main.cpp`；由 `gis-desktop-win32/CMakeLists.txt` 的 `add_executable(ui_engine_demo …)` 引用；便捷脚本 `ui_engine/run_ui_demo.py`（仅配置若需 + `--target ui_engine_demo`，不整库 `build.py`） |
-| 抽象 GUI（App / Widget / 平台接口） | `ui_engine/include/ui_engine/` 下 `app.h`、`widget*.h` 等；`ui_engine/src/` 下对应 `.cpp`；**`widgets_mainframe.*`**（AGIS 主框架 Widget）、`gis-desktop-win32/src/app/ui_private.h`（主程序强绑定 Widget）、`widgets_all.h`（聚合）（类图见 [uml-class-ui.md](uml-class-ui.md)） |
+| GDI+ UI | `ui_engine/gdiplus/include/ui_engine/gdiplus_ui.h` / `ui_engine/gdiplus/src/gdiplus_ui.cpp` |
+| ui_engine 独立演示可执行文件 `ui_engine_demo` | `ui_engine/demo/src/ui_engine_demo.h` 与 `ui_engine_demo*.cpp`（同目录，无 `demo/include`）；由 `gis-desktop-win32/CMakeLists.txt` 的 `add_executable(ui_engine_demo …)` 引用；便捷脚本 `ui_engine/run_ui_demo.py` |
+| 抽象 GUI（App / Widget / 平台接口） | `ui_engine/core/include/ui_engine/` + `core/src/`；**widgets** 在 `widgets/include/ui_engine/` + `widgets/src/`；**平台** 实现 `platform/src/`，私有头 `platform/include/platform/`（类图见 [uml-class-ui.md](uml-class-ui.md)） |
 | 日志缓冲 | `gis-desktop-win32/src/core/app_log.cpp` |
 | 日志窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `LogWndProc` |
 | `.gis` 工程 XML 辅助 | `gis-desktop-win32/src/app/gis_document/main_gis_xml.cpp/.h` → `XmlEscape`、`GetXmlAttr`、`Parse*Attr` |

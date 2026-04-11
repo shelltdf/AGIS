@@ -32,6 +32,8 @@ option(AGIS_BUNDLED_LIBS_SHARED
   ON)
 
 option(AGIS_UI_ENGINE_SHARED "Build agis_ui_engine as shared library (DLL/SO); OFF builds static (links into every exe)" ON)
+option(AGIS_MAP_ENGINE_SHARED
+  "Build agis_map_engine as DLL/SO (ON) or static .lib (OFF). ON (WIN32): also builds agis_common_app as DLL and requires AGIS_UI_ENGINE_SHARED=ON." ON)
 option(AGIS_UI_USE_XCB "Linux: use XCB instead of Xlib for ui_engine IGuiPlatform" OFF)
 option(AGIS_USE_LASZIP
   "Bundle LASzip from ../3rdparty/LASzip for LAZ in model preview (AGIS_HAVE_LASZIP=1 when sources are present). Default ON; set OFF to skip."
@@ -49,9 +51,19 @@ endif()
 
 # ui_engine 位于仓库根目录，与 gis-desktop-win32 并列（`AGIS/ui_engine/`）
 set(AGIS_UI_ENGINE_DIR "${CMAKE_SOURCE_DIR}/../ui_engine")
-if(NOT EXISTS "${AGIS_UI_ENGINE_DIR}/src/app.cpp")
+set(AGIS_UI_ENGINE_PUBLIC_INCLUDES
+  ${AGIS_UI_ENGINE_DIR}/core/include
+  ${AGIS_UI_ENGINE_DIR}/widgets/include
+  ${AGIS_UI_ENGINE_DIR}/gdiplus/include
+)
+if(NOT EXISTS "${AGIS_UI_ENGINE_DIR}/core/src/app.cpp")
   message(
-    FATAL_ERROR "ui_engine sources not found at ${AGIS_UI_ENGINE_DIR}/src (expected sibling of gis-desktop-win32).")
+    FATAL_ERROR "ui_engine sources not found at ${AGIS_UI_ENGINE_DIR}/core/src (expected sibling of gis-desktop-win32).")
+endif()
+
+set(AGIS_MAP_ENGINE_DIR "${CMAKE_SOURCE_DIR}/../map_engine")
+if(NOT EXISTS "${AGIS_MAP_ENGINE_DIR}/CMakeLists.txt")
+  message(FATAL_ERROR "map_engine not found at ${AGIS_MAP_ENGINE_DIR} (expected sibling of gis-desktop-win32).")
 endif()
 
 set(AGIS_BGFX_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/bgfx-master")
@@ -178,20 +190,21 @@ set(AGIS_HAVE_DRACO FALSE)
 include(cmake/AGISBundledDraco.cmake)
 
 # --- ui_engine: 独立库（静态 / 动态由 AGIS_UI_ENGINE_SHARED 切换）---
+# 按模块：<模块>/include/… + <模块>/src/*.cpp（core/widgets/gdiplus 为 include/ui_engine/；platform 为 include/platform/，PRIVATE）
 set(_agis_ui_engine_sources
-  ${AGIS_UI_ENGINE_DIR}/src/app.cpp
-  ${AGIS_UI_ENGINE_DIR}/src/platform_factory.cpp
-  ${AGIS_UI_ENGINE_DIR}/src/widget.cpp
-  ${AGIS_UI_ENGINE_DIR}/src/widgets.cpp
-  ${AGIS_UI_ENGINE_DIR}/src/widgets_mainframe.cpp
+  ${AGIS_UI_ENGINE_DIR}/core/src/app.cpp
+  ${AGIS_UI_ENGINE_DIR}/core/src/widget.cpp
+  ${AGIS_UI_ENGINE_DIR}/platform/src/platform_factory.cpp
+  ${AGIS_UI_ENGINE_DIR}/widgets/src/widgets.cpp
+  ${AGIS_UI_ENGINE_DIR}/widgets/src/widgets_mainframe.cpp
 )
 if(WIN32)
-  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/gdiplus_ui.cpp)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/gdiplus/src/gdiplus_ui.cpp)
 endif()
 if(WIN32)
-  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_windows.cpp)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform/src/platform_windows.cpp)
 elseif(APPLE)
-  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_cocoa.mm)
+  list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform/src/platform_cocoa.mm)
 elseif(UNIX)
   if(AGIS_UI_USE_XCB)
     find_path(AGIS_XCB_INCLUDE_DIR NAMES xcb/xcb.h)
@@ -199,10 +212,10 @@ elseif(UNIX)
     if(NOT AGIS_XCB_INCLUDE_DIR OR NOT AGIS_XCB_LIBRARY)
       message(FATAL_ERROR "AGIS_UI_USE_XCB=ON but libxcb not found (set AGIS_XCB_INCLUDE_DIR / AGIS_XCB_LIBRARY)")
     endif()
-    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_xcb.cpp)
+    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform/src/platform_xcb.cpp)
   else()
     find_package(X11 REQUIRED)
-    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/src/platform/platform_xlib.cpp)
+    list(APPEND _agis_ui_engine_sources ${AGIS_UI_ENGINE_DIR}/platform/src/platform_xlib.cpp)
   endif()
 endif()
 
@@ -214,12 +227,9 @@ endif()
 
 set_target_properties(agis_ui_engine PROPERTIES OUTPUT_NAME "agis_ui_engine")
 
-# `ui_engine/...`：`include/ui_engine/`；演示 `ui_engine_demo*` 在 `app/`；平台实现在 `src/platform/`
-target_include_directories(agis_ui_engine PUBLIC
-  ${AGIS_UI_ENGINE_DIR}/include
-  ${AGIS_UI_ENGINE_DIR}/app
-  ${AGIS_UI_ENGINE_DIR}/src/platform
-)
+# 公开 API：`core` / `widgets` / `gdiplus` 的 `include/ui_engine/`；平台私有头在 `platform/include/platform/`（PRIVATE）
+target_include_directories(agis_ui_engine PUBLIC ${AGIS_UI_ENGINE_PUBLIC_INCLUDES})
+target_include_directories(agis_ui_engine PRIVATE ${AGIS_UI_ENGINE_DIR}/platform/include)
 # `widgets_mainframe.cpp` 依赖 `common/ui/ui_private.h`（当前位于 `src/app/common/ui`）
 target_include_directories(agis_ui_engine PRIVATE
   ${CMAKE_SOURCE_DIR}/src
@@ -311,9 +321,7 @@ if(MSVC)
   target_compile_options(agis_bgfx_vendor PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
 endif()
 
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../map_engine" agis_map_engine_build)
-
-add_library(agis_common_app STATIC
+set(_agis_common_app_sources
   src/app/common/runtime/agis_gdal_runtime_env.cpp
   src/app/common/ui/ui_layout.cpp
   src/app/common/ui/ui_debug_pick.cpp
@@ -322,19 +330,50 @@ add_library(agis_common_app STATIC
   src/app/common/app_core/main_globals.cpp
   src/core/app_log.cpp
 )
+if(AGIS_MAP_ENGINE_SHARED)
+  if(NOT WIN32)
+    message(FATAL_ERROR "AGIS_MAP_ENGINE_SHARED=ON is currently only supported on WIN32.")
+  endif()
+  if(NOT AGIS_UI_ENGINE_SHARED)
+    message(FATAL_ERROR
+      "AGIS_MAP_ENGINE_SHARED=ON requires AGIS_UI_ENGINE_SHARED=ON: agis_map_engine.dll links agis_ui_engine; "
+      "with static ui_engine you would duplicate globals across the DLL and the main executable.")
+  endif()
+  add_library(agis_common_app SHARED ${_agis_common_app_sources})
+  set_target_properties(agis_common_app PROPERTIES OUTPUT_NAME "agis_common_app")
+  set_target_properties(agis_common_app PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  target_compile_definitions(agis_common_app PRIVATE AGIS_COMMON_APP_BUILDING=1)
+  target_compile_definitions(agis_common_app INTERFACE AGIS_COMMON_APP_SHARED=1)
+else()
+  add_library(agis_common_app STATIC ${_agis_common_app_sources})
+endif()
 target_include_directories(agis_common_app PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
 target_compile_definitions(agis_common_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_compile_features(agis_common_app PRIVATE cxx_std_20)
 if(NOT AGIS_UI_ENGINE_SHARED)
   target_compile_definitions(agis_common_app PRIVATE AGIS_UI_STATIC=1)
 endif()
+# common 为 DLL 时须在链接阶段解析 ui_theme.cpp → gdiplus_ui（UiSetPanelThemeDark 等）
+if(AGIS_MAP_ENGINE_SHARED)
+  target_link_libraries(agis_common_app PRIVATE agis_ui_engine)
+endif()
+
+add_subdirectory("${AGIS_MAP_ENGINE_DIR}" agis_map_engine_build)
 
 set(AGIS_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/../3rdparty")
 
+set(_agis_workbench_imgui_sources
+  ${AGIS_BGFX_DIR}/examples/common/imgui/imgui.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_draw.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_tables.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_widgets.cpp
+  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
+)
 add_library(agis_workbench_app STATIC
   src/app/common/gis_document/main_gis_xml.cpp
   src/app/common/gis_document/main_gis_document.cpp
@@ -348,17 +387,14 @@ add_library(agis_workbench_app STATIC
   src/app/preview/tile_preview/tile_raster_preview.cpp
   src/app/preview/tile_preview/tile_preview_protocol_picker.cpp
   src/app/workbench/help_data_drivers.cpp
-  ${AGIS_BGFX_DIR}/examples/common/imgui/imgui.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_draw.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_tables.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_widgets.cpp
-  ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
 )
+if(NOT AGIS_MAP_ENGINE_SHARED)
+  target_sources(agis_workbench_app PRIVATE ${_agis_workbench_imgui_sources})
+endif()
 target_include_directories(agis_workbench_app PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
   ${AGIS_BX_DIR}/include
   $<$<AND:$<PLATFORM_ID:Windows>,$<CXX_COMPILER_ID:MSVC>>:${AGIS_BX_DIR}/include/compat/msvc>
   ${AGIS_BX_DIR}/3rdparty
@@ -384,7 +420,7 @@ add_library(agis_converter_app STATIC
 target_include_directories(agis_converter_app PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
 target_link_libraries(agis_converter_app PRIVATE agis_common_app agis_map_engine agis_bgfx_vendor)
 target_compile_definitions(agis_converter_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
@@ -397,7 +433,7 @@ add_executable(agis_desktop WIN32
 target_include_directories(agis_desktop PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
 target_link_libraries(agis_desktop PRIVATE agis_workbench_app agis_common_app)
 
@@ -497,7 +533,7 @@ add_executable(agis_convert_gui WIN32
 target_include_directories(agis_convert_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
 target_link_libraries(agis_convert_gui PRIVATE agis_converter_app agis_common_app)
 set_target_properties(agis_convert_gui PROPERTIES
@@ -544,7 +580,7 @@ add_executable(agis_model_preview_gui WIN32
 target_include_directories(agis_model_preview_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
 set_target_properties(agis_model_preview_gui PROPERTIES
   OUTPUT_NAME "AGIS-ModelPreview"
@@ -588,7 +624,7 @@ add_executable(agis_tile_preview_gui WIN32
 target_include_directories(agis_tile_preview_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/app
-  ${AGIS_UI_ENGINE_DIR}/include
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
 )
 set_target_properties(agis_tile_preview_gui PROPERTIES
   OUTPUT_NAME "AGIS-TilePreview"
@@ -652,6 +688,19 @@ if(WIN32 AND AGIS_UI_ENGINE_SHARED)
       $<TARGET_FILE_DIR:agis_tile_preview_gui>)
 endif()
 
+if(WIN32 AND AGIS_MAP_ENGINE_SHARED)
+  foreach(_agis_me_exe IN ITEMS agis_desktop agis_convert_gui agis_model_preview_gui agis_tile_preview_gui)
+    add_custom_command(TARGET ${_agis_me_exe} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:agis_map_engine>
+        $<TARGET_FILE_DIR:${_agis_me_exe}>)
+    add_custom_command(TARGET ${_agis_me_exe} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:agis_common_app>
+        $<TARGET_FILE_DIR:${_agis_me_exe}>)
+  endforeach()
+endif()
+
 if(MSVC)
   target_sources(agis_desktop PRIVATE app.manifest)
   target_sources(agis_model_preview_gui PRIVATE app.manifest)
@@ -664,18 +713,22 @@ endif()
 # 独立演示：链接 agis_ui_engine（GDI+ / 平台实现已在库内）。
 if(WIN32)
   add_executable(ui_engine_demo WIN32
-    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo.cpp
-    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo_main.cpp
+    ${AGIS_UI_ENGINE_DIR}/demo/src/ui_engine_demo.cpp
+    ${AGIS_UI_ENGINE_DIR}/demo/src/ui_engine_demo_main.cpp
   )
 else()
   add_executable(ui_engine_demo
-    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo.cpp
-    ${AGIS_UI_ENGINE_DIR}/app/ui_engine_demo_main.cpp
+    ${AGIS_UI_ENGINE_DIR}/demo/src/ui_engine_demo.cpp
+    ${AGIS_UI_ENGINE_DIR}/demo/src/ui_engine_demo_main.cpp
   )
 endif()
 
 # `widgets_all.h` → `common/ui/ui_private.h`（主程序侧 Widget 声明，实现仍在 agis_ui_engine）
-target_include_directories(ui_engine_demo PRIVATE ${AGIS_UI_ENGINE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app)
+target_include_directories(ui_engine_demo PRIVATE
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
+  ${AGIS_UI_ENGINE_DIR}/demo/src
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app)
 if(WIN32)
   set_target_properties(ui_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
 endif()
@@ -709,6 +762,87 @@ if(MSVC)
   # 进程启动失败（退出码 0xC0000138 STATUS_ORDINAL_NOT_FOUND）。
   target_sources(ui_engine_demo PRIVATE app.manifest)
   target_compile_options(ui_engine_demo PRIVATE /utf-8)
+endif()
+
+# map_engine：独立演示（顶层 Map 宿主 + GDI+ / agis_common_app）。
+if(WIN32)
+  set(_map_engine_demo_sources ${AGIS_MAP_ENGINE_DIR}/demo/src/map_engine_demo_main.cpp)
+  if(NOT AGIS_MAP_ENGINE_SHARED)
+    list(APPEND _map_engine_demo_sources ${_agis_workbench_imgui_sources})
+  endif()
+  add_executable(map_engine_demo WIN32 ${_map_engine_demo_sources})
+  target_include_directories(map_engine_demo PRIVATE
+    ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/app
+  )
+  if(NOT AGIS_MAP_ENGINE_SHARED)
+    target_include_directories(map_engine_demo PRIVATE
+      ${AGIS_BX_DIR}/include
+      $<$<AND:$<PLATFORM_ID:Windows>,$<CXX_COMPILER_ID:MSVC>>:${AGIS_BX_DIR}/include/compat/msvc>
+      ${AGIS_BX_DIR}/3rdparty
+      ${AGIS_BGFX_DIR}/include
+      ${AGIS_BGFX_DIR}/3rdparty
+      ${AGIS_BGFX_DIR}/3rdparty/khronos
+      ${AGIS_BGFX_DIR}/examples/17-drawstress
+      ${AGIS_BGFX_DIR}/examples/common
+      ${AGIS_BGFX_DIR}/examples/common/imgui
+      ${AGIS_THIRDPARTY_ROOT}
+    )
+  endif()
+  set_target_properties(map_engine_demo PROPERTIES WIN32_EXECUTABLE ON)
+  target_compile_definitions(map_engine_demo PRIVATE
+    UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs}
+    AGIS_USE_BGFX=1 BX_CONFIG_DEBUG=0
+    AGIS_BUILD_MAP_ENGINE_DEMO=1
+  )
+  if(NOT AGIS_UI_ENGINE_SHARED)
+    target_compile_definitions(map_engine_demo PRIVATE AGIS_UI_STATIC=1)
+  endif()
+  target_link_libraries(map_engine_demo PRIVATE
+    agis_map_engine
+    agis_common_app
+    agis_ui_engine
+    agis_bgfx_vendor
+    comctl32
+    comdlg32
+    user32
+    gdi32
+    gdiplus
+    shell32
+    d2d1
+  )
+  target_compile_features(map_engine_demo PRIVATE cxx_std_20)
+  if(AGIS_USE_GDAL AND GDAL_FOUND)
+    target_link_libraries(map_engine_demo PRIVATE GDAL::GDAL)
+    if(TARGET PROJ::proj)
+      target_link_libraries(map_engine_demo PRIVATE PROJ::proj)
+    endif()
+  endif()
+  if(WIN32 AND AGIS_UI_ENGINE_SHARED)
+    add_custom_command(TARGET map_engine_demo POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:agis_ui_engine>
+        $<TARGET_FILE_DIR:map_engine_demo>)
+  endif()
+  if(WIN32 AND AGIS_MAP_ENGINE_SHARED)
+    add_custom_command(TARGET map_engine_demo POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:agis_map_engine>
+        $<TARGET_FILE_DIR:map_engine_demo>)
+    add_custom_command(TARGET map_engine_demo POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:agis_common_app>
+        $<TARGET_FILE_DIR:map_engine_demo>)
+  endif()
+  # 须在 add_executable(map_engine_demo) 之后：此前 if(TARGET map_engine_demo) 恒为假，导致未复制 gdal/proj/curl/tiff。
+  if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED)
+    agis_copy_bundled_gdal_deps_to_exe(map_engine_demo)
+  endif()
+  if(MSVC)
+    target_sources(map_engine_demo PRIVATE app.manifest)
+    target_compile_options(map_engine_demo PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+  endif()
 endif()
 
 # 7 个数据转换后端命令行工具（3 类型互转 6 过程 + 模型↔模型 1 过程）
@@ -788,6 +922,9 @@ if(AGIS_USE_GDAL AND GDAL_FOUND AND EXISTS "${_AGIS_GDAL_GCORE_DATA}/tms_NZTM200
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${_AGIS_GDAL_GCORE_DATA}" "${AGIS_GDAL_DATA_STAGE}"
     COMMENT "Stage GDAL_DATA (gcore/data) for AGIS")
   add_dependencies(agis_desktop agis_gdal_runtime_data)
+  if(TARGET map_engine_demo)
+    add_dependencies(map_engine_demo agis_gdal_runtime_data)
+  endif()
   # 仅挂在 agis_desktop 上复制一份：各转换工具与主程序默认在同一 $(OutDir)/Configuration 目录下，
   # 若对每个 exe 各自 POST_BUILD copy_directory，并行编译时会多进程同时写同一 gdal_data，易触发 MSB3073。
   add_custom_command(
@@ -796,6 +933,14 @@ if(AGIS_USE_GDAL AND GDAL_FOUND AND EXISTS "${_AGIS_GDAL_GCORE_DATA}/tms_NZTM200
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${AGIS_GDAL_DATA_STAGE}"
             "$<TARGET_FILE_DIR:agis_desktop>/gdal_data"
     COMMENT "Copy GDAL_DATA next to AGIS (shared by convert tools in same output dir)")
+  if(TARGET map_engine_demo)
+    add_custom_command(
+      TARGET map_engine_demo
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${AGIS_GDAL_DATA_STAGE}"
+              "$<TARGET_FILE_DIR:map_engine_demo>/gdal_data"
+      COMMENT "Copy GDAL_DATA next to map_engine_demo")
+  endif()
   foreach(_t IN LISTS _agis_convert_tools)
     add_dependencies(${_t} agis_gdal_runtime_data)
   endforeach()
@@ -821,7 +966,8 @@ if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED AND TARGET gener
     agis_desktop
     agis_tile_preview_gui
     agis_model_preview_gui
-    agis_convert_gui)
+    agis_convert_gui
+    map_engine_demo)
   foreach(_c IN LISTS _agis_proj_runtime_consumers)
     if(TARGET "${_c}")
       add_dependencies("${_c}" agis_proj_runtime_data)
@@ -836,6 +982,14 @@ if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED AND TARGET gener
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${AGIS_PROJ_DATA_STAGE}"
             "$<TARGET_FILE_DIR:agis_desktop>/proj_data"
     COMMENT "Copy PROJ_DATA next to AGIS (shared OutDir)")
+  if(TARGET map_engine_demo)
+    add_custom_command(
+      TARGET map_engine_demo
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${AGIS_PROJ_DATA_STAGE}"
+              "$<TARGET_FILE_DIR:map_engine_demo>/proj_data"
+      COMMENT "Copy PROJ_DATA next to map_engine_demo")
+  endif()
 endif()
 
 add_dependencies(agis_desktop ${_agis_convert_tools})

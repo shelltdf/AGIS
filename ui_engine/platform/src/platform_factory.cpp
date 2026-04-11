@@ -4,14 +4,14 @@
 #include <utility>
 
 #if defined(_WIN32)
-#include "platform_windows.h"
+#include "platform/platform_windows.h"
 #elif defined(__APPLE__)
-#include "platform_cocoa.h"
+#include "platform/platform_cocoa.h"
 #elif defined(__linux__) || defined(__unix__)
 #if defined(AGIS_UI_USE_XCB)
-#include "platform_xcb.h"
+#include "platform/platform_xcb.h"
 #else
-#include "platform_xlib.h"
+#include "platform/platform_xlib.h"
 #endif
 #endif
 

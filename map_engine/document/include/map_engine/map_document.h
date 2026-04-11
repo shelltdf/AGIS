@@ -7,6 +7,12 @@
 #include <vector>
 
 struct MapDocument {
+  MapDocument() = default;
+  MapDocument(const MapDocument&) = delete;
+  MapDocument& operator=(const MapDocument&) = delete;
+  MapDocument(MapDocument&&) = default;
+  MapDocument& operator=(MapDocument&&) = default;
+
   std::vector<std::unique_ptr<MapLayer>> layers;
   ViewExtent view{};
   /** 无图层时是否绘制经纬网（要素可见性）。 */

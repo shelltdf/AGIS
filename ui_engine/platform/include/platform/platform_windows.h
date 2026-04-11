@@ -13,7 +13,7 @@ class PlatformWindows;
 /**
  * Win32 USER32 消息循环（`GetMessage` / `DispatchMessage`）。
  * `UiEngineDemo`：`runEventLoop` 内按 `App::rootWidgets()` 为每个根创建一个顶级 `HWND`，全部关闭后 `PostQuitMessage`。
- * 带 `AppLaunchParams` 的构造见 `platform_windows.cpp`（`AGIS_BUILD_UI_ENGINE_DEMO`）；入口见 `ui_engine/app/ui_engine_demo_main.cpp`。
+ * 带 `AppLaunchParams` 的构造见 `platform_windows.cpp`（`AGIS_BUILD_UI_ENGINE_DEMO`）；入口见 `ui_engine/demo/src/ui_engine_demo_main.cpp`。
  */
 class AGIS_UI_API PlatformWindows : public IGuiPlatform {
  public:

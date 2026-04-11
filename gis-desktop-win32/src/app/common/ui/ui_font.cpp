@@ -28,15 +28,15 @@ static HFONT CreateLogMonoFontInternal() {
   return f;
 }
 
-HFONT UiGetAppFont() {
+AGIS_COMMON_API HFONT UiGetAppFont() {
   return g_appUiFont ? g_appUiFont : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 }
 
-HFONT UiGetLogFont() {
+AGIS_COMMON_API HFONT UiGetLogFont() {
   return g_logMonoFont ? g_logMonoFont : UiGetAppFont();
 }
 
-void UiFontInit() {
+AGIS_COMMON_API void UiFontInit() {
   if (!g_appUiFont) {
     g_appUiFont = CreateYaHeiFallback();
     if (!g_appUiFont) {
@@ -57,7 +57,7 @@ void UiFontInit() {
   }
 }
 
-void UiFontShutdown() {
+AGIS_COMMON_API void UiFontShutdown() {
   if (g_logMonoFontOwned && g_logMonoFont && g_logMonoFont != g_appUiFont) {
     DeleteObject(g_logMonoFont);
   }

@@ -1895,7 +1895,7 @@ bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector
 
 }  // namespace
 
-LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   MapEngine& eng = MapEngine::Instance();
   switch (msg) {
     case WM_CREATE:

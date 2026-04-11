@@ -43,9 +43,9 @@ void ApplySetWindowTheme(HWND w, bool dark) {
 
 }  // namespace
 
-AgisThemeMenu g_themeMenu = AgisThemeMenu::kFollowSystem;
+AGIS_COMMON_API AgisThemeMenu g_themeMenu = AgisThemeMenu::kFollowSystem;
 
-bool AgisWindowsPrefersDarkApps() {
+AGIS_COMMON_API bool AgisWindowsPrefersDarkApps() {
   DWORD val = 1;
   DWORD cb = sizeof(val);
   HKEY hkey = nullptr;
@@ -62,7 +62,7 @@ bool AgisWindowsPrefersDarkApps() {
   return val == 0;
 }
 
-bool AgisEffectiveUiDark() {
+AGIS_COMMON_API bool AgisEffectiveUiDark() {
   switch (g_themeMenu) {
     case AgisThemeMenu::kDark:
       return true;
@@ -73,7 +73,7 @@ bool AgisEffectiveUiDark() {
   }
 }
 
-void AgisApplyDwmDark(HWND hwnd, bool dark) {
+AGIS_COMMON_API void AgisApplyDwmDark(HWND hwnd, bool dark) {
   if (!hwnd || !IsWindow(hwnd)) {
     return;
   }
@@ -82,7 +82,7 @@ void AgisApplyDwmDark(HWND hwnd, bool dark) {
   (void)hr;
 }
 
-void AgisApplyTheme(HWND mainHwnd) {
+AGIS_COMMON_API void AgisApplyTheme(HWND mainHwnd) {
   const bool dark = AgisEffectiveUiDark();
   UiSetPanelThemeDark(dark);
   RecreateMainClientBrush(dark);
@@ -145,11 +145,11 @@ void AgisApplyTheme(HWND mainHwnd) {
   }
 }
 
-HBRUSH AgisMainClientBackgroundBrush() {
+AGIS_COMMON_API HBRUSH AgisMainClientBackgroundBrush() {
   return g_mainClientBrush;
 }
 
-void AgisLoadThemePreference() {
+AGIS_COMMON_API void AgisLoadThemePreference() {
   HKEY hkey = nullptr;
   if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegAgis, 0, KEY_READ, &hkey) != ERROR_SUCCESS) {
     return;
@@ -164,7 +164,7 @@ void AgisLoadThemePreference() {
   RegCloseKey(hkey);
 }
 
-void AgisSaveThemePreference() {
+AGIS_COMMON_API void AgisSaveThemePreference() {
   HKEY hkey = nullptr;
   DWORD disp = 0;
   if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegAgis, 0, nullptr, 0, KEY_WRITE, nullptr, &hkey, &disp) != ERROR_SUCCESS) {

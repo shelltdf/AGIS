@@ -15,7 +15,8 @@
       "inherits": "win-vs2022",
       "cacheVariables": {
         "AGIS_BUNDLED_LIBS_SHARED": "OFF",
-        "AGIS_UI_ENGINE_SHARED": "OFF"
+        "AGIS_UI_ENGINE_SHARED": "OFF",
+        "AGIS_MAP_ENGINE_SHARED": "OFF"
       }
     }
   ],

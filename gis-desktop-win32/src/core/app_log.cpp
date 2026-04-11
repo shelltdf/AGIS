@@ -9,7 +9,7 @@ HWND g_logEdit = nullptr;
 
 }  // namespace
 
-void AppLogLine(const wchar_t* line) {
+AGIS_COMMON_API void AppLogLine(const wchar_t* line) {
   if (!line) {
     return;
   }
@@ -22,13 +22,13 @@ void AppLogLine(const wchar_t* line) {
   AppLogFlushToEdit();
 }
 
-void AppLogLine(const std::wstring& line) { AppLogLine(line.c_str()); }
+AGIS_COMMON_API void AppLogLine(const std::wstring& line) { AppLogLine(line.c_str()); }
 
-const std::wstring& AppLogGetText() { return g_log; }
+AGIS_COMMON_API const std::wstring& AppLogGetText() { return g_log; }
 
-void AppLogSetEdit(HWND edit) { g_logEdit = edit; }
+AGIS_COMMON_API void AppLogSetEdit(HWND edit) { g_logEdit = edit; }
 
-void AppLogFlushToEdit() {
+AGIS_COMMON_API void AppLogFlushToEdit() {
   if (g_logEdit && IsWindow(g_logEdit)) {
     SetWindowTextW(g_logEdit, g_log.c_str());
     const int len = GetWindowTextLengthW(g_logEdit);

@@ -2,7 +2,9 @@
 
 /**
  * ui_engine 演示：构建含主框架壳层（菜单栏 / 工具栏 / 状态栏与多 Dock）的 Widget 树。
- * Windows 下 `AGIS_BUILD_UI_ENGINE_DEMO` 时 GDI+ 演示壳见 `ui_engine/src/platform/platform_windows.cpp`。
+ * Windows 下 `AGIS_BUILD_UI_ENGINE_DEMO` 时 GDI+ 演示壳见 `ui_engine/platform/src/platform_windows.cpp`。
+ *
+ * 本头仅被 demo 的 .cpp 使用，不安装、不单独 export include 目录。
  */
 
 #include <memory>

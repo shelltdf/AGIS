@@ -1,6 +1,6 @@
 #include "common/app_core/main_globals.h"
 
-void AgisCenterWindowInMonitorWorkArea(HWND hwnd, HWND refForMonitor) {
+AGIS_COMMON_API void AgisCenterWindowInMonitorWorkArea(HWND hwnd, HWND refForMonitor) {
   if (!hwnd || !IsWindow(hwnd)) {
     return;
   }
@@ -23,40 +23,40 @@ void AgisCenterWindowInMonitorWorkArea(HWND hwnd, HWND refForMonitor) {
   SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-HWND g_hwndMain = nullptr;
-HWND g_hwndToolbar = nullptr;
-HWND g_hwndLayerStrip = nullptr;
-HWND g_hwndLayer = nullptr;
-HWND g_hwndMap = nullptr;
-HWND g_hwndMapShell = nullptr;
-HWND g_hwndProps = nullptr;
-HWND g_hwndPropsStrip = nullptr;
-HWND g_hwndStatus = nullptr;
-HWND g_hwndLogDlg = nullptr;
-HWND g_hwndConvertDlg = nullptr;
-HWND g_hwndHelpDataDriversDlg = nullptr;
-std::wstring g_currentGisPath;
-int g_layerContentW = 236;
-int g_propsContentW = 256;
-int g_layerSelIndex = -1;
-int g_splitterDrag = 0;
-bool g_view3d = false;
-bool g_showLayerDock = true;
-bool g_showPropsDock = true;
-bool g_layerDockExpanded = true;
-bool g_propsDockExpanded = true;
-int g_toolbarHeight = 0;
-HIMAGELIST g_toolbarImageList = nullptr;
-HMENU g_hmenuProjSub = nullptr;
-std::wstring g_pendingPreviewModelPath;
-bool g_pendingPreviewLoadAs3DTiles = false;
+AGIS_COMMON_API HWND g_hwndMain = nullptr;
+AGIS_COMMON_API HWND g_hwndToolbar = nullptr;
+AGIS_COMMON_API HWND g_hwndLayerStrip = nullptr;
+AGIS_COMMON_API HWND g_hwndLayer = nullptr;
+AGIS_COMMON_API HWND g_hwndMap = nullptr;
+AGIS_COMMON_API HWND g_hwndMapShell = nullptr;
+AGIS_COMMON_API HWND g_hwndProps = nullptr;
+AGIS_COMMON_API HWND g_hwndPropsStrip = nullptr;
+AGIS_COMMON_API HWND g_hwndStatus = nullptr;
+AGIS_COMMON_API HWND g_hwndLogDlg = nullptr;
+AGIS_COMMON_API HWND g_hwndConvertDlg = nullptr;
+AGIS_COMMON_API HWND g_hwndHelpDataDriversDlg = nullptr;
+AGIS_COMMON_API std::wstring g_currentGisPath;
+AGIS_COMMON_API int g_layerContentW = 236;
+AGIS_COMMON_API int g_propsContentW = 256;
+AGIS_COMMON_API int g_layerSelIndex = -1;
+AGIS_COMMON_API int g_splitterDrag = 0;
+AGIS_COMMON_API bool g_view3d = false;
+AGIS_COMMON_API bool g_showLayerDock = true;
+AGIS_COMMON_API bool g_showPropsDock = true;
+AGIS_COMMON_API bool g_layerDockExpanded = true;
+AGIS_COMMON_API bool g_propsDockExpanded = true;
+AGIS_COMMON_API int g_toolbarHeight = 0;
+AGIS_COMMON_API HIMAGELIST g_toolbarImageList = nullptr;
+AGIS_COMMON_API HMENU g_hmenuProjSub = nullptr;
+AGIS_COMMON_API std::wstring g_pendingPreviewModelPath;
+AGIS_COMMON_API bool g_pendingPreviewLoadAs3DTiles = false;
 
-const wchar_t kMainClass[] = L"AGISMainFrame";
-const wchar_t kLayerClass[] = L"AGISLayerPane";
-const wchar_t kMapClass[] = L"AGISMapHost";
-const wchar_t kMapShellClass[] = L"AGISMapShell";
-const wchar_t kPropsClass[] = L"AGISPropsPane";
-const wchar_t kLogClass[] = L"AGISLogWindow";
-const wchar_t kConvertClass[] = L"AGISDataConvertWindow";
-const wchar_t kModelPreviewClass[] = L"AGISModelPreviewWindow";
-const wchar_t kTilePreviewClass[] = L"AGISTileRasterPreviewWindow";
+AGIS_COMMON_API const wchar_t kMainClass[] = L"AGISMainFrame";
+AGIS_COMMON_API const wchar_t kLayerClass[] = L"AGISLayerPane";
+AGIS_COMMON_API const wchar_t kMapClass[] = L"AGISMapHost";
+AGIS_COMMON_API const wchar_t kMapShellClass[] = L"AGISMapShell";
+AGIS_COMMON_API const wchar_t kPropsClass[] = L"AGISPropsPane";
+AGIS_COMMON_API const wchar_t kLogClass[] = L"AGISLogWindow";
+AGIS_COMMON_API const wchar_t kConvertClass[] = L"AGISDataConvertWindow";
+AGIS_COMMON_API const wchar_t kModelPreviewClass[] = L"AGISModelPreviewWindow";
+AGIS_COMMON_API const wchar_t kTilePreviewClass[] = L"AGISTileRasterPreviewWindow";
