@@ -36,6 +36,8 @@ std::wstring PromptOpenGisPath(HWND owner);
 std::wstring PromptSaveGisPath(HWND owner, const std::wstring& seed);
 void GisNew(HWND owner);
 void GisOpen(HWND owner);
+/// 从路径打开 .gis（或含 `<agis-gis>` 的 .xml）；失败时弹窗。供命令行 /「打开方式」等复用。
+void GisOpenFromPath(HWND owner, const std::wstring& path);
 void GisSaveAs(HWND owner);
 void GisSave(HWND owner);
 

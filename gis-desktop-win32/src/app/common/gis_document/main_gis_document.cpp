@@ -263,20 +263,29 @@ void GisNew(HWND owner) {
   MessageBoxW(owner, L"已新建空白 .gis 文档（XML）。", L"AGIS", MB_OK | MB_ICONINFORMATION);
 }
 
-void GisOpen(HWND owner) {
-  const std::wstring path = PromptOpenGisPath(owner);
+void GisOpenFromPath(HWND owner, const std::wstring& path) {
   if (path.empty()) {
     return;
   }
   std::wstring err;
   if (!LoadGisXmlFrom(path, &err)) {
-    MessageBoxW(owner, err.c_str(), L"打开 .gis 失败", MB_OK | MB_ICONWARNING);
+    if (owner) {
+      MessageBoxW(owner, err.c_str(), L"打开 .gis 失败", MB_OK | MB_ICONWARNING);
+    }
     return;
   }
   g_currentGisPath = path;
   RefreshUiAfterDocumentReload();
   SyncMainTitle();
   AppLogLine(std::wstring(L"[GIS] 打开文件：") + path);
+}
+
+void GisOpen(HWND owner) {
+  const std::wstring path = PromptOpenGisPath(owner);
+  if (path.empty()) {
+    return;
+  }
+  GisOpenFromPath(owner, path);
 }
 
 void GisSaveAs(HWND owner) {

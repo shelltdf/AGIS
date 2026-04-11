@@ -1087,7 +1087,7 @@ static Gdiplus::Bitmap* TileBitmapCacheGet(TilePreviewState* st, uint64_t key, c
 }
 
 /// 仅查找已缓存位图，不调整 LRU（供 HUD 读尺寸，避免与瓦片绘制 pass 重复 Touch 同键）。
-static Gdiplus::Bitmap* TileBitmapCachePeek(TilePreviewState* st, uint64_t key) {
+static Gdiplus::Bitmap* TileBitmapCachePeek(const TilePreviewState* st, uint64_t key) {
   if (!st) {
     return nullptr;
   }
@@ -1542,7 +1542,7 @@ static void SlippyPixelToBilinearInQuad(const RECT& img, int px, int py, const d
 }
 
 /// 与 `TileSlippyBuildPaintLayout` 一致：地图客户区与视口 `worldLeft`/`worldTop`/`worldW`/`worldH`（片元浮点坐标）线性对应。
-/// 用于整视口 PROJ 重采样与指针反算，避免对四角经纬度双线性插值与 `SlippyTileXYToLonLat` 非线性不一致（相对橙框错位）。
+/// 用于整视口 PROJ 重采样与指针反算，避免对四角经纬度双线性插值与 `SlippyTileXYToLonLat` 非线性不一致（相对瓦片绘制区错位）。
 static void SlippyPixelCenterToFractionalTile(const RECT& img, int px, int py, const TileSlippyPaintLayout& lay,
                                               double* outTileX, double* outTileY) {
   if (!outTileX || !outTileY) {
@@ -1561,9 +1561,9 @@ static void SlippyPixelCenterToFractionalTile(const RECT& img, int px, int py, c
 }
 
 /// 与 `SlippyPixelCenterToFractionalTile` 互逆：片元浮点坐标 → 客户区像素中心（双精度）。
-/// 等经纬模式下橙框/无 GDAL 拼贴与整视口 PROJ 重采样均用此映射，使「屏上位置 ↔ 片元 (tx,ty)」与墨卡托纬向非线性一致，避免仿射 lat∝屏 Y 导致底图竖向拉伸。
-static void SlippyFractionalTileToClientPixelCenter(const TileSlippyPaintLayout& lay, double tileX, double tileY,
-                                                    double* outCx, double* outCy) {
+/// @param clampUvToMap true 时将 u,v 限制在 [0,1]（指针/拼贴命中与旧行为一致）；false 时线性外推，供瓦片四角外包与 `imageArea` 求交，避免靠边瓦片橙框因角点被夹到边界而压扁。
+static void SlippyFractionalTileToClientPixelCenterEx(const TileSlippyPaintLayout& lay, double tileX, double tileY,
+                                                      double* outCx, double* outCy, bool clampUvToMap) {
   if (!outCx || !outCy) {
     return;
   }
@@ -1572,10 +1572,18 @@ static void SlippyFractionalTileToClientPixelCenter(const TileSlippyPaintLayout&
   const double ah = static_cast<double>((std::max)(1, lay.ah));
   double u = (tileX - lay.worldLeft) / lay.worldW;
   double v = (tileY - lay.worldTop) / lay.worldH;
-  u = (std::clamp)(u, 0.0, 1.0);
-  v = (std::clamp)(v, 0.0, 1.0);
+  if (clampUvToMap) {
+    u = (std::clamp)(u, 0.0, 1.0);
+    v = (std::clamp)(v, 0.0, 1.0);
+  }
   *outCx = static_cast<double>(img.left) + u * aw;
   *outCy = static_cast<double>(img.top) + v * ah;
+}
+
+/// 指针读数等：u,v 夹到 [0,1]，与 `SlippyPixelCenterToFractionalTile` 互逆。
+static void SlippyFractionalTileToClientPixelCenter(const TileSlippyPaintLayout& lay, double tileX, double tileY,
+                                                    double* outCx, double* outCy) {
+  SlippyFractionalTileToClientPixelCenterEx(lay, tileX, tileY, outCx, outCy, true);
 }
 
 /// 片元 X 可小于 0 或大于 dim（平移视口），反算经度会落在 [-180,180] 之外；折叠到主经度范围。
@@ -2044,113 +2052,38 @@ static void SlippyLonLatToScreenCea(const TileSlippyPaintLayout& lay, double lon
   *sy = static_cast<int>(std::lround(lay.imgCenterY - (std::sin(latR) - std::sin(cLatR)) * lay.rPixCea));
 }
 
-/// 橘色瓦片 HUD：在片元屏上外接框外包一层轴对齐矩形，且 **宽:高 = 2:1**（经典经纬画布比），居中；底图拼贴/PROJ 几何不变。
-static void SlippyOrangeHudRect2to1AroundAabb(int minx, int miny, int maxx, int maxy, RECT* out) {
-  if (!out) {
-    return;
-  }
-  const int ow = (std::max)(1, maxx - minx);
-  const int oh = (std::max)(1, maxy - miny);
-  const int cx = (minx + maxx) / 2;
-  const int cy = (miny + maxy) / 2;
-  const int H = (std::max)(oh, (ow + 1) / 2);
-  const int W = 2 * H;
-  const int left = cx - W / 2;
-  const int top = cy - H / 2;
-  *out = {left, top, left + W, top + H};
-}
-
-static void SlippyGetTileScreenBounds(const TilePreviewState* st, const TileSlippyPaintLayout& lay, int tx, int ty, RECT* out) {
+/// 该片 GDI+ DrawImage 轴对齐目的地（片元线性 **不** clamp u,v；不与 `imageArea` 求交）。导出 `rasterBlitDestClient` 与此一致。
+static void SlippyGetTileClientDestRaw(const TilePreviewState* st, const TileSlippyPaintLayout& lay, int tx, int ty, RECT* out) {
   if (!st || !out) {
     return;
   }
   if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
     const RECT& imgArea = lay.imgArea;
-    const int sx = imgArea.left +
-                   static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * st->pixelsPerTile));
-    const int sy =
-        imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * st->pixelsPerTile));
-    const int sw = (std::max)(1, static_cast<int>((std::ceil)(st->pixelsPerTile)) + 1);
-    SlippyOrangeHudRect2to1AroundAabb(sx, sy, sx + sw, sy + sw, out);
-    return;
-  }
-  int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
-  if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
-    double cxa, cya, cxb, cyb, cxc, cyc, cxd, cyd;
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd);
-    sxa = static_cast<int>(std::lround(cxa));
-    sya = static_cast<int>(std::lround(cya));
-    sxb = static_cast<int>(std::lround(cxb));
-    syb = static_cast<int>(std::lround(cyb));
-    sxc = static_cast<int>(std::lround(cxc));
-    syc = static_cast<int>(std::lround(cyc));
-    sxd = static_cast<int>(std::lround(cxd));
-    syd = static_cast<int>(std::lround(cyd));
-  } else {
-    const int z = st->viewZ;
-    double lon0, lat0, lon1, lat1, lon2, lat2, lon3, lat3;
-    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty), z, &lon0, &lat0);
-    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty), z, &lon1, &lat1);
-    SlippyTileXYToLonLat(static_cast<double>(tx), static_cast<double>(ty + 1), z, &lon2, &lat2);
-    SlippyTileXYToLonLat(static_cast<double>(tx + 1), static_cast<double>(ty + 1), z, &lon3, &lat3);
-    SlippyLonLatToScreenCea(lay, lon0, lat0, &sxa, &sya);
-    SlippyLonLatToScreenCea(lay, lon1, lat1, &sxb, &syb);
-    SlippyLonLatToScreenCea(lay, lon2, lat2, &sxc, &syc);
-    SlippyLonLatToScreenCea(lay, lon3, lat3, &sxd, &syd);
-  }
-  const int minx = (std::min)({sxa, sxb, sxc, sxd});
-  const int maxx = (std::max)({sxa, sxb, sxc, sxd});
-  const int miny = (std::min)({sya, syb, syc, syd});
-  const int maxy = (std::max)({sya, syb, syc, syd});
-  SlippyOrangeHudRect2to1AroundAabb(minx, miny, maxx, maxy, out);
-}
-
-/// 与 TilePaintSlippyTiles / TilePaintOneSlippyTileGeo 一致，供场景 JSON 描述「橙色网格」与「光栅绘制目的地」。
-/// @param rasterIsFullViewportProj 由调用方一次性判定（非 WebMercator 且 PROJ 重采样成功时整幅地图为单遍着色）。
-static void SlippyGetTileRasterBlitRectForExport(TilePreviewState* st, const TileSlippyPaintLayout& lay, int tx, int ty,
-                                                bool rasterIsFullViewportProj, RECT* out_blitRect,
-                                                bool* out_webMercNativeBmpSize) {
-  if (!st || !out_blitRect || !out_webMercNativeBmpSize) {
-    return;
-  }
-  *out_webMercNativeBmpSize = false;
-  SetRectEmpty(out_blitRect);
-  if (rasterIsFullViewportProj) {
-    return;
-  }
-  if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
-    const RECT& imgArea = lay.imgArea;
     const double ppt = static_cast<double>(st->pixelsPerTile);
-    const int sx = imgArea.left +
-                   static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * ppt));
-    const int sy =
-        imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * ppt));
+    const int sx = imgArea.left + static_cast<int>(std::lround((static_cast<double>(tx) - lay.worldLeft) * ppt));
+    const int sy = imgArea.top + static_cast<int>(std::lround((static_cast<double>(ty) - lay.worldTop) * ppt));
     const int sw = (std::max)(1, static_cast<int>((std::ceil)(st->pixelsPerTile)) + 1);
-    *out_blitRect = {sx, sy, sx + sw, sy + sw};
     const uint64_t key = PackTileKey(st->viewZ, tx, ty);
     if (st->slippyPaths.find(key) != st->slippyPaths.end()) {
       if (Gdiplus::Bitmap* bm = TileBitmapCachePeek(st, key)) {
         const int iw = bm->GetWidth();
         const int ih = bm->GetHeight();
         if (iw > 0 && ih > 0 && std::abs(iw - sw) <= 1 && std::abs(ih - sw) <= 1) {
-          *out_blitRect = {sx, sy, sx + iw, sy + ih};
-          *out_webMercNativeBmpSize = true;
+          *out = {sx, sy, sx + iw, sy + ih};
+          return;
         }
       }
     }
+    *out = {sx, sy, sx + sw, sy + sw};
     return;
   }
-  const TileSlippyProjection proj = st->slippyProjection;
   int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
-  if (proj == TileSlippyProjection::kEquirectangular) {
+  if (st->slippyProjection == TileSlippyProjection::kEquirectangular) {
     double cxa, cya, cxb, cyb, cxc, cyc, cxd, cyd;
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya, false);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb, false);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc, false);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd, false);
     sxa = static_cast<int>(std::lround(cxa));
     sya = static_cast<int>(std::lround(cya));
     sxb = static_cast<int>(std::lround(cxb));
@@ -2177,7 +2110,51 @@ static void SlippyGetTileRasterBlitRectForExport(TilePreviewState* st, const Til
   const int maxy = (std::max)({sya, syb, syc, syd});
   const int rw = (std::max)(1, maxx - minx);
   const int rh = (std::max)(1, maxy - miny);
-  *out_blitRect = {minx, miny, minx + rw, miny + rh};
+  *out = {minx, miny, minx + rw, miny + rh};
+}
+
+/// 瓦片网格辅助框（橘黄）：在 Raw 目的地与 `lay.imgArea` 求交，只画地图区内可见段；避免整视口 PROJ 时靠边格因 u,v clamp 被压成细条。
+static void SlippyGetTileScreenBounds(const TilePreviewState* st, const TileSlippyPaintLayout& lay, int tx, int ty, RECT* out) {
+  if (!st || !out) {
+    return;
+  }
+  RECT raw{};
+  SlippyGetTileClientDestRaw(st, lay, tx, ty, &raw);
+  RECT vis{};
+  if (IntersectRect(&vis, &raw, &lay.imgArea)) {
+    *out = vis;
+  } else {
+    SetRectEmpty(out);
+  }
+}
+
+/// 与 TilePaintSlippyTiles / TilePaintOneSlippyTileGeo 一致，供场景 JSON 描述「橙色网格」与「光栅绘制目的地」。
+/// @param rasterIsFullViewportProj 由调用方一次性判定（非 WebMercator 且 PROJ 重采样成功时整幅地图为单遍着色）。
+static void SlippyGetTileRasterBlitRectForExport(TilePreviewState* st, const TileSlippyPaintLayout& lay, int tx, int ty,
+                                                bool rasterIsFullViewportProj, RECT* out_blitRect,
+                                                bool* out_webMercNativeBmpSize) {
+  if (!st || !out_blitRect || !out_webMercNativeBmpSize) {
+    return;
+  }
+  *out_webMercNativeBmpSize = false;
+  SetRectEmpty(out_blitRect);
+  if (rasterIsFullViewportProj) {
+    return;
+  }
+  SlippyGetTileClientDestRaw(st, lay, tx, ty, out_blitRect);
+  if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
+    const uint64_t key = PackTileKey(st->viewZ, tx, ty);
+    if (st->slippyPaths.find(key) != st->slippyPaths.end()) {
+      if (Gdiplus::Bitmap* bm = TileBitmapCachePeek(st, key)) {
+        const int iw = bm->GetWidth();
+        const int ih = bm->GetHeight();
+        const int sw = (std::max)(1, static_cast<int>((std::ceil)(st->pixelsPerTile)) + 1);
+        if (iw > 0 && ih > 0 && std::abs(iw - sw) <= 1 && std::abs(ih - sw) <= 1) {
+          *out_webMercNativeBmpSize = true;
+        }
+      }
+    }
+  }
 }
 
 static bool TileSlippyBuildPaintLayout(RECT cr, TilePreviewState* st, TileSlippyPaintLayout* out) {
@@ -2517,7 +2494,7 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     j += ",\n      \"projResamplePipelineZh\": ";
 #if GIS_DESKTOP_HAVE_GDAL
     Utf8AppendJsonEscapedString(
-        &j, L"非「XYZ 网格」时：等比例经纬度模式每像素 SlippyPixelCenterToFractionalTile→SlippyTileXYToLonLat 得 WGS84，经 PROJ EPSG:4326→EPSG:3857 再 Slippy3857MetersToFractionalTile 纹理双线性（屏上映射与 XYZ 片元拓扑一致，非整屏「1°经像素长=1°纬像素长」的仿射 Plate Carrée）。等积圆柱为客户区像素与 SlippyLonLatToScreenCea 互逆得 WGS84 后走 WGS84→CEA→EPSG:3857。橘色 HUD 为片元屏上外接框外包宽:高=2:1 轴对齐矩形（底图拓扑不变）。");
+        &j, L"非「XYZ 网格」时：等比例经纬度模式每像素 SlippyPixelCenterToFractionalTile→SlippyTileXYToLonLat 得 WGS84，经 PROJ EPSG:4326→EPSG:3857 再 Slippy3857MetersToFractionalTile 纹理双线性（屏上映射与 XYZ 片元拓扑一致，非整屏「1°经像素长=1°纬像素长」的仿射 Plate Carrée）。等积圆柱为客户区像素与 SlippyLonLatToScreenCea 互逆得 WGS84 后走 WGS84→CEA→EPSG:3857。");
 #else
     Utf8AppendJsonEscapedString(&j, L"当前构建无 GDAL/PROJ：等经纬/等积圆柱为示意几何，非严格重采样。");
 #endif
@@ -2745,8 +2722,8 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     }
     j += ",\n      \"exportNoteZh\": ";
     Utf8AppendJsonEscapedString(
-        &j, L"gridHudRectClient：与橙色瓦片框一致（SlippyGetTileScreenBounds）；各显示模式下均为宽:高=2:1、轴对齐且包住本格屏上外接框（底图拓扑不变）。"
-            L"rasterBlitDestClient：与 GDI+ DrawImage 目标矩形一致；per_pixel_proj_full_viewport 时为 null（整幅 imageArea 单遍 PROJ 重采样）。"
+        &j, L"gridHudRectClient：橘黄框＝SlippyGetTileClientDestRaw 与 imageArea 求交（SlippyGetTileScreenBounds）；等经纬四角 u,v 不夹取后再求交，避免靠边格压扁。仅供肉眼对照 z/x/y。"
+            L"rasterBlitDestClient：SlippyGetTileClientDestRaw（未与 imageArea 求交），与 per-tile DrawImage 目的地一致；per_pixel_proj_full_viewport 时为 null。"
             L"textureDecodeCached：仅 LRU 已缓存时非 null。"
             L"bbox3857Meters：该片在球面 Web 墨卡托 XYZ 下的纹理空间外包（米），与瓦片 PNG 的 EPSG:3857 覆盖一致；PROJ 椭球 3857 边界略有差异。");
     j += ",\n";
@@ -3044,10 +3021,10 @@ static void TilePaintOneSlippyTileGeo(Gdiplus::Graphics& g, TilePreviewState* st
   int sxa, sya, sxb, syb, sxc, syc, sxd, syd;
   if (proj == TileSlippyProjection::kEquirectangular) {
     double cxa, cya, cxb, cyb, cxc, cyc, cxd, cyd;
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc);
-    SlippyFractionalTileToClientPixelCenter(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx), static_cast<double>(ty), &cxa, &cya, false);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx + 1), static_cast<double>(ty), &cxb, &cyb, false);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx), static_cast<double>(ty + 1), &cxc, &cyc, false);
+    SlippyFractionalTileToClientPixelCenterEx(lay, static_cast<double>(tx + 1), static_cast<double>(ty + 1), &cxd, &cyd, false);
     sxa = static_cast<int>(std::lround(cxa));
     sya = static_cast<int>(std::lround(cya));
     sxb = static_cast<int>(std::lround(cxb));
@@ -3129,6 +3106,8 @@ static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippy
   g.SetSmoothingMode(Gdiplus::SmoothingModeNone);
   g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
   g.SetCompositingQuality(Gdiplus::CompositingQualityHighSpeed);
+  g.SetClip(Gdiplus::Rect(static_cast<INT>(imgArea.left), static_cast<INT>(imgArea.top),
+                          static_cast<INT>((std::max)(1, lay.aw)), static_cast<INT>((std::max)(1, lay.ah))));
   Gdiplus::SolidBrush miss(Gdiplus::Color(255, 238, 240, 245));
   if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
     for (int ty = lay.ty0; ty <= lay.ty1; ++ty) {
@@ -3201,7 +3180,7 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
                TileSlippyProjectionLongLabel(st->slippyProjection), st->viewZ, st->indexMaxZ,
                static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile), lay.tx0, lay.tx1, lay.ty0,
                lay.ty1, st->tileCount,
-               L"橙框：宽:高=2:1（经典经纬画布比），轴对齐包住本格屏上外接矩形；底图几何仍为 Slippy+PROJ/XYZ 拓扑。\n");
+               L"橘黄框（辅助）：本格 Raw 贴图矩形与地图区之交的可见段。\n");
   }
   const int zPad = 6;
   const int zBandH = lay.tooMany ? 68 : (st->uiShowSlippyMapHud ? 102 : 0);
@@ -3227,6 +3206,9 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
         auto pit = st->slippyPaths.find(key);
         RECT tRc{};
         SlippyGetTileScreenBounds(st, lay, tx, ty, &tRc);
+        if (IsRectEmpty(&tRc)) {
+          continue;
+        }
         const int sx = tRc.left;
         const int sy = tRc.top;
         const int sw = (std::max)(1, static_cast<int>(tRc.right - tRc.left));

@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <shellapi.h>
 
 #ifndef GIS_DESKTOP_HAVE_GDAL
 #define GIS_DESKTOP_HAVE_GDAL 0
@@ -23,6 +24,7 @@
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "shell32.lib")
 
 HMENU BuildMenu() {
   HMENU bar = CreateMenu();
@@ -562,7 +564,39 @@ bool RegisterClasses(HINSTANCE inst) {
   return true;
 }
 
+static std::wstring WorkbenchCliGisPathFromCommandLine() {
+  int argc = 0;
+  LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+  if (!argv) {
+    return {};
+  }
+  auto freeArgv = [&]() { LocalFree(argv); };
+  std::wstring out;
+  for (int i = 1; i < argc; ++i) {
+    const wchar_t* a = argv[i];
+    if (!a || a[0] == L'\0') {
+      continue;
+    }
+    if (a[0] == L'/' || (a[0] == L'-' && a[1] == L'-')) {
+      continue;
+    }
+    const std::wstring p(a);
+    const size_t dot = p.find_last_of(L'.');
+    if (dot == std::wstring::npos) {
+      continue;
+    }
+    const wchar_t* ext = p.c_str() + dot;
+    if (_wcsicmp(ext, L".gis") == 0 || _wcsicmp(ext, L".xml") == 0) {
+      out = p;
+      break;
+    }
+  }
+  freeArgv();
+  return out;
+}
+
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
+  const std::wstring cliGisPath = WorkbenchCliGisPathFromCommandLine();
   UiGdiplusInit();
   MapEngine::Instance().Init();
   if (!RegisterClasses(hInst)) {
@@ -581,6 +615,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
   AgisCenterWindowInMonitorWorkArea(hwnd, nullptr);
   ShowWindow(hwnd, cmdShow);
   UpdateWindow(hwnd);
+  if (!cliGisPath.empty()) {
+    GisOpenFromPath(hwnd, cliGisPath);
+  }
   AgisUiDebugPickInit(hInst);
   MSG msg{};
   msg.wParam = 0;
