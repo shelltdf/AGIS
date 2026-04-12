@@ -1,17 +1,17 @@
 #pragma once
 
-#include "map_engine/map_layer_driver.h"
+#include "map_engine/map_data_source.h"
 
 #include <string>
 
 /**
- * GDAL 栅格图层驱动：属性文案、金字塔等与 GDALRasterBand/GDALDataset 相关。
+ * GDAL 栅格数据源：属性文案、金字塔等与 GDALRasterBand/GDALDataset 相关。
  */
-class GdalRasterMapLayerDriver final : public MapLayerDriver {
+class GdalRasterMapDataSource final : public MapDataSource {
  public:
-  explicit GdalRasterMapLayerDriver(MapLayerDriverKind k) : kind_(k) {}
+  explicit GdalRasterMapDataSource(MapDataSourceKind k) : kind_(k) {}
 
-  MapLayerDriverKind kind() const override { return kind_; }
+  MapDataSourceKind kind() const override { return kind_; }
 
   void appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const override;
   void appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const override;
@@ -19,17 +19,17 @@ class GdalRasterMapLayerDriver final : public MapLayerDriver {
   bool clearOverviews(GDALDataset* ds, std::wstring& err) override;
 
  private:
-  MapLayerDriverKind kind_;
+  MapDataSourceKind kind_;
 };
 
 /**
- * GDAL 矢量图层驱动：OGR 图层列表与元数据等。
+ * GDAL 矢量数据源：OGR 图层列表与元数据等。
  */
-class GdalVectorMapLayerDriver final : public MapLayerDriver {
+class GdalVectorMapDataSource final : public MapDataSource {
  public:
-  explicit GdalVectorMapLayerDriver(MapLayerDriverKind k) : kind_(k) {}
+  explicit GdalVectorMapDataSource(MapDataSourceKind k) : kind_(k) {}
 
-  MapLayerDriverKind kind() const override { return kind_; }
+  MapDataSourceKind kind() const override { return kind_; }
 
   void appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const override;
   void appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const override;
@@ -37,5 +37,5 @@ class GdalVectorMapLayerDriver final : public MapLayerDriver {
   bool clearOverviews(GDALDataset* ds, std::wstring& err) override;
 
  private:
-  MapLayerDriverKind kind_;
+  MapDataSourceKind kind_;
 };

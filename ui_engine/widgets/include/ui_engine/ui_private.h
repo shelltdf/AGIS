@@ -153,7 +153,7 @@ class AGIS_UI_API DemoRightSlotPanel : public DockPanel {
 };
 
 /**
- * 「添加图层 — 数据源」对话框（`kLayerDriverDlgClass` / `LayerDriverDlgProc`，控件 `IDC_LAYER_DRV_*`、`IDC_LAYER_URL`、确定/取消）。
+ * 「添加图层 — 数据源」对话框（`kLayerDataSourceDlgClass` / `LayerDataSourceDlgProc`，控件 `IDC_LAYER_DRV_*`、`IDC_LAYER_URL`、确定/取消）。
  */
 class AGIS_UI_API LayerDriverDialog : public DialogWindow {
  public:

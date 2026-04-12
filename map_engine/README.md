@@ -17,12 +17,12 @@ CMake 将各组下的 `*/include` 全部加入 **PUBLIC**，因此任意 `map_en
 
 | 组 | 路径 | 头文件 | 源文件 |
 |----|------|--------|--------|
-| 地图与图层 | `map/` | `map.h`、`map_layer*.h`、`map_engine_internal.h`、`map_layer_driver.h` | `map.cpp`、`map_layer*.cpp` |
+| 地图与图层 | `map/` | `map.h`、`map_layer*.h`、`map_engine_internal.h`、`map_data_source.h` | `map.cpp`、`map_layer*.cpp`、`map_data_source*.cpp` |
 | 投影 | `projection/` | `map_projection.h` | `map_projection.cpp` |
 | 场景图 | `scene_graph/` | `scene_graph.h`、`scene_node.h`、`shape.h`、`material.h`、`geometry.h`、`mesh.h` | `scene_graph.cpp`、`scene_node.cpp`（与 ``map`` 内图层解耦） |
-| 视口 | `view/` | `map_view.h`（`include/map_engine/`）；Win32 地图宿主在 `src/win32/`（`map_host_win32.*`） | `map_view.cpp`、`src/win32/map_host_win32.cpp` |
-| 平台抽象 | `platform/` | `message_queue.h`、`native_window.h`、`platform.h`（演示 ``map_engine_demo`` API，均在 `include/map_engine/`）；Win32 下 `src/win32/native_window_win32.*` | `message_queue.cpp`、`native_window.cpp`、`src/win32/native_window_win32.cpp`；演示 `src/win32/platform_win32.cpp` 仅 ``map_engine_demo`` |
-| 呈现后端 | `render/` | `map_gpu.h`、`renderer.h` | `map_gpu*.cpp`、`renderer.cpp` |
+| 视口 | `view/` | `map_view.h`（`include/map_engine/`） | `map_view.cpp` |
+| 平台抽象 | `platform/` | `message_queue.h`、`native_window.h`、`render_device_context.h`、`platform.h`（`include/map_engine/`）；Win32 宿主与包装在 `src/native_window/`（`map_host_win32.*`、`native_window_win32.*` 等，短文件名 include） | `message_queue.cpp`、`native_window.cpp`、`render_device_context.cpp`、`src/render_device_context/render_device_context_d2d.cpp` / `render_device_context_bgfx.cpp`、`src/native_window/...`；演示 `src/platform/platform_win32.cpp` 仅 ``map_engine_demo`` |
+| 呈现（场景渲染抽象） | `render/` | `renderer.h` | `renderer.cpp` |
 | IO | `io/` | `map_io.h`、`io_types.h`、`io_read_channel.h`、`local_file_io.h`、`remote_file_io.h`、`archive_file_io.h` | `io.cpp` |
 | GIS 工程 XML | `io_gis/` | `gis_xml.h`、`gis_project_xml.h` | `gis_xml.cpp`、`gis_project_xml.cpp` |
 | 引擎宿主 | `engine/` | `map_engine.h`、`export.h` | `map_engine.cpp` |
@@ -33,8 +33,12 @@ CMake 将各组下的 `*/include` 全部加入 **PUBLIC**，因此任意 `map_en
 map_engine/
   map/include/map_engine/map.h
   map/include/map_engine/map_layer.h
+  map/include/map_engine/map_data_source.h
   map/src/map.cpp
   map/src/map_layer.cpp
+  map/src/map_data_source.cpp
+  map/src/map_data_source/map_data_source_gdal.h
+  map/src/map_data_source/map_data_source_gdal.cpp
   io_gis/include/map_engine/gis_xml.h
   io_gis/src/gis_xml.cpp
   engine/include/map_engine/map_engine.h
@@ -44,7 +48,10 @@ map_engine/
   platform/include/map_engine/platform.h
   platform/src/message_queue.cpp
   platform/src/native_window.cpp
-  platform/src/win32/platform_win32.cpp
+  platform/src/native_window/map_host_win32.h
+  platform/src/native_window/map_host_win32.cpp
+  platform/src/native_window/native_window_win32.cpp
+  platform/src/platform/platform_win32.cpp
   …
 ```
 

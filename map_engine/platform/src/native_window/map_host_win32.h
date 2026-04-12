@@ -8,7 +8,7 @@
 
 /**
  * 地图宿主（``AGISMapHost`` / ``kMapClass``）的 Win32 窗口过程与相关客户区渲染辅助。
- * 实现位于同目录的 ``map_host_win32.cpp``，与 ``NativeWindowWin32`` 同属 view 层，负责本地窗口消息与叠加控件布局。
+ * 实现位于同目录的 ``map_host_win32.cpp``，与 ``NativeWindowWin32`` 同属 ``platform/src/native_window``，负责本地窗口消息与叠加控件布局。
  */
 AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 

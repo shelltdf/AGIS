@@ -1,4 +1,4 @@
-#include "map_layer_driver_gdal.h"
+#include "map_data_source_gdal.h"
 
 #if GIS_DESKTOP_HAVE_GDAL
 
@@ -14,8 +14,8 @@
 #include <algorithm>
 #include <string>
 
-void GdalRasterMapLayerDriver::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                    std::wstring* out) const {
+void GdalRasterMapDataSource::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                          std::wstring* out) const {
   if (!out || !ds) {
     return;
   }
@@ -32,23 +32,23 @@ void GdalRasterMapLayerDriver::appendSourceProperties(GDALDataset* ds, const std
   agis_detail::AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds), out);
 }
 
-void GdalRasterMapLayerDriver::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                     std::wstring* out) const {
+void GdalRasterMapDataSource::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                         std::wstring* out) const {
   (void)sourcePath;
   if (!out || !ds) {
     return;
   }
-  *out += AgisPickUiLang(L"【AGIS 驱动方式】 ", L"[AGIS driver mode] ");
-  *out += MapLayerDriverKindLabel(kind_);
+  *out += AgisPickUiLang(L"【AGIS 数据源类型】 ", L"[AGIS data source type] ");
+  *out += MapDataSourceKindLabel(kind_);
   *out += L"\r\n";
-  if (kind_ == MapLayerDriverKind::kArcGisRestJson) {
+  if (kind_ == MapDataSourceKind::kArcGisRestJson) {
     *out += AgisPickUiLang(
         L"【说明】 与 ArcGIS REST Services Directory 中 MapServer/ImageServer 的 JSON 一致；由 GDAL WMS 驱动拉取并映射为栅格。\r\n",
         L"[Note] Same JSON as ArcGIS REST MapServer/ImageServer; GDAL WMS fetches and maps to raster.\r\n");
-  } else if (kind_ == MapLayerDriverKind::kWmts) {
+  } else if (kind_ == MapDataSourceKind::kWmts) {
     *out += AgisPickUiLang(L"【说明】 使用 GDAL WMTS 驱动；URL 可为 GetCapabilities 地址，亦可写 WMTS:https://… 形式。\r\n",
                           L"[Note] GDAL WMTS driver; URL may be GetCapabilities or WMTS:https://…\r\n");
-  } else if (kind_ == MapLayerDriverKind::kTmsXyz) {
+  } else if (kind_ == MapDataSourceKind::kTmsXyz) {
     *out += AgisPickUiLang(L"【说明】 使用 GDAL XYZ/ZXY 模板 URL（含 {z}{x}{y}）。\r\n",
                           L"[Note] GDAL XYZ/ZXY template URL with {z}{x}{y}.\r\n");
   }
@@ -148,7 +148,7 @@ void GdalRasterMapLayerDriver::appendDriverProperties(GDALDataset* ds, const std
   }
 }
 
-bool GdalRasterMapLayerDriver::buildOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalRasterMapDataSource::buildOverviews(GDALDataset* ds, std::wstring& err) {
   if (!ds) {
     err = AgisTr(AgisUiStr::GdalErrInvalidDs);
     return false;
@@ -166,7 +166,7 @@ bool GdalRasterMapLayerDriver::buildOverviews(GDALDataset* ds, std::wstring& err
   return true;
 }
 
-bool GdalRasterMapLayerDriver::clearOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalRasterMapDataSource::clearOverviews(GDALDataset* ds, std::wstring& err) {
   if (!ds) {
     err = AgisTr(AgisUiStr::GdalErrInvalidDs);
     return false;
@@ -183,8 +183,8 @@ bool GdalRasterMapLayerDriver::clearOverviews(GDALDataset* ds, std::wstring& err
   return true;
 }
 
-void GdalVectorMapLayerDriver::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                      std::wstring* out) const {
+void GdalVectorMapDataSource::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                         std::wstring* out) const {
   if (!out || !ds) {
     return;
   }
@@ -201,14 +201,14 @@ void GdalVectorMapLayerDriver::appendSourceProperties(GDALDataset* ds, const std
   agis_detail::AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(ds), out);
 }
 
-void GdalVectorMapLayerDriver::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                      std::wstring* out) const {
+void GdalVectorMapDataSource::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                         std::wstring* out) const {
   (void)sourcePath;
   if (!out || !ds) {
     return;
   }
-  *out += AgisPickUiLang(L"【AGIS 驱动方式】 ", L"[AGIS driver mode] ");
-  *out += MapLayerDriverKindLabel(kind_);
+  *out += AgisPickUiLang(L"【AGIS 数据源类型】 ", L"[AGIS data source type] ");
+  *out += MapDataSourceKindLabel(kind_);
   *out += L"\r\n";
   GDALDriver* drv = ds->GetDriver();
   if (drv) {
@@ -243,13 +243,13 @@ void GdalVectorMapLayerDriver::appendDriverProperties(GDALDataset* ds, const std
   }
 }
 
-bool GdalVectorMapLayerDriver::buildOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalVectorMapDataSource::buildOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
   err = AgisTr(AgisUiStr::GdalVectorNoPyramid);
   return false;
 }
 
-bool GdalVectorMapLayerDriver::clearOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalVectorMapDataSource::clearOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
   err = AgisTr(AgisUiStr::GdalVectorNoPyramid);
   return false;
@@ -257,53 +257,53 @@ bool GdalVectorMapLayerDriver::clearOverviews(GDALDataset* ds, std::wstring& err
 
 #else  // !GIS_DESKTOP_HAVE_GDAL
 
-void GdalRasterMapLayerDriver::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                      std::wstring* out) const {
+void GdalRasterMapDataSource::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                          std::wstring* out) const {
   (void)ds;
   (void)sourcePath;
   (void)out;
 }
 
-void GdalRasterMapLayerDriver::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                    std::wstring* out) const {
+void GdalRasterMapDataSource::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                          std::wstring* out) const {
   (void)ds;
   (void)sourcePath;
   (void)out;
 }
 
-bool GdalRasterMapLayerDriver::buildOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalRasterMapDataSource::buildOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
   (void)err;
   return false;
 }
 
-bool GdalRasterMapLayerDriver::clearOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalRasterMapDataSource::clearOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
   (void)err;
   return false;
 }
 
-void GdalVectorMapLayerDriver::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                    std::wstring* out) const {
+void GdalVectorMapDataSource::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                          std::wstring* out) const {
   (void)ds;
   (void)sourcePath;
   (void)out;
 }
 
-void GdalVectorMapLayerDriver::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
-                                                      std::wstring* out) const {
+void GdalVectorMapDataSource::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
+                                                          std::wstring* out) const {
   (void)ds;
   (void)sourcePath;
   (void)out;
 }
 
-bool GdalVectorMapLayerDriver::buildOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalVectorMapDataSource::buildOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
   (void)err;
   return false;
 }
 
-bool GdalVectorMapLayerDriver::clearOverviews(GDALDataset* ds, std::wstring& err) {
+bool GdalVectorMapDataSource::clearOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
   (void)err;
   return false;

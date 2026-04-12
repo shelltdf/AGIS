@@ -16,8 +16,8 @@ struct RenderStructure {
 
 /**
  * 渲染器：对场景图做可见性裁剪（cull），生成 ``RenderStructure``；在 draw 中翻译为具体图形 API。
- * - ``Renderer2D``：面向 GDI、GDI+、D2D 或纯 CPU 光栅化等路径。
- * - ``Renderer3D``：面向三角网格与 GPU 管线（与现有 bgfx/OpenGL/D3D 等对接）。
+ * - ``Renderer2D``：与 ``render_device_context.h`` 中 ``RenderDeviceContext2D``（``RenderDeviceContextBase`` 派生，GDI / GDI+ / D2D）一致。
+ * - ``Renderer3D``：与 ``render_device_context.h`` 中 ``RenderDeviceContext3D``（``RenderDeviceContextBase`` 派生，bgfx：D3D11 / OpenGL / Auto）一致。
  */
 class Renderer {
  public:

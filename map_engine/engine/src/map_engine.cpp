@@ -59,20 +59,20 @@ void ApplyUiFontToChildren(HWND parent) {
 
 }  // namespace
 
-/** 列表块内一行显示用的短驱动名（避免过长）。 */
-static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
+/** 列表块内一行显示用的短数据源类型名（避免过长）。 */
+static const wchar_t* MapDataSourceKindShort(MapDataSourceKind k) {
   switch (k) {
-    case MapLayerDriverKind::kGdalFile:
+    case MapDataSourceKind::kGdalFile:
       return AgisTr(AgisUiStr::MapDriverShortGdal);
-    case MapLayerDriverKind::kTmsXyz:
+    case MapDataSourceKind::kTmsXyz:
       return AgisTr(AgisUiStr::MapDriverShortTms);
-    case MapLayerDriverKind::kWmts:
+    case MapDataSourceKind::kWmts:
       return AgisTr(AgisUiStr::MapDriverShortWmts);
-    case MapLayerDriverKind::kArcGisRestJson:
+    case MapDataSourceKind::kArcGisRestJson:
       return AgisTr(AgisUiStr::MapDriverShortArcGis);
-    case MapLayerDriverKind::kSoapPlaceholder:
+    case MapDataSourceKind::kSoapPlaceholder:
       return AgisTr(AgisUiStr::MapDriverShortSoap);
-    case MapLayerDriverKind::kWmsPlaceholder:
+    case MapDataSourceKind::kWmsPlaceholder:
       return AgisTr(AgisUiStr::MapDriverShortWms);
     default:
       return AgisTr(AgisUiStr::LayerUnknown);
@@ -81,7 +81,7 @@ static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
 
 #if GIS_DESKTOP_HAVE_GDAL
 
-#include "map_layer_driver_gdal.h"
+#include "map_data_source_gdal.h"
 
 namespace agis_detail {
 
@@ -361,8 +361,8 @@ void AppendOgrLayerDetails(OGRLayer* lay, int index, std::wstring* out) {
 
 class RasterMapLayer final : public MapLayer {
  public:
-  RasterMapLayer(GDALDataset* ds, std::wstring name, std::wstring sourcePath, MapLayerDriverKind driverKind)
-      : MapLayer(std::make_unique<GdalRasterMapLayerDriver>(driverKind)),
+  RasterMapLayer(GDALDataset* ds, std::wstring name, std::wstring sourcePath, MapDataSourceKind dataSourceKind)
+      : MapLayer(std::make_unique<GdalRasterMapDataSource>(dataSourceKind)),
         ds_(ds),
         name_(std::move(name)),
         sourcePath_(std::move(sourcePath)) {}
@@ -563,8 +563,8 @@ class RasterMapLayer final : public MapLayer {
     DeleteDC(hdcMem);
   }
 
-  GDALDataset* gdalDatasetForDriver() const override { return ds_; }
-  std::wstring sourcePathForDriver() const override { return sourcePath_; }
+  GDALDataset* gdalDatasetForDataSource() const override { return ds_; }
+  std::wstring sourcePathForDataSource() const override { return sourcePath_; }
 
   GDALDataset* Dataset() const { return ds_; }
 
@@ -647,8 +647,8 @@ void DrawGeometry(const OGRGeometry* geom, const ViewExtent& view, int cw, int c
 
 class VectorMapLayer final : public MapLayer {
  public:
-  VectorMapLayer(GDALDataset* ds, std::wstring name, std::wstring sourcePath, MapLayerDriverKind driverKind)
-      : MapLayer(std::make_unique<GdalVectorMapLayerDriver>(driverKind)),
+  VectorMapLayer(GDALDataset* ds, std::wstring name, std::wstring sourcePath, MapDataSourceKind dataSourceKind)
+      : MapLayer(std::make_unique<GdalVectorMapDataSource>(dataSourceKind)),
         ds_(ds),
         name_(std::move(name)),
         sourcePath_(std::move(sourcePath)) {}
@@ -718,8 +718,8 @@ class VectorMapLayer final : public MapLayer {
     DeleteObject(pen);
   }
 
-  GDALDataset* gdalDatasetForDriver() const override { return ds_; }
-  std::wstring sourcePathForDriver() const override { return sourcePath_; }
+  GDALDataset* gdalDatasetForDataSource() const override { return ds_; }
+  std::wstring sourcePathForDataSource() const override { return sourcePath_; }
 
  private:
   GDALDataset* ds_;
@@ -728,15 +728,15 @@ class VectorMapLayer final : public MapLayer {
 };
 
 std::unique_ptr<MapLayer> CreateLayerFromDataset(GDALDataset* ds, const std::wstring& baseName,
-                                                 const std::wstring& sourcePath, MapLayerDriverKind driverKind,
+                                                 const std::wstring& sourcePath, MapDataSourceKind dataSourceKind,
                                                  std::wstring& err) {
   const int rc = ds->GetRasterCount();
   const int lc = ds->GetLayerCount();
   if (rc > 0) {
-    return std::make_unique<RasterMapLayer>(ds, baseName, sourcePath, driverKind);
+    return std::make_unique<RasterMapLayer>(ds, baseName, sourcePath, dataSourceKind);
   }
   if (lc > 0) {
-    return std::make_unique<VectorMapLayer>(ds, baseName, sourcePath, driverKind);
+    return std::make_unique<VectorMapLayer>(ds, baseName, sourcePath, dataSourceKind);
   }
   GDALClose(ds);
   err = AgisTr(AgisUiStr::ErrNoRasterOrVectorInFile);
@@ -786,7 +786,7 @@ std::unique_ptr<MapLayer> CreateLayerFromTmsUrl(const std::wstring& urlIn, std::
       name.resize(48);
     }
   }
-  return std::make_unique<RasterMapLayer>(ds, name, u, MapLayerDriverKind::kTmsXyz);
+  return std::make_unique<RasterMapLayer>(ds, name, u, MapDataSourceKind::kTmsXyz);
 }
 
 std::wstring TrimUrlWhitespace(const std::wstring& in) {
@@ -869,7 +869,7 @@ std::unique_ptr<MapLayer> CreateLayerFromWmtsUrl(const std::wstring& urlIn, std:
       name.resize(48);
     }
   }
-  return std::make_unique<RasterMapLayer>(ds, name, u, MapLayerDriverKind::kWmts);
+  return std::make_unique<RasterMapLayer>(ds, name, u, MapDataSourceKind::kWmts);
 }
 
 std::unique_ptr<MapLayer> CreateLayerFromArcGisRestJsonUrl(const std::wstring& urlIn, std::wstring& err) {
@@ -911,7 +911,7 @@ std::unique_ptr<MapLayer> CreateLayerFromArcGisRestJsonUrl(const std::wstring& u
       name.resize(48);
     }
   }
-  return std::make_unique<RasterMapLayer>(ds, name, u, MapLayerDriverKind::kArcGisRestJson);
+  return std::make_unique<RasterMapLayer>(ds, name, u, MapDataSourceKind::kArcGisRestJson);
 }
 
 }  // namespace agis_detail
@@ -932,6 +932,13 @@ void MapEngine::Init() {
 }
 
 void MapEngine::Shutdown() {
+  if (renderDeviceContext_) {
+    renderDeviceContext_->shutdown(mapHwnd_);
+  }
+  if (auto* nw = dynamic_cast<NativeWindowWin32*>(defaultMapView_.nativeWindow())) {
+    nw->attachRenderDeviceContext(nullptr);
+  }
+  renderDeviceContext_.reset();
   defaultMapView_.setNativeWindow(nullptr);
   defaultMapView_.setRenderer(nullptr);
   defaultMapView_.setSceneRoot(nullptr);
@@ -945,35 +952,46 @@ void MapEngine::Shutdown() {
   doc_.refViewHeightDeg = 180.0;
 }
 
+void MapEngine::SyncSceneGraphFromMap() {
+  defaultSceneRoot_ = mapScheduler_.rebuildFromMap(doc_, sceneGraph_);
+  defaultMapView_.setSceneRoot(defaultSceneRoot_);
+}
+
 void MapEngine::InitDefaultMapViewStack(HWND mapHwnd) {
   if (!mapHwnd || !IsWindow(mapHwnd)) {
     return;
   }
-  if (sceneGraph_.roots().empty()) {
-    auto root = std::make_unique<SceneNode>();
-    defaultSceneRoot_ = root.get();
-    sceneGraph_.addRoot(std::move(root));
-  }
-  defaultMapView_.setSceneRoot(defaultSceneRoot_);
+  SyncSceneGraphFromMap();
   defaultMapView_.setRenderer(std::make_unique<Renderer2D>());
+  ensureRenderDeviceContext();
   defaultMapView_.setNativeWindow(CreateNativeWindow(WinIDFromHwnd(mapHwnd)));
+  if (auto* w32 = dynamic_cast<NativeWindowWin32*>(defaultMapView_.nativeWindow())) {
+    w32->attachRenderDeviceContext(renderDeviceContext_.get());
+  }
+}
+
+RenderDeviceContext* MapEngine::ensureRenderDeviceContext() {
+  if (!renderDeviceContext_) {
+    renderDeviceContext_ = std::make_unique<RenderDeviceContext>();
+  }
+  return renderDeviceContext_.get();
 }
 
 namespace {
 
-const wchar_t* MapRenderBackendDisplayName(MapRenderBackend b) {
+const wchar_t* MapRenderBackendTypeDisplayName(MapRenderBackendType b) {
   switch (b) {
-    case MapRenderBackend::kGdi:
+    case MapRenderBackendType::kGdi:
       return L"GDI";
-    case MapRenderBackend::kGdiPlus:
+    case MapRenderBackendType::kGdiPlus:
       return L"GDI+";
-    case MapRenderBackend::kD2d:
+    case MapRenderBackendType::kD2d:
       return L"Direct2D";
-    case MapRenderBackend::kBgfxD3d11:
+    case MapRenderBackendType::kBgfxD3d11:
       return AgisPickUiLang(L"Bgfx（D3D11）", L"Bgfx (D3D11)");
-    case MapRenderBackend::kBgfxOpenGL:
+    case MapRenderBackendType::kBgfxOpenGL:
       return AgisPickUiLang(L"Bgfx（OpenGL）", L"Bgfx (OpenGL)");
-    case MapRenderBackend::kBgfxAuto:
+    case MapRenderBackendType::kBgfxAuto:
       return AgisTr(AgisUiStr::MapBackendBgfxAuto);
     default:
       return AgisTr(AgisUiStr::MapBackendUnknown);
@@ -982,26 +1000,26 @@ const wchar_t* MapRenderBackendDisplayName(MapRenderBackend b) {
 
 }  // namespace
 
-void MapEngine::SetRenderBackend(MapRenderBackend backend) {
+void MapEngine::SetRenderBackend(MapRenderBackendType backend) {
   mapRenderBackend_ = backend;
   if (!mapHwnd_ || !IsWindow(mapHwnd_)) {
-    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendSetPendingHead)) + MapRenderBackendDisplayName(backend) +
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendSetPendingHead)) + MapRenderBackendTypeDisplayName(backend) +
                AgisTr(AgisUiStr::MapLogBackendSetPendingTail));
     return;
   }
 
-  if (!MapGpu_Init(mapHwnd_, backend)) {
-    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendFailHead)) + MapRenderBackendDisplayName(backend) +
+  if (!ensureRenderDeviceContext()->init(mapHwnd_, backend)) {
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendFailHead)) + MapRenderBackendTypeDisplayName(backend) +
                AgisTr(AgisUiStr::MapLogBackendFailTail));
-    mapRenderBackend_ = MapRenderBackend::kGdi;
-    if (!MapGpu_Init(mapHwnd_, MapRenderBackend::kGdi)) {
+    mapRenderBackend_ = MapRenderBackendType::kGdi;
+    if (!renderDeviceContext_->init(mapHwnd_, MapRenderBackendType::kGdi)) {
       AppLogLine(AgisTr(AgisUiStr::MapLogGdiFallbackFail));
     } else {
       AppLogLine(AgisTr(AgisUiStr::MapLogGdiFallbackOk));
     }
   } else {
-    const MapRenderBackend active = MapGpu_GetActiveBackend();
-    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendOkTail)) + MapRenderBackendDisplayName(active) +
+    const MapRenderBackendType active = renderDeviceContext_->activeBackend();
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendOkTail)) + MapRenderBackendTypeDisplayName(active) +
                (AgisGetUiLanguage() == AgisUiLanguage::kEn ? L"." : L"。"));
   }
 
@@ -1011,9 +1029,9 @@ void MapEngine::SetRenderBackend(MapRenderBackend backend) {
   InvalidateRect(mapHwnd_, nullptr, FALSE);
 }
 
-MapRenderBackend MapEngine::GetRenderBackend() const {
-  if (mapHwnd_ && IsWindow(mapHwnd_)) {
-    return MapGpu_GetActiveBackend();
+MapRenderBackendType MapEngine::GetRenderBackend() const {
+  if (mapHwnd_ && IsWindow(mapHwnd_) && renderDeviceContext_) {
+    return renderDeviceContext_->activeBackend();
   }
   return mapRenderBackend_;
 }
@@ -1123,7 +1141,7 @@ void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
 
   wchar_t line2[256]{};
   _snwprintf_s(line2, _TRUNCATE, AgisTr(AgisUiStr::MapFmtLayerRow2), vis ? AgisTr(AgisUiStr::MapLabelShow) : AgisTr(AgisUiStr::MapLabelHide),
-               MapLayerDriverKindShort(layer->DriverKind()));
+               MapDataSourceKindShort(layer->DataSourceKind()));
   g.DrawString(line2, -1, &metaF,
                Gdiplus::RectF(static_cast<float>(rc.left + 8), static_cast<float>(rc.top + 28),
                               static_cast<float>(w - 16), 18.0f),
@@ -1188,7 +1206,7 @@ void MapEngine::GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstrin
   const auto& layer = doc_.layers[static_cast<size_t>(index)];
   *outTitle = layer->DisplayName();
   *outTitle += L" · ";
-  *outTitle += MapLayerDriverKindLabel(layer->DriverKind());
+  *outTitle += MapDataSourceKindLabel(layer->DataSourceKind());
   layer->AppendDriverProperties(outDriverProps);
   layer->AppendSourceProperties(outSourceProps);
   if (outDriverProps->empty()) {
@@ -1255,23 +1273,23 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
     MessageBoxW(owner, AgisTr(AgisUiStr::MsgSelectValidLayer), L"AGIS", MB_OK | MB_ICONWARNING);
     return false;
   }
-  MapLayerDriverKind kind{};
+  MapDataSourceKind kind{};
   std::wstring urlExtra;
-  if (!ShowLayerDriverDialog(owner, &kind, &urlExtra)) {
+  if (!ShowLayerDataSourceDialog(owner, &kind, &urlExtra)) {
     return false;
   }
-  if (kind == MapLayerDriverKind::kWmsPlaceholder) {
+  if (kind == MapDataSourceKind::kWmsPlaceholder) {
     MessageBoxW(owner, AgisTr(AgisUiStr::MsgWmsNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return false;
   }
-  if (kind == MapLayerDriverKind::kSoapPlaceholder) {
+  if (kind == MapDataSourceKind::kSoapPlaceholder) {
     MessageBoxW(owner, AgisTr(AgisUiStr::MsgSoapNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return false;
   }
   std::wstring err;
   AgisEnsureGdalDataPath();
   GDALAllRegister();
-  if (kind == MapLayerDriverKind::kTmsXyz) {
+  if (kind == MapDataSourceKind::kTmsXyz) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
       urlExtra.pop_back();
@@ -1295,7 +1313,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
       return false;
     }
     AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerReplacedTms)) + urlExtra);
-  } else if (kind == MapLayerDriverKind::kWmts) {
+  } else if (kind == MapDataSourceKind::kWmts) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
       urlExtra.pop_back();
@@ -1319,7 +1337,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
       return false;
     }
     AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerReplacedWmts)) + urlExtra);
-  } else if (kind == MapLayerDriverKind::kArcGisRestJson) {
+  } else if (kind == MapDataSourceKind::kArcGisRestJson) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
       urlExtra.pop_back();
@@ -1367,7 +1385,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
     if (slash != std::wstring::npos) {
       base = base.substr(slash + 1);
     }
-    auto layer = agis_detail::CreateLayerFromDataset(ds, base, path, MapLayerDriverKind::kGdalFile, err);
+    auto layer = agis_detail::CreateLayerFromDataset(ds, base, path, MapDataSourceKind::kGdalFile, err);
     if (!layer) {
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
@@ -1378,6 +1396,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
     }
     AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerReplacedGdal)) + base);
   }
+  SyncSceneGraphFromMap();
   RefreshLayerList(layerListbox);
   if (mapHwnd_) {
     InvalidateRect(mapHwnd_, nullptr, FALSE);
@@ -1388,10 +1407,10 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
 
 namespace {
 
-const wchar_t kLayerDriverDlgClass[] = L"AGISLayerDriverDlg";
+const wchar_t kLayerDataSourceDlgClass[] = L"AGISLayerDataSourceDlg";
 
-struct LayerDriverDlgCtx {
-  MapLayerDriverKind* kindOut = nullptr;
+struct LayerDataSourceDlgCtx {
+  MapDataSourceKind* kindOut = nullptr;
   std::wstring* urlOut = nullptr;
   int result = 0;
   HWND hGdal = nullptr;
@@ -1403,12 +1422,12 @@ struct LayerDriverDlgCtx {
   HWND hUrl = nullptr;
 };
 
-LayerDriverDlgCtx* GetLayerDlgCtx(HWND h) {
-  return reinterpret_cast<LayerDriverDlgCtx*>(GetWindowLongPtrW(h, GWLP_USERDATA));
+LayerDataSourceDlgCtx* GetLayerDataSourceDlgCtx(HWND h) {
+  return reinterpret_cast<LayerDataSourceDlgCtx*>(GetWindowLongPtrW(h, GWLP_USERDATA));
 }
 
 void UpdateLayerDlgUrlEnable(HWND dlg) {
-  auto* ctx = GetLayerDlgCtx(dlg);
+  auto* ctx = GetLayerDataSourceDlgCtx(dlg);
   if (!ctx || !ctx->hUrl) {
     return;
   }
@@ -1419,16 +1438,16 @@ void UpdateLayerDlgUrlEnable(HWND dlg) {
   EnableWindow(ctx->hUrl, needUrl ? TRUE : FALSE);
 }
 
-LRESULT CALLBACK LayerDriverDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+LRESULT CALLBACK LayerDataSourceDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_NCCREATE: {
       auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
-      auto* ctx = reinterpret_cast<LayerDriverDlgCtx*>(cs->lpCreateParams);
+      auto* ctx = reinterpret_cast<LayerDataSourceDlgCtx*>(cs->lpCreateParams);
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
       return TRUE;
     }
     case WM_CREATE: {
-      auto* ctx = GetLayerDlgCtx(hwnd);
+      auto* ctx = GetLayerDataSourceDlgCtx(hwnd);
       if (!ctx) {
         return -1;
       }
@@ -1476,7 +1495,7 @@ LRESULT CALLBACK LayerDriverDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND: {
       const int id = LOWORD(wp);
       const int code = HIWORD(wp);
-      auto* ctx = GetLayerDlgCtx(hwnd);
+      auto* ctx = GetLayerDataSourceDlgCtx(hwnd);
       if (id == IDC_LAYER_DRV_GDAL || id == IDC_LAYER_DRV_TMS || id == IDC_LAYER_DRV_WMS || id == IDC_LAYER_DRV_WMTS ||
           id == IDC_LAYER_DRV_ARCGIS_JSON || id == IDC_LAYER_DRV_SOAP) {
         if (code == BN_CLICKED) {
@@ -1489,17 +1508,17 @@ LRESULT CALLBACK LayerDriverDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           break;
         }
         if (SendMessageW(ctx->hGdal, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-          *ctx->kindOut = MapLayerDriverKind::kGdalFile;
+          *ctx->kindOut = MapDataSourceKind::kGdalFile;
         } else if (SendMessageW(ctx->hTms, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-          *ctx->kindOut = MapLayerDriverKind::kTmsXyz;
+          *ctx->kindOut = MapDataSourceKind::kTmsXyz;
         } else if (SendMessageW(ctx->hWmts, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-          *ctx->kindOut = MapLayerDriverKind::kWmts;
+          *ctx->kindOut = MapDataSourceKind::kWmts;
         } else if (SendMessageW(ctx->hArcgis, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-          *ctx->kindOut = MapLayerDriverKind::kArcGisRestJson;
+          *ctx->kindOut = MapDataSourceKind::kArcGisRestJson;
         } else if (SendMessageW(ctx->hSoap, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-          *ctx->kindOut = MapLayerDriverKind::kSoapPlaceholder;
+          *ctx->kindOut = MapDataSourceKind::kSoapPlaceholder;
         } else {
-          *ctx->kindOut = MapLayerDriverKind::kWmsPlaceholder;
+          *ctx->kindOut = MapDataSourceKind::kWmsPlaceholder;
         }
         wchar_t buf[2048]{};
         GetWindowTextW(ctx->hUrl, buf, 2048);
@@ -1518,7 +1537,7 @@ LRESULT CALLBACK LayerDriverDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       break;
     }
     case WM_CLOSE:
-      if (auto* ctx = GetLayerDlgCtx(hwnd)) {
+      if (auto* ctx = GetLayerDataSourceDlgCtx(hwnd)) {
         ctx->result = 0;
       }
       DestroyWindow(hwnd);
@@ -1529,15 +1548,15 @@ LRESULT CALLBACK LayerDriverDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-void EnsureLayerDriverDlgClass() {
+void EnsureLayerDataSourceDlgClass() {
   static bool done = false;
   if (done) {
     return;
   }
   WNDCLASSW wc{};
-  wc.lpfnWndProc = LayerDriverDlgProc;
+  wc.lpfnWndProc = LayerDataSourceDlgProc;
   wc.hInstance = GetModuleHandleW(nullptr);
-  wc.lpszClassName = kLayerDriverDlgClass;
+  wc.lpszClassName = kLayerDataSourceDlgClass;
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
   const ATOM a = RegisterClassW(&wc);
@@ -1548,12 +1567,12 @@ void EnsureLayerDriverDlgClass() {
 
 }  // namespace
 
-bool MapEngine::ShowLayerDriverDialog(HWND owner, MapLayerDriverKind* outKind, std::wstring* outUrl) {
+bool MapEngine::ShowLayerDataSourceDialog(HWND owner, MapDataSourceKind* outKind, std::wstring* outUrl) {
   if (!outKind || !outUrl) {
     return false;
   }
-  EnsureLayerDriverDlgClass();
-  LayerDriverDlgCtx ctx{};
+  EnsureLayerDataSourceDlgClass();
+  LayerDataSourceDlgCtx ctx{};
   ctx.kindOut = outKind;
   ctx.urlOut = outUrl;
   outUrl->clear();
@@ -1574,7 +1593,7 @@ bool MapEngine::ShowLayerDriverDialog(HWND owner, MapLayerDriverKind* outKind, s
     x = rc.left + ((rc.right - rc.left) - dw) / 2;
     y = rc.top + ((rc.bottom - rc.top) - dh) / 2;
   }
-  HWND dlg = CreateWindowExW(kDlgEx, kLayerDriverDlgClass, AgisTr(AgisUiStr::DlgAddLayerTitle), kDlgStyle, x, y, dw, dh,
+  HWND dlg = CreateWindowExW(kDlgEx, kLayerDataSourceDlgClass, AgisTr(AgisUiStr::DlgAddLayerTitle), kDlgStyle, x, y, dw, dh,
                              owner, nullptr,
                              GetModuleHandleW(nullptr), &ctx);
   if (!dlg) {
@@ -1650,22 +1669,22 @@ void MapEngine::PromptSaveMapScreenshot(HWND owner, HWND mapHwnd) {
 }
 
 void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
-  MapLayerDriverKind kind{};
+  MapDataSourceKind kind{};
   std::wstring urlExtra;
-  if (!ShowLayerDriverDialog(owner, &kind, &urlExtra)) {
+  if (!ShowLayerDataSourceDialog(owner, &kind, &urlExtra)) {
     return;
   }
-  if (kind == MapLayerDriverKind::kWmsPlaceholder) {
+  if (kind == MapDataSourceKind::kWmsPlaceholder) {
     AppLogLine(AgisTr(AgisUiStr::LogLayerWmsNyi));
     MessageBoxW(owner, AgisTr(AgisUiStr::MsgWmsNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (kind == MapLayerDriverKind::kSoapPlaceholder) {
+  if (kind == MapDataSourceKind::kSoapPlaceholder) {
     AppLogLine(AgisTr(AgisUiStr::LogLayerSoapNyi));
     MessageBoxW(owner, AgisTr(AgisUiStr::MsgSoapNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (kind == MapLayerDriverKind::kTmsXyz) {
+  if (kind == MapDataSourceKind::kTmsXyz) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
       urlExtra.pop_back();
@@ -1685,13 +1704,14 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
       return;
     }
     AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedTms)) + urlExtra);
+    SyncSceneGraphFromMap();
     RefreshLayerList(layerList);
     if (mapHwnd_) {
       InvalidateRect(mapHwnd_, nullptr, FALSE);
     }
     return;
   }
-  if (kind == MapLayerDriverKind::kWmts) {
+  if (kind == MapDataSourceKind::kWmts) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
       urlExtra.pop_back();
@@ -1711,13 +1731,14 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
       return;
     }
     AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedWmts)) + urlExtra);
+    SyncSceneGraphFromMap();
     RefreshLayerList(layerList);
     if (mapHwnd_) {
       InvalidateRect(mapHwnd_, nullptr, FALSE);
     }
     return;
   }
-  if (kind == MapLayerDriverKind::kArcGisRestJson) {
+  if (kind == MapDataSourceKind::kArcGisRestJson) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
       urlExtra.pop_back();
@@ -1737,6 +1758,7 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
       return;
     }
     AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedArcGis)) + urlExtra);
+    SyncSceneGraphFromMap();
     RefreshLayerList(layerList);
     if (mapHwnd_) {
       InvalidateRect(mapHwnd_, nullptr, FALSE);
@@ -1769,6 +1791,7 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
     }
     AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedGdal)) + base);
   }
+  SyncSceneGraphFromMap();
   RefreshLayerList(layerList);
   if (mapHwnd_) {
     InvalidateRect(mapHwnd_, nullptr, FALSE);

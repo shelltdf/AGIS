@@ -42,42 +42,42 @@ std::wstring JoinPathSimple(const std::wstring& dir, const std::wstring& file) {
 
 }  // namespace
 
-std::wstring GisDriverKindToTag(MapLayerDriverKind kind) {
+std::wstring GisDataSourceKindToTag(MapDataSourceKind kind) {
   switch (kind) {
-    case MapLayerDriverKind::kGdalFile:
+    case MapDataSourceKind::kGdalFile:
       return L"gdal-file";
-    case MapLayerDriverKind::kTmsXyz:
+    case MapDataSourceKind::kTmsXyz:
       return L"tms-xyz";
-    case MapLayerDriverKind::kWmts:
+    case MapDataSourceKind::kWmts:
       return L"wmts";
-    case MapLayerDriverKind::kArcGisRestJson:
+    case MapDataSourceKind::kArcGisRestJson:
       return L"arcgis-rest-json";
-    case MapLayerDriverKind::kSoapPlaceholder:
+    case MapDataSourceKind::kSoapPlaceholder:
       return L"soap";
-    case MapLayerDriverKind::kWmsPlaceholder:
+    case MapDataSourceKind::kWmsPlaceholder:
       return L"wms";
     default:
       return L"unknown";
   }
 }
 
-MapLayerDriverKind GisDriverKindFromTag(const std::wstring& s) {
+MapDataSourceKind GisDataSourceKindFromTag(const std::wstring& s) {
   if (s == L"tms-xyz") {
-    return MapLayerDriverKind::kTmsXyz;
+    return MapDataSourceKind::kTmsXyz;
   }
   if (s == L"wmts") {
-    return MapLayerDriverKind::kWmts;
+    return MapDataSourceKind::kWmts;
   }
   if (s == L"arcgis-rest-json") {
-    return MapLayerDriverKind::kArcGisRestJson;
+    return MapDataSourceKind::kArcGisRestJson;
   }
   if (s == L"soap") {
-    return MapLayerDriverKind::kSoapPlaceholder;
+    return MapDataSourceKind::kSoapPlaceholder;
   }
   if (s == L"wms") {
-    return MapLayerDriverKind::kWmsPlaceholder;
+    return MapDataSourceKind::kWmsPlaceholder;
   }
-  return MapLayerDriverKind::kGdalFile;
+  return MapDataSourceKind::kGdalFile;
 }
 
 bool SaveGisProjectXml(const Map& doc, const std::wstring& path) {
@@ -98,7 +98,7 @@ bool SaveGisProjectXml(const Map& doc, const std::wstring& path) {
     }
     const std::wstring src = lyr->SourcePathForSave();
     const std::wstring name = lyr->DisplayName();
-    ofs << L"    <layer driver=\"" << GisDriverKindToTag(lyr->DriverKind()) << L"\"";
+    ofs << L"    <layer dataSource=\"" << GisDataSourceKindToTag(lyr->DataSourceKind()) << L"\"";
     ofs << L" visible=\"" << (lyr->IsLayerVisible() ? 1 : 0) << L"\"";
     ofs << L" source=\"" << XmlEscape(src) << L"\"";
     ofs << L" name=\"" << XmlEscape(name) << L"\"/>\n";
@@ -146,7 +146,11 @@ bool LoadGisProjectXml(Map& doc, const std::wstring& path, std::wstring* err) {
     const std::wstring line = xml.substr(pos, end - pos + 2);
     pos = end + 2;
 
-    const MapLayerDriverKind kind = GisDriverKindFromTag(GetXmlAttr(line, L"driver"));
+    std::wstring kindAttr = GetXmlAttr(line, L"dataSource");
+    if (kindAttr.empty()) {
+      kindAttr = GetXmlAttr(line, L"driver");
+    }
+    const MapDataSourceKind kind = GisDataSourceKindFromTag(kindAttr);
     const bool visible = ParseBoolAttr(line, L"visible", true);
     std::wstring source = GetXmlAttr(line, L"source");
     if (!source.empty() && !IsLikelyAbsoluteOrUrl(source)) {
@@ -156,13 +160,13 @@ bool LoadGisProjectXml(Map& doc, const std::wstring& path, std::wstring* err) {
     std::wstring loadErr;
     bool ok = false;
     switch (kind) {
-      case MapLayerDriverKind::kTmsXyz:
+      case MapDataSourceKind::kTmsXyz:
         ok = doc.AddLayerFromTmsUrl(source, loadErr);
         break;
-      case MapLayerDriverKind::kWmts:
+      case MapDataSourceKind::kWmts:
         ok = doc.AddLayerFromWmtsUrl(source, loadErr);
         break;
-      case MapLayerDriverKind::kArcGisRestJson:
+      case MapDataSourceKind::kArcGisRestJson:
         ok = doc.AddLayerFromArcGisRestJsonUrl(source, loadErr);
         break;
       default:

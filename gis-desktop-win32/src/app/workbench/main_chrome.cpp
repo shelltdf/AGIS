@@ -47,17 +47,17 @@ void SyncViewMenu(HWND hwnd) {
   }
   CheckMenuRadioItem(view, ID_VIEW_MODE_2D, ID_VIEW_MODE_3D,
                        g_view3d ? ID_VIEW_MODE_3D : ID_VIEW_MODE_2D, MF_BYCOMMAND);
-  const MapRenderBackend rb = MapEngine::Instance().GetRenderBackend();
+  const MapRenderBackendType rb = MapEngine::Instance().GetRenderBackend();
   UINT rid = ID_VIEW_RENDER_GDI;
-  if (rb == MapRenderBackend::kGdiPlus) {
+  if (rb == MapRenderBackendType::kGdiPlus) {
     rid = ID_VIEW_RENDER_GDIPLUS;
-  } else if (rb == MapRenderBackend::kD2d) {
+  } else if (rb == MapRenderBackendType::kD2d) {
     rid = ID_VIEW_RENDER_D2D;
-  } else if (rb == MapRenderBackend::kBgfxD3d11) {
+  } else if (rb == MapRenderBackendType::kBgfxD3d11) {
     rid = ID_VIEW_RENDER_BGFX_D3D11;
-  } else if (rb == MapRenderBackend::kBgfxOpenGL) {
+  } else if (rb == MapRenderBackendType::kBgfxOpenGL) {
     rid = ID_VIEW_RENDER_BGFX_OPENGL;
-  } else if (rb == MapRenderBackend::kBgfxAuto) {
+  } else if (rb == MapRenderBackendType::kBgfxAuto) {
     rid = ID_VIEW_RENDER_BGFX_AUTO;
   }
   if (g_hmenuRenderSub) {
@@ -397,6 +397,7 @@ LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       if (!g_hwndMap) {
         return -1;
       }
+      MapEngine::Instance().InitDefaultMapViewStack(g_hwndMap);
       LayoutMapShellClient(hwnd);
       return 0;
     }

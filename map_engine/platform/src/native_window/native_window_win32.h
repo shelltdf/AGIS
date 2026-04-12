@@ -5,6 +5,8 @@
 
 #include <windows.h>
 
+class RenderDeviceContext;
+
 /** Win32：用 ``HWND`` 实现 ``NativeWindow``；客户区尺寸随 ``GetClientRect``。 */
 class NativeWindowWin32 : public NativeWindow {
  public:
@@ -19,10 +21,17 @@ class NativeWindowWin32 : public NativeWindow {
   int widthPixels() const override;
   int heightPixels() const override;
 
+  RenderDeviceContext* renderDeviceContext() override { return renderDeviceContext_; }
+  const RenderDeviceContext* renderDeviceContext() const override { return renderDeviceContext_; }
+
+  /** 将引擎持有的 ``RenderDeviceContext`` 关联到本窗口（不取得所有权）。 */
+  void attachRenderDeviceContext(RenderDeviceContext* ctx) { renderDeviceContext_ = ctx; }
+
   HWND hwnd() const { return hwnd_; }
 
  private:
   HWND hwnd_{};
+  RenderDeviceContext* renderDeviceContext_{nullptr};
 };
 
 /** 将 Win32 窗口句柄转为引擎通用的 ``WinID``（供 ``CreateNativeWindow`` 使用）。 */

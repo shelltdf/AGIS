@@ -26,6 +26,7 @@ void SyncMainTitle() {
 }
 
 void RefreshUiAfterDocumentReload() {
+  MapEngine::Instance().SyncSceneGraphFromMap();
   if (g_hwndLayer) {
     if (HWND lb = GetDlgItem(g_hwndLayer, IDC_LAYER_LIST)) {
       MapEngine::Instance().RefreshLayerList(lb);

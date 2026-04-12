@@ -5,10 +5,12 @@
 
 #include <memory>
 
+class RenderDeviceContext;
+
 /**
  * 跨平台窗口引用：封装当前操作系统下的原生窗口句柄或指针，避免在公共头中直接依赖平台类型。
  *
- * - **Win32**：值为 ``reinterpret_cast<void*>(HWND)``，见 ``native_window_win32.h``（``platform/src/win32/``）中的 ``WinIDFromHwnd``。
+ * - **Win32**：值为 ``reinterpret_cast<void*>(HWND)``，见 ``native_window_win32.h``（``platform/src/native_window/``）中的 ``WinIDFromHwnd``。
  * - **其它平台**：预留为同类不透明指针；未绑定时为 ``nullptr``。
  */
 struct WinID {
@@ -28,6 +30,13 @@ class NativeWindow {
 
   virtual int widthPixels() const = 0;
   virtual int heightPixels() const = 0;
+
+  /**
+   * 当前窗口关联的渲染设备环境（非拥有指针）：内含 ``MapRenderBackendType`` 与 ``RenderDeviceContextBase`` 派生实现。
+   * Win32 上在 ``InitDefaultMapViewStack`` 中通过 ``NativeWindowWin32::attachRenderDeviceContext`` 绑定。
+   */
+  virtual RenderDeviceContext* renderDeviceContext() { return nullptr; }
+  virtual const RenderDeviceContext* renderDeviceContext() const { return nullptr; }
 };
 
 /**

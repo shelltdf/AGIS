@@ -5,31 +5,31 @@
 #include <string>
 #include <utility>
 
-MapLayer::MapLayer(std::unique_ptr<MapLayerDriver> driver) : driver_(std::move(driver)) {}
+MapLayer::MapLayer(std::unique_ptr<MapDataSource> dataSource) : dataSource_(std::move(dataSource)) {}
 
-MapLayerDriverKind MapLayer::DriverKind() const {
-  return driver_ ? driver_->kind() : MapLayerDriverKind::kGdalFile;
+MapDataSourceKind MapLayer::DataSourceKind() const {
+  return dataSource_ ? dataSource_->kind() : MapDataSourceKind::kGdalFile;
 }
 
 void MapLayer::AppendDriverProperties(std::wstring* out) const {
-  if (!out || !driver_) {
+  if (!out || !dataSource_) {
     return;
   }
-  driver_->appendDriverProperties(gdalDatasetForDriver(), sourcePathForDriver(), out);
+  dataSource_->appendDriverProperties(gdalDatasetForDataSource(), sourcePathForDataSource(), out);
 }
 
 void MapLayer::AppendSourceProperties(std::wstring* out) const {
-  if (!out || !driver_) {
+  if (!out || !dataSource_) {
     return;
   }
-  driver_->appendSourceProperties(gdalDatasetForDriver(), sourcePathForDriver(), out);
+  dataSource_->appendSourceProperties(gdalDatasetForDataSource(), sourcePathForDataSource(), out);
 }
 
-GDALDataset* MapLayer::gdalDatasetForDriver() const {
+GDALDataset* MapLayer::gdalDatasetForDataSource() const {
   return nullptr;
 }
 
-std::wstring MapLayer::sourcePathForDriver() const {
+std::wstring MapLayer::sourcePathForDataSource() const {
   return L"";
 }
 
@@ -45,19 +45,19 @@ const wchar_t* MapLayerKindLabel(MapLayerKind k) {
   }
 }
 
-const wchar_t* MapLayerDriverKindLabel(MapLayerDriverKind k) {
+const wchar_t* MapDataSourceKindLabel(MapDataSourceKind k) {
   switch (k) {
-    case MapLayerDriverKind::kGdalFile:
+    case MapDataSourceKind::kGdalFile:
       return AgisTr(AgisUiStr::LayerDriverGdalFile);
-    case MapLayerDriverKind::kTmsXyz:
+    case MapDataSourceKind::kTmsXyz:
       return AgisTr(AgisUiStr::LayerDriverTmsXyz);
-    case MapLayerDriverKind::kWmts:
+    case MapDataSourceKind::kWmts:
       return AgisTr(AgisUiStr::LayerDriverWmts);
-    case MapLayerDriverKind::kArcGisRestJson:
+    case MapDataSourceKind::kArcGisRestJson:
       return AgisTr(AgisUiStr::LayerDriverArcGisJson);
-    case MapLayerDriverKind::kSoapPlaceholder:
+    case MapDataSourceKind::kSoapPlaceholder:
       return AgisTr(AgisUiStr::LayerDriverSoapPh);
-    case MapLayerDriverKind::kWmsPlaceholder:
+    case MapDataSourceKind::kWmsPlaceholder:
       return AgisTr(AgisUiStr::LayerDriverWmsPh);
     default:
       return AgisTr(AgisUiStr::LayerUnknown);
@@ -65,17 +65,17 @@ const wchar_t* MapLayerDriverKindLabel(MapLayerDriverKind k) {
 }
 
 bool MapLayer::BuildOverviews(std::wstring& err) {
-  if (!driver_) {
+  if (!dataSource_) {
     err = AgisTr(AgisUiStr::LayerErrOvrUnsupported);
     return false;
   }
-  return driver_->buildOverviews(gdalDatasetForDriver(), err);
+  return dataSource_->buildOverviews(gdalDatasetForDataSource(), err);
 }
 
 bool MapLayer::ClearOverviews(std::wstring& err) {
-  if (!driver_) {
+  if (!dataSource_) {
     err = AgisTr(AgisUiStr::LayerErrOvrUnsupported);
     return false;
   }
-  return driver_->clearOverviews(gdalDatasetForDriver(), err);
+  return dataSource_->clearOverviews(gdalDatasetForDataSource(), err);
 }

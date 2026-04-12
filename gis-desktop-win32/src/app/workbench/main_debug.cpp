@@ -3,7 +3,7 @@
 #include "core/resource.h"
 #include "core/app_log.h"
 #include "map_engine/map_engine.h"
-#include "map_engine/map_gpu.h"
+#include "map_engine/render_device_context.h"
 #include "map_engine/map_projection.h"
 #include "utils/ui_theme.h"
 #include "utils/agis_ui_l10n.h"
@@ -90,19 +90,19 @@ const char* ThemeMenuTag(AgisThemeMenu m) {
   }
 }
 
-const char* RenderBackendTag(MapRenderBackend b) {
+const char* RenderBackendTag(MapRenderBackendType b) {
   switch (b) {
-    case MapRenderBackend::kGdi:
+    case MapRenderBackendType::kGdi:
       return "gdi";
-    case MapRenderBackend::kGdiPlus:
+    case MapRenderBackendType::kGdiPlus:
       return "gdiPlus";
-    case MapRenderBackend::kD2d:
+    case MapRenderBackendType::kD2d:
       return "d2d";
-    case MapRenderBackend::kBgfxD3d11:
+    case MapRenderBackendType::kBgfxD3d11:
       return "bgfxD3d11";
-    case MapRenderBackend::kBgfxOpenGL:
+    case MapRenderBackendType::kBgfxOpenGL:
       return "bgfxOpenGL";
-    case MapRenderBackend::kBgfxAuto:
+    case MapRenderBackendType::kBgfxAuto:
       return "bgfxAuto";
     default:
       return "unknown";
@@ -274,7 +274,7 @@ void AgisCopyWorkbenchUiStateJsonToClipboard(HWND mainHwnd) {
     AppendEscapedJsonUtf8(&j, WideToUtf8(doc.layers[i]->DisplayName()));
     j += ",\n";
     j += "      \"driverKind\": ";
-    AppendEscapedJsonUtf8(&j, WideToUtf8(MapLayerDriverKindLabel(doc.layers[i]->DriverKind())));
+    AppendEscapedJsonUtf8(&j, WideToUtf8(MapDataSourceKindLabel(doc.layers[i]->DataSourceKind())));
     j += ",\n";
     j += "      \"visible\": " + std::string(doc.layers[i]->IsLayerVisible() ? "true" : "false") + ",\n";
     j += "      \"sourcePathForSave\": ";

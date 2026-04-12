@@ -2,7 +2,8 @@
 
 #include "map_engine/map_engine.h"
 #include "map_engine/map.h"
-#include "map_engine/map_gpu.h"
+#include "map_engine/render_device_context.h"
+#include "native_window_win32.h"
 
 #include "core/resource.h"
 #include "core/app_log.h"
@@ -125,9 +126,8 @@ void LayoutMapOverlayControls(HWND hwnd) {
   }
 
   MapEngine& eg = MapEngine::Instance();
-  const MapRenderBackend mapRb = MapGpu_GetActiveBackend();
-  const bool hideNativeChrome = (mapRb == MapRenderBackend::kBgfxD3d11 || mapRb == MapRenderBackend::kBgfxOpenGL ||
-                                 mapRb == MapRenderBackend::kBgfxAuto);
+  const MapRenderBackendType mapRb = eg.GetRenderBackend();
+  const bool hideNativeChrome = MapGpu_Is3DBackend(mapRb);
   if (hideNativeChrome) {
     for (HWND h : {hShortcut, hEdit, hVis, hGrid, hFit, hOrig, hReset, hZm, hSc, hZp}) {
       if (h) {
@@ -213,15 +213,15 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       eng.doc_.view = DefaultGeographicView();
       eng.doc_.refViewWidthDeg = 360.0;
       eng.doc_.refViewHeightDeg = 180.0;
-      if (!MapGpu_Init(hwnd, eng.mapRenderBackend_)) {
+      if (!eng.ensureRenderDeviceContext()->init(hwnd, eng.mapRenderBackend_)) {
         AppLogLine(AgisTr(AgisUiStr::MapLogGpuInitFail));
-        eng.mapRenderBackend_ = MapRenderBackend::kGdi;
-        MapGpu_Init(hwnd, MapRenderBackend::kGdi);
+        eng.mapRenderBackend_ = MapRenderBackendType::kGdi;
+        eng.renderDeviceContext_->init(hwnd, MapRenderBackendType::kGdi);
       }
       {
         RECT cr{};
         GetClientRect(hwnd, &cr);
-        MapGpu_OnResize(cr.right - cr.left, cr.bottom - cr.top);
+        eng.renderDeviceContext_->onResize(cr.right - cr.left, cr.bottom - cr.top);
       }
       {
         HINSTANCE inst = GetModuleHandleW(nullptr);
@@ -259,7 +259,13 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       return 0;
     case WM_DESTROY:
       MapHostDetachChildInputForwarding(hwnd);
-      MapGpu_Shutdown(hwnd);
+      if (eng.renderDeviceContext_) {
+        eng.renderDeviceContext_->shutdown(hwnd);
+      }
+      if (auto* nw = dynamic_cast<NativeWindowWin32*>(eng.DefaultMapView().nativeWindow())) {
+        nw->attachRenderDeviceContext(nullptr);
+      }
+      eng.renderDeviceContext_.reset();
       eng.mapHwnd_ = nullptr;
       eng.mapChromeScale_ = nullptr;
       return 0;
@@ -270,7 +276,9 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
         nw = 0;
         nh = 0;
       }
-      MapGpu_OnResize(nw, nh);
+      if (eng.renderDeviceContext_) {
+        eng.renderDeviceContext_->onResize(nw, nh);
+      }
       LayoutMapOverlayControls(hwnd);
       InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
@@ -280,17 +288,17 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       HWND ctl = reinterpret_cast<HWND>(lParam);
       if (ctl == nullptr) {
         if (id >= ID_VIEW_RENDER_FIRST && id <= ID_VIEW_RENDER_LAST) {
-          MapRenderBackend b = MapRenderBackend::kGdi;
+          MapRenderBackendType b = MapRenderBackendType::kGdi;
           if (id == ID_VIEW_RENDER_GDIPLUS) {
-            b = MapRenderBackend::kGdiPlus;
+            b = MapRenderBackendType::kGdiPlus;
           } else if (id == ID_VIEW_RENDER_D2D) {
-            b = MapRenderBackend::kD2d;
+            b = MapRenderBackendType::kD2d;
           } else if (id == ID_VIEW_RENDER_BGFX_D3D11) {
-            b = MapRenderBackend::kBgfxD3d11;
+            b = MapRenderBackendType::kBgfxD3d11;
           } else if (id == ID_VIEW_RENDER_BGFX_OPENGL) {
-            b = MapRenderBackend::kBgfxOpenGL;
+            b = MapRenderBackendType::kBgfxOpenGL;
           } else if (id == ID_VIEW_RENDER_BGFX_AUTO) {
-            b = MapRenderBackend::kBgfxAuto;
+            b = MapRenderBackendType::kBgfxAuto;
           }
           eng.SetRenderBackend(b);
           LayoutMapOverlayControls(hwnd);
@@ -403,7 +411,8 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       SetFocus(hwnd);
       return 0;
     case WM_MBUTTONDOWN:
-      if (MapGpu_ImGuiMapToolbarHitClient(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam))) {
+      if (eng.renderDeviceContext_ &&
+          eng.renderDeviceContext_->imguiMapToolbarHitClient(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam))) {
         return 0;
       }
       SetFocus(hwnd);
@@ -428,7 +437,7 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       ScreenToClient(hwnd, &pt);
       const int mx = pt.x;
       const int my = pt.y;
-      if (MapGpu_ImGuiMapToolbarHitClient(mx, my)) {
+      if (eng.renderDeviceContext_ && eng.renderDeviceContext_->imguiMapToolbarHitClient(mx, my)) {
         return 0;
       }
       const double factor = delta > 0 ? 1.1 : 1.0 / 1.1;
@@ -463,8 +472,9 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       GetClientRect(hwnd, &client);
       const int cw = client.right - client.left;
       const int ch = client.bottom - client.top;
-      const MapRenderBackend paintRb = MapGpu_GetActiveBackend();
-      if (paintRb == MapRenderBackend::kGdi) {
+      const MapRenderBackendType paintRb =
+          eng.renderDeviceContext_ ? eng.renderDeviceContext_->activeBackend() : MapRenderBackendType::kGdi;
+      if (paintRb == MapRenderBackendType::kGdi) {
         HDC mem = CreateCompatibleDC(hdc);
         HBITMAP bmp = CreateCompatibleBitmap(hdc, cw, ch);
         const HGDIOBJ oldBmp = SelectObject(mem, bmp);
@@ -476,7 +486,7 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
         SelectObject(mem, oldBmp);
         DeleteObject(bmp);
         DeleteDC(mem);
-      } else if (paintRb == MapRenderBackend::kGdiPlus) {
+      } else if (paintRb == MapRenderBackendType::kGdiPlus) {
         Gdiplus::Bitmap off(cw, ch, PixelFormat32bppPARGB);
         Gdiplus::Graphics gx(&off);
         gx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
@@ -492,7 +502,9 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       } else {
         std::vector<uint8_t> pix;
         if (MapHostRenderClientToTopDownBgra(hwnd, client, &pix) && cw > 0 && ch > 0) {
-          MapGpu_PresentFrame(hwnd, pix.data(), cw, ch);
+          if (eng.renderDeviceContext_) {
+            eng.renderDeviceContext_->presentFrame(hwnd, pix.data(), cw, ch);
+          }
         }
       }
       EndPaint(hwnd, &ps);

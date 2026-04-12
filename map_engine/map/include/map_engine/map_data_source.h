@@ -4,7 +4,7 @@
 #include <string>
 
 /** 数据源连接/协议类型（与图层列表、添加图层对话框一致）。 */
-enum class MapLayerDriverKind {
+enum class MapDataSourceKind {
   kGdalFile,
   kTmsXyz,
   kWmts,
@@ -20,30 +20,30 @@ enum class MapLayerDriverKind {
 struct GDALDataset;
 
 /**
- * 抽象「图层驱动」：负责驱动语义下的属性文案、金字塔等与具体后端实现相关的逻辑。
- * 每个 MapLayer 持有一个具体驱动实例（如 GdalRasterMapLayerDriver）。
+ * 抽象数据源：按连接类型负责属性文案、金字塔等与具体接入方式相关的逻辑。
+ * 每个 MapLayer 持有一个具体实现（如 GdalRasterMapDataSource）。
  */
-class MapLayerDriver {
+class MapDataSource {
  public:
-  virtual ~MapLayerDriver() = default;
+  virtual ~MapDataSource() = default;
 
-  virtual MapLayerDriverKind kind() const = 0;
+  virtual MapDataSourceKind kind() const = 0;
 
-  /** 属性面板「驱动」侧；ds 由图层在调用时传入（驱动不拥有数据集）。 */
+  /** 属性面板「连接类型 / 协议」侧；ds 由图层在调用时传入（不拥有数据集）。 */
   virtual void appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const = 0;
-  /** 属性面板「数据源」侧。 */
+  /** 属性面板「数据源」侧（路径、URL 等）。 */
   virtual void appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const = 0;
 
   virtual bool buildOverviews(GDALDataset* ds, std::wstring& err) = 0;
   virtual bool clearOverviews(GDALDataset* ds, std::wstring& err) = 0;
 };
 
-/** 尚未接入真实数据源的占位驱动（SOAP / WMS 等）。 */
-class PlaceholderMapLayerDriver final : public MapLayerDriver {
+/** 尚未接入真实数据源的占位实现（SOAP / WMS 等）。 */
+class PlaceholderMapDataSource final : public MapDataSource {
  public:
-  explicit PlaceholderMapLayerDriver(MapLayerDriverKind k) : kind_(k) {}
+  explicit PlaceholderMapDataSource(MapDataSourceKind k) : kind_(k) {}
 
-  MapLayerDriverKind kind() const override { return kind_; }
+  MapDataSourceKind kind() const override { return kind_; }
 
   void appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const override;
   void appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath, std::wstring* out) const override;
@@ -51,5 +51,5 @@ class PlaceholderMapLayerDriver final : public MapLayerDriver {
   bool clearOverviews(GDALDataset* ds, std::wstring& err) override;
 
  private:
-  MapLayerDriverKind kind_;
+  MapDataSourceKind kind_;
 };

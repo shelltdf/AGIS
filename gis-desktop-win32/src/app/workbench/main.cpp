@@ -416,17 +416,17 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
       }
       if (id >= ID_VIEW_RENDER_FIRST && id <= ID_VIEW_RENDER_LAST) {
-        MapRenderBackend b = MapRenderBackend::kGdi;
+        MapRenderBackendType b = MapRenderBackendType::kGdi;
         if (id == ID_VIEW_RENDER_GDIPLUS) {
-          b = MapRenderBackend::kGdiPlus;
+          b = MapRenderBackendType::kGdiPlus;
         } else if (id == ID_VIEW_RENDER_D2D) {
-          b = MapRenderBackend::kD2d;
+          b = MapRenderBackendType::kD2d;
         } else if (id == ID_VIEW_RENDER_BGFX_D3D11) {
-          b = MapRenderBackend::kBgfxD3d11;
+          b = MapRenderBackendType::kBgfxD3d11;
         } else if (id == ID_VIEW_RENDER_BGFX_OPENGL) {
-          b = MapRenderBackend::kBgfxOpenGL;
+          b = MapRenderBackendType::kBgfxOpenGL;
         } else if (id == ID_VIEW_RENDER_BGFX_AUTO) {
-          b = MapRenderBackend::kBgfxAuto;
+          b = MapRenderBackendType::kBgfxAuto;
         }
         MapEngine::Instance().SetRenderBackend(b);
         SyncViewMenu(hwnd);

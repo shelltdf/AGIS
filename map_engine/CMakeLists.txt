@@ -21,29 +21,30 @@ set(_ME_THIRDPARTY "${_ME_ROOT}/../3rdparty")
 # 按功能组划分：每组 <组>/include/map_engine/*.h + <组>/src/*.cpp（另有 platform 组见下）
 # PUBLIC 聚合各组 include，对外仍为 #include "map_engine/map_*.h" 等
 #
-# platform/：``include/map_engine/`` 下 ``message_queue``、``native_window``、演示用 ``platform.h``（``map_engine_demo::Platform``）及 Win32 包装；
-# 演示可执行体的 ``platform/src/win32/platform_win32.cpp`` 仅编入 ``map_engine_demo``。
+# platform/：``include/map_engine/`` 下 ``message_queue``、``native_window``、``render_device_context``、演示用 ``platform.h``（``map_engine_demo::Platform``）；Win32 宿主见 ``src/native_window/``；
+# 演示可执行体的 ``platform/src/platform/platform_win32.cpp`` 仅编入 ``map_engine_demo``。
 set(_agis_map_engine_sources
   map/src/map_layer.cpp
-  map/src/map_layer_driver.cpp
-  map/src/map_layer_driver_gdal.cpp
+  map/src/map_data_source.cpp
+  map/src/map_data_source/map_data_source_gdal.cpp
   map/src/map.cpp
   projection/src/map_projection.cpp
   scene_graph/src/scene_graph.cpp
   scene_graph/src/scene_node.cpp
   platform/src/message_queue.cpp
   platform/src/native_window.cpp
-  platform/src/win32/native_window_win32.cpp
+  platform/src/render_device_context.cpp
+  platform/src/render_device_context/render_device_context_d2d.cpp
+  platform/src/render_device_context/render_device_context_bgfx.cpp
+  platform/src/native_window/native_window_win32.cpp
+  platform/src/native_window/map_host_win32.cpp
   view/src/map_view.cpp
-  view/src/win32/map_host_win32.cpp
   render/src/renderer.cpp
-  render/src/map_gpu.cpp
-  render/src/map_gpu_d2d.cpp
-  render/src/map_gpu_bgfx.cpp
   io_gis/src/gis_xml.cpp
   io_gis/src/gis_project_xml.cpp
   io/src/io.cpp
   engine/src/map_engine.cpp
+  engine/src/map_scheduler.cpp
 )
 if(AGIS_MAP_ENGINE_SHARED)
   add_library(agis_map_engine SHARED ${_agis_map_engine_sources})
@@ -60,14 +61,14 @@ target_include_directories(agis_map_engine
     "${_ME_ROOT}/scene_graph/include"
     "${_ME_ROOT}/platform/include"
     "${_ME_ROOT}/view/include"
-    "${_ME_ROOT}/view/src/win32"
+    "${_ME_ROOT}/platform/src/native_window"
     "${_ME_ROOT}/render/include"
     "${_ME_ROOT}/io_gis/include"
     "${_ME_ROOT}/io/include"
     "${_ME_ROOT}/engine/include"
   PRIVATE
-    "${_ME_ROOT}/platform/src/win32"
     "${_ME_ROOT}/map/src"
+    "${_ME_ROOT}/map/src/map_data_source"
     "${AGIS_UI_ENGINE_DIR}/core/include"
     "${AGIS_UI_ENGINE_DIR}/widgets/include"
     "${AGIS_UI_ENGINE_DIR}/gdiplus/include"

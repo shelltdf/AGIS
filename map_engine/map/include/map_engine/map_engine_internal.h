@@ -22,7 +22,7 @@ void AppendRasterBandExtras(GDALRasterBand* b, std::wstring* out);
 void AppendOgrLayerDetails(OGRLayer* lay, int index, std::wstring* out);
 
 std::unique_ptr<MapLayer> CreateLayerFromDataset(GDALDataset* ds, const std::wstring& baseName,
-                                                 const std::wstring& sourcePath, MapLayerDriverKind driverKind,
+                                                 const std::wstring& sourcePath, MapDataSourceKind dataSourceKind,
                                                  std::wstring& err);
 std::unique_ptr<MapLayer> CreateLayerFromTmsUrl(const std::wstring& urlIn, std::wstring& err);
 std::unique_ptr<MapLayer> CreateLayerFromWmtsUrl(const std::wstring& urlIn, std::wstring& err);

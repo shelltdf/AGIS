@@ -1,4 +1,6 @@
-#include "map_engine/map_gpu.h"
+#include "map_engine/render_device_context.h"
+
+#include <memory>
 
 #if defined(_WIN32)
 
@@ -407,6 +409,40 @@ bool ImGuiMapToolbarHitClient(int clientX, int clientY) {
 
 }  // namespace map_gpu_bgfx
 
+class BgfxRenderDeviceContext3D final : public RenderDeviceContext3D {
+ public:
+  explicit BgfxRenderDeviceContext3D(bgfx::RendererType::Enum preferredRenderer) : preferred_(preferredRenderer) {}
+
+  bool initGraphics(HWND hwnd) override { return map_gpu_bgfx::Init(hwnd, preferred_); }
+  void shutdownGraphics() override { map_gpu_bgfx::Shutdown(); }
+  void resizeGraphics(int w, int h) override { map_gpu_bgfx::OnResize(w, h); }
+  bool presentBgraTopDown(HWND hwnd, const uint8_t* bgraTopDown, int w, int h) override {
+    return map_gpu_bgfx::Present(hwnd, bgraTopDown, w, h);
+  }
+  bool imguiMapToolbarHitClient(int clientX, int clientY) const override {
+    return map_gpu_bgfx::ImGuiMapToolbarHitClient(clientX, clientY);
+  }
+
+ private:
+  bgfx::RendererType::Enum preferred_;
+};
+
+std::unique_ptr<RenderDeviceContext3D> CreateBgfxRenderDeviceContext3D(MapRenderBackend3D backend) {
+  bgfx::RendererType::Enum rt = bgfx::RendererType::Count;
+  switch (backend) {
+    case MapRenderBackend3D::kBgfxD3d11:
+      rt = bgfx::RendererType::Direct3D11;
+      break;
+    case MapRenderBackend3D::kBgfxOpenGL:
+      rt = bgfx::RendererType::OpenGL;
+      break;
+    case MapRenderBackend3D::kBgfxAuto:
+      rt = bgfx::RendererType::Count;
+      break;
+  }
+  return std::make_unique<BgfxRenderDeviceContext3D>(rt);
+}
+
 #else  // !_WIN32
 
 namespace map_gpu_bgfx {
@@ -418,5 +454,7 @@ bool Present(HWND, const uint8_t*, int, int) { return false; }
 bool ImGuiMapToolbarHitClient(int, int) { return false; }
 
 }  // namespace map_gpu_bgfx
+
+std::unique_ptr<RenderDeviceContext3D> CreateBgfxRenderDeviceContext3D(MapRenderBackend3D) { return nullptr; }
 
 #endif

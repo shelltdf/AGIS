@@ -123,7 +123,7 @@ classDiagram
     +Shutdown() void
     +Document() MapDocument&
     +SetRenderBackend(b) void
-    +GetRenderBackend() MapRenderBackend
+    +GetRenderBackend() MapRenderBackendType
     +RefreshLayerList(listbox) void
     +MeasureLayerListItem(mis) void
     +PaintLayerListItem(dis) void
@@ -141,7 +141,7 @@ classDiagram
     +UpdateMapChrome() void
     -doc_ MapDocument
     -mapHwnd_ HWND
-    -mapRenderBackend_ MapRenderBackend
+    -mapRenderBackend_ MapRenderBackendType
     -mapChromeScale_ HWND
     -mapShortcutExpanded_ bool
     -mapVisExpanded_ bool
@@ -197,37 +197,52 @@ classDiagram
 
 ---
 
-## 呈现后端（map_gpu.h）
+## 呈现后端（render_device_context.h）
 
-地图客户区可在 GDI 与 GPU 呈现之间切换；**`MapEngine::SetRenderBackend` / `MapEngine::GetRenderBackend`**（经 **`Instance()`**）与 **`MapGpu_*`** 协同（实现见 `map_gpu.cpp`，含匿名命名空间内 D3D11 / OpenGL 状态，此处不展开为类）。
+地图客户区可在 GDI / GDI+ / Direct2D 与 bgfx（D3D11 / OpenGL / Auto）之间切换；**`MapEngine::SetRenderBackend` / `MapEngine::GetRenderBackend`**（经 **`Instance()`**）驱动 **`RenderDeviceContext`**（宿主聚合，实现见 `platform/src/render_device_context.cpp` 与 `platform/src/render_device_context/render_device_context_d2d.cpp` / `render_device_context_bgfx.cpp`）。
 
 ```mermaid
 classDiagram
   direction LR
-  class MapRenderBackend {
+  class MapRenderBackendType {
     <<enumeration>>
     kGdi
-    kD3d11
-    kOpenGL
+    kGdiPlus
+    kD2d
+    kBgfxD3d11
+    kBgfxOpenGL
+    kBgfxAuto
   }
 
-  class MapGpu {
-    <<namespace C API>>
-    +MapGpu_Init(hwnd, backend) bool
-    +MapGpu_Shutdown(hwnd) void
-    +MapGpu_OnResize(w, h) void
-    +MapGpu_PresentFrame(hwnd, bgra, w, h) bool
-    +MapGpu_GetActiveBackend() MapRenderBackend
+  class RenderDeviceContextBase {
+    <<abstract>>
+    +initGraphics(hwnd) bool
+    +presentBgraTopDown(...) bool
   }
+
+  class RenderDeviceContext2D
+  class RenderDeviceContext3D
+
+  RenderDeviceContextBase <|-- RenderDeviceContext2D
+  RenderDeviceContextBase <|-- RenderDeviceContext3D
+
+  class RenderDeviceContext {
+    +init(hwnd, backend) bool
+    +presentFrame(hwnd, bgra, w, h) bool
+    +activeBackend() MapRenderBackendType
+  }
+
+  RenderDeviceContext o-- RenderDeviceContextBase : impl_
+  RenderDeviceContext ..> MapRenderBackendType
 
   class MapEngineGpu {
     <<MapEngine 成员>>
     +SetRenderBackend(b) void
-    +GetRenderBackend() MapRenderBackend
+    +GetRenderBackend() MapRenderBackendType
   }
 
-  MapGpu ..> MapRenderBackend
-  MapEngineGpu ..> MapRenderBackend
+  MapEngineGpu ..> RenderDeviceContext
+  MapEngineGpu ..> MapRenderBackendType
 ```
 
 ---

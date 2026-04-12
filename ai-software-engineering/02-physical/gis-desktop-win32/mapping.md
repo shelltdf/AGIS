@@ -7,7 +7,7 @@
 | 图层子窗口过程 | `gis-desktop-win32/src/app/main.cpp` → `LayerPaneProc` |
 | 地图宿主 / GDAL+GDI | `map_engine/engine/include/map_engine/map_engine.h`、`map_engine/engine/src/map_engine.cpp` → **`MapEngine::Instance()`**、`MapHostProc`、`Map`（引擎持有）、`agis_detail::RasterMapLayer` / `VectorMapLayer`；CMake 目标 **`agis_map_engine`**（`map_engine/CMakeLists.txt`） |
 | 投影 / 拾取 | `map_engine/projection/src/map_projection.cpp` / `map_engine/projection/include/map_engine/map_projection.h` |
-| GPU 呈现 | `map_engine/render/src/map_gpu*.cpp` / `map_engine/render/include/map_engine/map_gpu.h` |
+| 地图客户区呈现（GDI/GDI+/D2D/bgfx） | `map_engine/platform/src/render_device_context.cpp`；D2D/bgfx：`map_engine/platform/src/render_device_context/render_device_context_d2d.cpp`、`render_device_context_bgfx.cpp`；头文件 `map_engine/platform/include/map_engine/render_device_context.h` |
 | GDI+ UI | `ui_engine/gdiplus/include/ui_engine/gdiplus_ui.h` / `ui_engine/gdiplus/src/gdiplus_ui.cpp` |
 | ui_engine 独立演示可执行文件 `ui_engine_demo` | `ui_engine/demo/src/ui_engine_demo.h` 与 `ui_engine_demo*.cpp`（同目录，无 `demo/include`）；由 `gis-desktop-win32/CMakeLists.txt` 的 `add_executable(ui_engine_demo …)` 引用；便捷脚本 `ui_engine/run_ui_demo.py` |
 | 抽象 GUI（App / Widget / 平台接口） | `ui_engine/core/include/ui_engine/` + `core/src/`；**widgets** 在 `widgets/include/ui_engine/` + `widgets/src/`；**平台** 实现 `platform/src/`，私有头 `platform/include/platform/`（类图见 [uml-class-ui.md](uml-class-ui.md)） |

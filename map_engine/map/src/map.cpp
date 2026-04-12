@@ -522,7 +522,7 @@ bool Map::AddLayerFromFile(const std::wstring& path, std::wstring& err) {
   if (slash != std::wstring::npos) {
     base = base.substr(slash + 1);
   }
-  auto layer = agis_detail::CreateLayerFromDataset(ds, base, path, MapLayerDriverKind::kGdalFile, err);
+  auto layer = agis_detail::CreateLayerFromDataset(ds, base, path, MapDataSourceKind::kGdalFile, err);
   if (!layer) {
     return false;
   }

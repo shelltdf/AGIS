@@ -1,4 +1,6 @@
-#include "map_engine/map_gpu.h"
+#include "map_engine/render_device_context.h"
+
+#include <memory>
 
 #if defined(_WIN32)
 
@@ -122,6 +124,20 @@ bool Present(HWND hwnd, const uint8_t* bgraTopDown, int w, int h) {
 
 }  // namespace map_gpu_d2d
 
+class D2dRenderDeviceContext2D final : public RenderDeviceContext2D {
+ public:
+  bool initGraphics(HWND hwnd) override { return map_gpu_d2d::Init(hwnd); }
+  void shutdownGraphics() override { map_gpu_d2d::Shutdown(); }
+  void resizeGraphics(int w, int h) override { map_gpu_d2d::OnResize(w, h); }
+  bool presentBgraTopDown(HWND hwnd, const uint8_t* bgraTopDown, int w, int h) override {
+    return map_gpu_d2d::Present(hwnd, bgraTopDown, w, h);
+  }
+};
+
+std::unique_ptr<RenderDeviceContext2D> CreateD2dRenderDeviceContext2D() {
+  return std::make_unique<D2dRenderDeviceContext2D>();
+}
+
 #else  // !_WIN32
 
 namespace map_gpu_d2d {
@@ -132,5 +148,7 @@ void OnResize(int, int) {}
 bool Present(HWND, const uint8_t*, int, int) { return false; }
 
 }  // namespace map_gpu_d2d
+
+std::unique_ptr<RenderDeviceContext2D> CreateD2dRenderDeviceContext2D() { return nullptr; }
 
 #endif

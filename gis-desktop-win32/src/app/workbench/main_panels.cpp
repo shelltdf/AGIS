@@ -158,6 +158,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           }
           return 0;
         }
+        MapEngine::Instance().SyncSceneGraphFromMap();
         AppLogLine(AgisTr(AgisUiStr::LogLayerDeleted));
         {
           const int nn = MapEngine::Instance().GetLayerCount();
@@ -171,6 +172,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           return 0;
         }
         MapEngine::Instance().Document().MoveLayerUp(static_cast<size_t>(hit));
+        MapEngine::Instance().SyncSceneGraphFromMap();
         AppLogLine(AgisTr(AgisUiStr::LogLayerMovedUp));
         LayerListSyncUiAfterOp(hwnd, mainFr, hit - 1);
         return 0;
@@ -180,6 +182,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           return 0;
         }
         MapEngine::Instance().Document().MoveLayerDown(static_cast<size_t>(hit));
+        MapEngine::Instance().SyncSceneGraphFromMap();
         AppLogLine(AgisTr(AgisUiStr::LogLayerMovedDown));
         LayerListSyncUiAfterOp(hwnd, mainFr, hit + 1);
         return 0;
