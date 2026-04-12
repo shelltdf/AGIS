@@ -8,7 +8,7 @@
 /**
  * 跨平台窗口引用：封装当前操作系统下的原生窗口句柄或指针，避免在公共头中直接依赖平台类型。
  *
- * - **Win32**：值为 ``reinterpret_cast<void*>(HWND)``，见 ``native_window_win32.h``（与 ``map_host_win32.*`` 同在 ``view/src/win32``）中的 ``WinIDFromHwnd``。
+ * - **Win32**：值为 ``reinterpret_cast<void*>(HWND)``，见 ``native_window_win32.h``（``platform/src/win32/``）中的 ``WinIDFromHwnd``。
  * - **其它平台**：预留为同类不透明指针；未绑定时为 ``nullptr``。
  */
 struct WinID {

@@ -798,7 +798,7 @@ if(WIN32)
   set(_map_engine_demo_sources
     ${AGIS_MAP_ENGINE_DIR}/demo/src/entry.cpp
     ${AGIS_MAP_ENGINE_DIR}/demo/src/demo.cpp
-    ${AGIS_MAP_ENGINE_DIR}/platform/src/win32.cpp)
+    ${AGIS_MAP_ENGINE_DIR}/platform/src/win32/platform_win32.cpp)
   if(NOT AGIS_MAP_ENGINE_SHARED)
     list(APPEND _map_engine_demo_sources ${_agis_workbench_imgui_sources})
   endif()
