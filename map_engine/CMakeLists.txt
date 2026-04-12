@@ -19,17 +19,21 @@ set(_ME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_ME_THIRDPARTY "${_ME_ROOT}/../3rdparty")
 
 # 按功能组划分：每组 <组>/include/map_engine/*.h + <组>/src/*.cpp
-# PUBLIC 聚合各组 include，对外仍为 #include "map_engine/map_*.h"
+# PUBLIC 聚合各组 include，对外仍为 #include "map_engine/map_*.h" 等
 set(_agis_map_engine_sources
   layer/src/map_layer.cpp
   layer/src/map_layer_driver.cpp
   layer/src/map_layer_driver_gdal.cpp
-  document/src/map_document.cpp
+  document/src/map.cpp
   projection/src/map_projection.cpp
-  gpu/src/map_gpu.cpp
-  gpu/src/map_gpu_d2d.cpp
-  gpu/src/map_gpu_bgfx.cpp
-  shell/src/map_engine.cpp
+  scene_graph/src/scene_graph.cpp
+  view/src/map_viewport.cpp
+  render/src/map_gpu.cpp
+  render/src/map_gpu_d2d.cpp
+  render/src/map_gpu_bgfx.cpp
+  gis_file_io/src/gis_xml.cpp
+  gis_file_io/src/gis_project_xml.cpp
+  engine/src/map_engine.cpp
 )
 if(AGIS_MAP_ENGINE_SHARED)
   add_library(agis_map_engine SHARED ${_agis_map_engine_sources})
@@ -44,9 +48,13 @@ target_include_directories(agis_map_engine
     "${_ME_ROOT}/layer/include"
     "${_ME_ROOT}/document/include"
     "${_ME_ROOT}/projection/include"
-    "${_ME_ROOT}/gpu/include"
-    "${_ME_ROOT}/shell/include"
+    "${_ME_ROOT}/scene_graph/include"
+    "${_ME_ROOT}/view/include"
+    "${_ME_ROOT}/render/include"
+    "${_ME_ROOT}/gis_file_io/include"
+    "${_ME_ROOT}/engine/include"
   PRIVATE
+    "${_ME_ROOT}/layer/src"
     "${AGIS_UI_ENGINE_DIR}/core/include"
     "${AGIS_UI_ENGINE_DIR}/widgets/include"
     "${AGIS_UI_ENGINE_DIR}/gdiplus/include"
@@ -70,7 +78,7 @@ if(NOT TARGET agis_common OR NOT TARGET agis_ui_engine)
   message(FATAL_ERROR
     "agis_map_engine: 须先于本目录定义 agis_common（仓库根 common/）与 agis_ui_engine。")
 endif()
-# 静/动均需：继承 common 的 PUBLIC include（resource.h、utils/agis_gdal_runtime_env.h 等），并解析 shell 中对 ui_engine 的引用。
+# 静/动均需：继承 common 的 PUBLIC include（resource.h、utils/agis_gdal_runtime_env.h 等），并解析 engine 组中对 ui_engine 的引用。
 target_link_libraries(agis_map_engine PRIVATE agis_common agis_ui_engine)
 
 # SHARED：ImGui 只编进 map_engine DLL，避免与 workbench 重复。

@@ -4,7 +4,7 @@
 #include "utils/ui_font.h"
 #include "utils/ui_theme.h"
 #include "core/main_globals.h"
-#include "map_engine/map_utf8.h"
+#include "utils/utf8_wide.h"
 
 #include <algorithm>
 #include <cwctype>

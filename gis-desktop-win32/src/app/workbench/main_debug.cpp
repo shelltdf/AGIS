@@ -175,7 +175,7 @@ bool AgisCopyMainWindowScreenshotToClipboard(HWND mainHwnd) {
 
 void AgisCopyWorkbenchUiStateJsonToClipboard(HWND mainHwnd) {
   MapEngine& eng = MapEngine::Instance();
-  const MapDocument& doc = eng.Document();
+  const Map& doc = eng.Document();
   std::string j;
   j.reserve(4096);
   j += "{\n";

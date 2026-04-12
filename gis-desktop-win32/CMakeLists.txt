@@ -355,8 +355,7 @@ set(_agis_workbench_imgui_sources
   ${AGIS_BGFX_DIR}/3rdparty/dear-imgui/imgui_demo.cpp
 )
 add_library(agis_workbench_app STATIC
-  src/app/common/gis_document/main_gis_xml.cpp
-  src/app/common/gis_document/main_gis_document.cpp
+  src/app/workbench/gis_document_ui.cpp
   src/app/workbench/main_chrome.cpp
   src/app/workbench/main_debug.cpp
   src/app/workbench/main_panels.cpp
@@ -479,7 +478,6 @@ endif()
 
 add_library(agis_converter_app STATIC
   src/app/common/app_core/satellite_app_menu.cpp
-  src/app/common/gis_document/main_gis_xml.cpp
   src/app/converter/main_convert.cpp
 )
 target_include_directories(agis_converter_app PRIVATE

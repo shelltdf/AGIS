@@ -5,7 +5,7 @@
 #include <string>
 
 #include "map_engine/export.h"
-#include "map_engine/map_document.h"
+#include "map_engine/map.h"
 #include "map_engine/map_gpu.h"
 
 /** 地图引擎：文档、图层列表 UI、地图宿主窗口状态与 GDAL 图层工厂（单例）。 */
@@ -19,8 +19,8 @@ class AGIS_MAP_ENGINE_API MapEngine {
   void Init();
   void Shutdown();
 
-  MapDocument& Document() { return doc_; }
-  const MapDocument& Document() const { return doc_; }
+  Map& Document() { return doc_; }
+  const Map& Document() const { return doc_; }
 
   void SetRenderBackend(MapRenderBackend backend);
   MapRenderBackend GetRenderBackend() const;
@@ -62,7 +62,7 @@ class AGIS_MAP_ENGINE_API MapEngine {
   MapEngine() = default;
   friend AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-  MapDocument doc_{};
+  Map doc_{};
   HWND mapHwnd_{nullptr};
   MapRenderBackend mapRenderBackend_{MapRenderBackend::kGdi};
   HWND mapChromeScale_{nullptr};

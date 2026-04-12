@@ -42,7 +42,7 @@
 #include "common/app_core/main_app.h"
 #include "common/app_core/satellite_app_menu.h"
 #include "core/main_globals.h"
-#include "common/gis_document/main_gis_xml.h"
+#include "map_engine/gis_xml.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_projection.h"
 

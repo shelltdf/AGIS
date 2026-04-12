@@ -1,7 +1,7 @@
 #include "map_engine/map_engine.h"
 
 #include "map_engine/map_engine_internal.h"
-#include "map_engine/map_utf8.h"
+#include "utils/utf8_wide.h"
 
 #include <algorithm>
 #include <cmath>
@@ -117,7 +117,7 @@ static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
 
 #if GIS_DESKTOP_HAVE_GDAL
 
-#include "map_engine/map_layer_driver_gdal.h"
+#include "map_layer_driver_gdal.h"
 
 namespace agis_detail {
 

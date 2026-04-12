@@ -2,7 +2,7 @@
 
 **源码根**：[`map_engine/`](../../../map_engine/)（每组 `map_engine/<组>/include/map_engine/*.h` + `map_engine/<组>/src/*.cpp`）。
 
-**说明**：`MapLayer` 的 GDAL 具体实现类仅在 [`map_engine.cpp`](../../../map_engine/shell/src/map_engine.cpp) 的 `agis_detail` 命名空间中定义，未暴露在公开头文件中；物理层类图仍列出二者以便与 `std::unique_ptr<MapLayer>` 所有权关系对齐。
+**说明**：`MapLayer` 的 GDAL 具体实现类仅在 [`map_engine.cpp`](../../../map_engine/engine/src/map_engine.cpp) 的 `agis_detail` 命名空间中定义，未暴露在公开头文件中；物理层类图仍列出二者以便与 `std::unique_ptr<MapLayer>` 所有权关系对齐。
 
 ---
 

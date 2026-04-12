@@ -6,12 +6,13 @@
 #include <memory>
 #include <vector>
 
-struct MapDocument {
-  MapDocument() = default;
-  MapDocument(const MapDocument&) = delete;
-  MapDocument& operator=(const MapDocument&) = delete;
-  MapDocument(MapDocument&&) = default;
-  MapDocument& operator=(MapDocument&&) = default;
+class Map {
+ public:
+  Map() = default;
+  Map(const Map&) = delete;
+  Map& operator=(const Map&) = delete;
+  Map(Map&&) = default;
+  Map& operator=(Map&&) = default;
 
   std::vector<std::unique_ptr<MapLayer>> layers;
   ViewExtent view{};

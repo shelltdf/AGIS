@@ -1,5 +1,7 @@
 #pragma once
 
+/** Windows 下 UTF-8（窄）与 UTF-16（宽）互转；供 GDAL/CPL 等 UTF-8 接口与 UI 宽字符串衔接。 */
+
 #include <windows.h>
 
 #include <string>

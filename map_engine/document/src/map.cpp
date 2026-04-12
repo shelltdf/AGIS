@@ -1,10 +1,10 @@
-#include "map_engine/map_document.h"
+#include "map_engine/map.h"
 #include "map_engine/map_engine.h"
 
 #include "utils/agis_ui_l10n.h"
 
 #include "map_engine/map_engine_internal.h"
-#include "map_engine/map_utf8.h"
+#include "utils/utf8_wide.h"
 
 #include "ui_engine/gdiplus_ui.h"
 
@@ -407,7 +407,7 @@ ViewExtent DefaultGeographicView() {
   return ViewExtent{-180.0, -90.0, 180.0, 90.0};
 }
 
-void MapDocument::FitViewToLayers() {
+void Map::FitViewToLayers() {
   if (layers.empty()) {
     view = DefaultGeographicView();
     refViewWidthDeg = 360.0;
@@ -450,7 +450,7 @@ void MapDocument::FitViewToLayers() {
   MapEngine::Instance().UpdateMapChrome();
 }
 
-void MapDocument::EnforceLonLatAspect360_180() {
+void Map::EnforceLonLatAspect360_180() {
   if (!layers.empty()) {
     return;
   }
@@ -477,7 +477,7 @@ void MapDocument::EnforceLonLatAspect360_180() {
   }
 }
 
-void MapDocument::NormalizeEmptyMapView() {
+void Map::NormalizeEmptyMapView() {
   if (!layers.empty()) {
     return;
   }
@@ -502,7 +502,7 @@ void MapDocument::NormalizeEmptyMapView() {
   EnforceLonLatAspect360_180();
 }
 
-bool MapDocument::AddLayerFromFile(const std::wstring& path, std::wstring& err) {
+bool Map::AddLayerFromFile(const std::wstring& path, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
   err = AgisPickUiLang(
       L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。请用 AGIS_USE_GDAL=on 重新配置并构建桌面工程（CMake）后重试。"
@@ -532,7 +532,7 @@ bool MapDocument::AddLayerFromFile(const std::wstring& path, std::wstring& err) 
 #endif
 }
 
-bool MapDocument::AddLayerFromTmsUrl(const std::wstring& url, std::wstring& err) {
+bool Map::AddLayerFromTmsUrl(const std::wstring& url, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
   (void)url;
   err = AgisTr(AgisUiStr::DocErrGdalOffTms);
@@ -550,7 +550,7 @@ bool MapDocument::AddLayerFromTmsUrl(const std::wstring& url, std::wstring& err)
 #endif
 }
 
-bool MapDocument::AddLayerFromWmtsUrl(const std::wstring& url, std::wstring& err) {
+bool Map::AddLayerFromWmtsUrl(const std::wstring& url, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
   (void)url;
   err = AgisTr(AgisUiStr::DocErrGdalOffWmts);
@@ -568,7 +568,7 @@ bool MapDocument::AddLayerFromWmtsUrl(const std::wstring& url, std::wstring& err
 #endif
 }
 
-bool MapDocument::AddLayerFromArcGisRestJsonUrl(const std::wstring& url, std::wstring& err) {
+bool Map::AddLayerFromArcGisRestJsonUrl(const std::wstring& url, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
   (void)url;
   err = AgisTr(AgisUiStr::DocErrGdalOffArcGis);
@@ -586,7 +586,7 @@ bool MapDocument::AddLayerFromArcGisRestJsonUrl(const std::wstring& url, std::ws
 #endif
 }
 
-bool MapDocument::ReplaceLayerAt(size_t index, std::unique_ptr<MapLayer> layer, std::wstring& err) {
+bool Map::ReplaceLayerAt(size_t index, std::unique_ptr<MapLayer> layer, std::wstring& err) {
   if (!layer) {
     err = AgisTr(AgisUiStr::DocErrInvalidLayer);
     return false;
@@ -600,7 +600,7 @@ bool MapDocument::ReplaceLayerAt(size_t index, std::unique_ptr<MapLayer> layer, 
   return true;
 }
 
-bool MapDocument::RemoveLayerAt(size_t index, std::wstring& err) {
+bool Map::RemoveLayerAt(size_t index, std::wstring& err) {
   if (index >= layers.size()) {
     err = AgisTr(AgisUiStr::DocErrLayerIndex);
     return false;
@@ -610,21 +610,21 @@ bool MapDocument::RemoveLayerAt(size_t index, std::wstring& err) {
   return true;
 }
 
-void MapDocument::MoveLayerUp(size_t index) {
+void Map::MoveLayerUp(size_t index) {
   if (index == 0 || index >= layers.size()) {
     return;
   }
   std::swap(layers[index - 1], layers[index]);
 }
 
-void MapDocument::MoveLayerDown(size_t index) {
+void Map::MoveLayerDown(size_t index) {
   if (index + 1 >= layers.size()) {
     return;
   }
   std::swap(layers[index], layers[index + 1]);
 }
 
-void MapDocument::Draw(HDC hdcMem, const RECT& client) {
+void Map::Draw(HDC hdcMem, const RECT& client) {
   const int cw = client.right - client.left;
   const int ch = client.bottom - client.top;
   if (cw <= 0 || ch <= 0) {
@@ -668,7 +668,7 @@ void MapDocument::Draw(HDC hdcMem, const RECT& client) {
   DrawScaleBar(hdcMem, innerLocal, view);
 }
 
-void MapDocument::ScreenToWorld(int sx, int sy, int cw, int ch, double* wx, double* wy) const {
+void Map::ScreenToWorld(int sx, int sy, int cw, int ch, double* wx, double* wy) const {
   if (layers.empty() && MapProj_IsProjectionSelectable(displayProjection)) {
     MapProj_ScreenToGeoLonLat(displayProjection, view, cw, ch, sx, sy, wx, wy);
     return;
@@ -686,7 +686,7 @@ void MapDocument::ScreenToWorld(int sx, int sy, int cw, int ch, double* wx, doub
   *wy = view.maxY - fy * worldH;
 }
 
-void MapDocument::ZoomAt(int sx, int sy, int cw, int ch, double factor) {
+void Map::ZoomAt(int sx, int sy, int cw, int ch, double factor) {
   if (!view.valid() || cw <= 0 || ch <= 0 || factor <= 0.0) {
     return;
   }
@@ -710,7 +710,7 @@ void MapDocument::ZoomAt(int sx, int sy, int cw, int ch, double factor) {
   MapEngine::Instance().UpdateMapChrome();
 }
 
-void MapDocument::PanPixels(int dx, int dy, int cw, int ch) {
+void Map::PanPixels(int dx, int dy, int cw, int ch) {
   if (!view.valid() || cw <= 0 || ch <= 0) {
     return;
   }
@@ -729,11 +729,11 @@ void MapDocument::PanPixels(int dx, int dy, int cw, int ch) {
   MapEngine::Instance().UpdateMapChrome();
 }
 
-void MapDocument::ZoomViewAtCenter(double factor, int cw, int ch) {
+void Map::ZoomViewAtCenter(double factor, int cw, int ch) {
   ZoomAt(cw / 2, ch / 2, cw, ch, factor);
 }
 
-void MapDocument::ResetZoom100AnchorCenter(int cw, int ch) {
+void Map::ResetZoom100AnchorCenter(int cw, int ch) {
   if (!view.valid() || cw <= 0 || ch <= 0) {
     return;
   }
@@ -764,7 +764,7 @@ void MapDocument::ResetZoom100AnchorCenter(int cw, int ch) {
   MapEngine::Instance().UpdateMapChrome();
 }
 
-void MapDocument::CenterContentOrigin(int cw, int ch) {
+void Map::CenterContentOrigin(int cw, int ch) {
   (void)cw;
   (void)ch;
   double cx = 0.0;
@@ -800,7 +800,7 @@ void MapDocument::CenterContentOrigin(int cw, int ch) {
   MapEngine::Instance().UpdateMapChrome();
 }
 
-int MapDocument::ScalePercentForUi() const {
+int Map::ScalePercentForUi() const {
   const double w = view.maxX - view.minX;
   const double h = view.maxY - view.minY;
   if (w <= 1e-18 || h <= 1e-18) {
@@ -811,11 +811,11 @@ int MapDocument::ScalePercentForUi() const {
   return static_cast<int>(std::lround((pw + ph) * 0.5));
 }
 
-void MapDocument::SetShowLatLonGrid(bool on) {
+void Map::SetShowLatLonGrid(bool on) {
   showLatLonGrid = on;
 }
 
-void MapDocument::SetDisplayProjection(MapDisplayProjection p) {
+void Map::SetDisplayProjection(MapDisplayProjection p) {
   if (p < MapDisplayProjection::kGeographicWgs84 || p >= MapDisplayProjection::kCount) {
     return;
   }
