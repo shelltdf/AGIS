@@ -36,6 +36,7 @@ constexpr Gdiplus::PixelFormat k24bppRgb = static_cast<Gdiplus::PixelFormat>(0x2
 }  // namespace agis_gdip_pf
 
 #include "utils/ui_font.h"
+#include "utils/agis_ui_l10n.h"
 #include "common/app_core/main_app.h"
 #include "core/main_globals.h"
 
@@ -81,11 +82,11 @@ static constexpr double kTileGeoPi = 3.14159265358979323846;
 static const wchar_t* TileSlippyProjectionShortLabel(TileSlippyProjection p) {
   switch (p) {
   case TileSlippyProjection::kEquirectangular:
-    return L"等经纬";
+    return AgisPickUiLang(L"等经纬", L"Eq. lat/lon");
   case TileSlippyProjection::kWebMercatorGrid:
-    return L"XYZ 网格";
+    return AgisPickUiLang(L"XYZ 网格", L"XYZ grid");
   case TileSlippyProjection::kCylindricalEqualArea:
-    return L"等积圆柱";
+    return AgisPickUiLang(L"等积圆柱", L"Eq. area");
   default:
     return L"";
   }
@@ -95,11 +96,12 @@ static const wchar_t* TileSlippyProjectionShortLabel(TileSlippyProjection p) {
 static const wchar_t* TileSlippyProjectionLongLabel(TileSlippyProjection p) {
   switch (p) {
   case TileSlippyProjection::kEquirectangular:
-    return L"等比例经纬度（Plate Carrée · 片元线性 + PROJ，与 XYZ 同拓扑）";
+    return AgisPickUiLang(L"等比例经纬度（Plate Carrée · 片元线性 + PROJ，与 XYZ 同拓扑）",
+                          L"Plate Carrée (tile-linear + PROJ, same topology as XYZ)");
   case TileSlippyProjection::kWebMercatorGrid:
-    return L"XYZ 片元线性（Web Mercator 网格）";
+    return AgisPickUiLang(L"XYZ 片元线性（Web Mercator 网格）", L"XYZ tile-linear (Web Mercator grid)");
   case TileSlippyProjection::kCylindricalEqualArea:
-    return L"等积圆柱（Lambert · sin φ）";
+    return AgisPickUiLang(L"等积圆柱（Lambert · sin φ）", L"Cylindrical equal-area (Lambert · sin φ)");
   default:
     return L"";
   }
@@ -215,7 +217,7 @@ static std::unique_ptr<Gdiplus::Bitmap> TryLoadGdalRasterTileContainerPreview(co
         WideCharToMultiByte(CP_UTF8, 0, pathW.c_str(), static_cast<int>(pathW.size()), nullptr, 0, nullptr, nullptr);
     if (n <= 0) {
       if (diagOut) {
-        *diagOut = L"路径无法转为 UTF-8。";
+        *diagOut = AgisPickUiLang(L"路径无法转为 UTF-8。", L"Path could not be converted to UTF-8.");
       }
       return nullptr;
     }
@@ -225,7 +227,9 @@ static std::unique_ptr<Gdiplus::Bitmap> TryLoadGdalRasterTileContainerPreview(co
   GDALDatasetH ds = GDALOpenEx(utf8.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr);
   if (!ds) {
     if (diagOut) {
-      *diagOut = L"GDAL 无法以栅格方式打开该文件（驱动缺失、需 PROJ/GDAL_DATA，或不是平铺栅格内容）。";
+      *diagOut = AgisPickUiLang(L"GDAL 无法以栅格方式打开该文件（驱动缺失、需 PROJ/GDAL_DATA，或不是平铺栅格内容）。",
+                                L"GDAL could not open this file as raster (missing driver, PROJ/GDAL_DATA, or not tiled "
+                                L"raster content).");
       const char* cpl = CPLGetLastErrorMsg();
       if (cpl && cpl[0]) {
         const int wn = MultiByteToWideChar(CP_UTF8, 0, cpl, -1, nullptr, 0);
@@ -245,7 +249,7 @@ static std::unique_ptr<Gdiplus::Bitmap> TryLoadGdalRasterTileContainerPreview(co
   if (w < 1 || h < 1 || bands < 1) {
     GDALClose(ds);
     if (diagOut) {
-      *diagOut = L"数据集无有效栅格尺寸。";
+      *diagOut = AgisPickUiLang(L"数据集无有效栅格尺寸。", L"Dataset has no valid raster dimensions.");
     }
     return nullptr;
   }
@@ -288,7 +292,8 @@ static std::unique_ptr<Gdiplus::Bitmap> TryLoadGdalRasterTileContainerPreview(co
   GDALClose(ds);
   if (!ok) {
     if (diagOut) {
-      *diagOut = L"RasterIO 读缩略图失败（波段类型可能非 Byte，或仅为矢量 GeoPackage）。";
+      *diagOut = AgisPickUiLang(L"RasterIO 读缩略图失败（波段类型可能非 Byte，或仅为矢量 GeoPackage）。",
+                                L"RasterIO failed to read thumbnail (bands may not be Byte, or vector-only GeoPackage).");
     }
     return nullptr;
   }
@@ -537,25 +542,32 @@ static std::wstring BuildThreeDTilesDashboard(const std::wstring& rootW, const s
                                               const std::wstring& bvHintLines) {
   std::string raw;
   if (!ReadWholeFileAscii(tilesetJsonW, &raw)) {
-    std::wstring w = L"【3D Tiles】无法读取 tileset.json。\n路径：\n" + tilesetJsonW;
-    return w;
+    return std::wstring(AgisPickUiLang(L"【3D Tiles】无法读取 tileset.json。\n路径：\n",
+                                       L"[3D Tiles] Cannot read tileset.json.\nPath:\n")) +
+           tilesetJsonW;
   }
-  std::wstring dash = L"【3D Tiles · 元数据预览】\n";
-  dash += L"AGIS 内建说明与目录扫描（不加载 glTF/b3dm 网格）。完整浏览请用 Cesium 或「系统默认打开」。\n";
-  dash += L"对接 C++ 运行时请参考仓库 3rdparty/README-CESIUM-NATIVE.md（cesium-native 源码已在 3rdparty/cesium-native-*）。\n\n";
+  std::wstring dash = AgisPickUiLang(L"【3D Tiles · 元数据预览】\n", L"[3D Tiles · metadata preview]\n");
+  dash += AgisPickUiLang(
+      L"AGIS 内建说明与目录扫描（不加载 glTF/b3dm 网格）。完整浏览请用 Cesium 或「系统默认打开」。\n",
+      L"AGIS in-window notes and directory scan (does not load glTF/b3dm meshes). For full viewing use Cesium or open "
+      L"with the system default app.\n");
+  dash += AgisPickUiLang(
+      L"对接 C++ 运行时请参考仓库 3rdparty/README-CESIUM-NATIVE.md（cesium-native 源码已在 3rdparty/cesium-native-*）。\n\n",
+      L"For a C++ runtime, see repo 3rdparty/README-CESIUM-NATIVE.md (cesium-native sources under 3rdparty/cesium-native-*).\n\n");
   if (!bvHintLines.empty()) {
     dash += bvHintLines;
     dash += L"\n\n";
   }
   std::string aver;
   if (TryExtractTilesetAssetVersion(raw, &aver)) {
-    dash += L"asset.version（粗解析）: ";
+    dash += AgisPickUiLang(L"asset.version（粗解析）: ", L"asset.version (rough parse): ");
     dash += Utf8JsonToWide(aver);
     dash += L"\n";
   }
   double ge = 0;
   if (TryParseFirstDoubleAfterKey(raw, "\"geometricError\"", &ge)) {
-    dash += L"首个 geometricError（粗解析，多为根节点）: ";
+    dash += AgisPickUiLang(L"首个 geometricError（粗解析，多为根节点）: ",
+                           L"First geometricError (rough parse, often root): ");
     dash += std::to_wstring(ge);
     dash += L"\n";
   }
@@ -563,24 +575,27 @@ static std::wstring BuildThreeDTilesDashboard(const std::wstring& rootW, const s
   ThreeDTilesContentStats st{};
   ScanThreeDTilesPayloadFiles(contentDir, &st);
   const size_t tileFiles = st.b3dm + st.i3dm + st.pnts + st.cmpt;
-  dash += L"\n内容瓦片文件（子目录扫描≤12000，按扩展名计数）：\n";
+  dash += AgisPickUiLang(L"\n内容瓦片文件（子目录扫描≤12000，按扩展名计数）：\n",
+                         L"\nContent tile files (subdir scan ≤12000, by extension):\n");
   dash += L"  b3dm=" + std::to_wstring(st.b3dm) + L" i3dm=" + std::to_wstring(st.i3dm) + L" pnts=" +
           std::to_wstring(st.pnts) + L" cmpt=" + std::to_wstring(st.cmpt) + L"\n";
   dash += L"  glb=" + std::to_wstring(st.glb) + L" gltf=" + std::to_wstring(st.gltf) + L"\n";
   if (tileFiles == 0 && st.glb == 0 && st.gltf == 0) {
-    dash += L"（未见常见载荷扩展名：可能仅外链 URL、或路径不在当前目录树下。）\n";
+    dash += AgisPickUiLang(L"（未见常见载荷扩展名：可能仅外链 URL、或路径不在当前目录树下。）\n",
+                           L"(No common payload extensions: may be URL-only, or paths outside this tree.)\n");
   }
   std::vector<std::string> uris;
   CollectSampleUris(raw, 8, &uris);
   if (!uris.empty()) {
-    dash += L"\ntileset 内 uri 抽样（至多 8 条，去重）：\n";
+    dash += AgisPickUiLang(L"\ntileset 内 uri 抽样（至多 8 条，去重）：\n",
+                           L"\nSample URIs from tileset (up to 8, deduped):\n");
     for (const auto& u : uris) {
       dash += L"  · ";
       dash += Utf8JsonToWide(u);
       dash += L"\n";
     }
   }
-  dash += L"\n根目录/内容根：\n  ";
+  dash += AgisPickUiLang(L"\n根目录/内容根：\n  ", L"\nRoot / content root:\n  ");
   dash += contentDir.wstring();
   dash += L"\n";
   return dash;
@@ -594,7 +609,7 @@ static std::wstring RoughTilesetBvHintForFile(const std::wstring& tilesetJsonPat
   }
   std::string raw;
   if (!ReadWholeFileAscii(tilesetJsonPathW, &raw)) {
-    return L"(tileset.json 无法读取)";
+    return AgisPickUiLang(L"(tileset.json 无法读取)", L"(Could not read tileset.json)");
   }
   size_t rpos = raw.find("\"region\"");
   double west = 0, south = 0, east = 0, north = 0, zminM = 0, zmaxM = 0;
@@ -640,16 +655,26 @@ static std::wstring RoughTilesetBvHintForFile(const std::wstring& tilesetJsonPat
     }
   }
   std::wostringstream wo;
-  wo << L"【BVH / 3D Tiles】Cesium 瓦片树为层次包围体；根节点常用 region/box。\n";
+  wo << AgisPickUiLang(L"【BVH / 3D Tiles】Cesium 瓦片树为层次包围体；根节点常用 region/box。\n",
+                       L"[BVH / 3D Tiles] Cesium tileset uses a hierarchy of bounding volumes; roots often use region/box.\n");
   if (haveReg) {
-    wo << L"根 region→经纬度(°): W=" << west << L" S=" << south << L" E=" << east << L" N=" << north;
-    wo << L" ；高程约(m) zmin=" << zminM << L" zmax=" << zmaxM << L"\n";
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      wo << L"Root region → lon/lat (°): W=" << west << L" S=" << south << L" E=" << east << L" N=" << north;
+      wo << L" ; elev approx (m) zmin=" << zminM << L" zmax=" << zmaxM << L"\n";
+    } else {
+      wo << L"根 region→经纬度(°): W=" << west << L" S=" << south << L" E=" << east << L" N=" << north;
+      wo << L" ；高程约(m) zmin=" << zminM << L" zmax=" << zmaxM << L"\n";
+    }
   } else {
-    wo << L"未解析到标准数字 region 数组（可能被压缩或格式非预期）。\n";
+    wo << AgisPickUiLang(L"未解析到标准数字 region 数组（可能被压缩或格式非预期）。\n",
+                         L"No standard numeric region array parsed (compressed or unexpected format).\n");
   }
-  wo << L"子树提示: \"children\" 出现 " << childHits
-     << L" 次。\n【八叉树】对 3D box 体积的八分细分常见于嵌套子 tile；本预览不解析子网格、不渲染 glTF/b3dm，完整三维请用 "
-        L"Cesium/系统打开。";
+  wo << AgisPickUiLang(L"子树提示: \"children\" 出现 ", L"Subtree hint: \"children\" appears ") << childHits
+     << AgisPickUiLang(
+            L" 次。\n【八叉树】对 3D box 体积的八分细分常见于嵌套子 tile；本预览不解析子网格、不渲染 glTF/b3dm，完整三维请用 "
+            L"Cesium/系统打开。",
+            L" times.\n[Octree] nested tiles often octree-split 3D boxes; this preview does not parse child meshes or "
+            L"render glTF/b3dm—use Cesium or system open for full 3D.");
   return wo.str();
 }
 
@@ -947,7 +972,11 @@ static void TilePreviewUpdatePointerGeo(TilePreviewState* st, HWND hwnd, POINT c
     SlippyViewFrame vf{};
     TileSlippyComputeViewFrame(cr, st, &vf);
     if (!PtInRect(&vf.mapImg, clientPt)) {
-      swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入地图绘制区查看经纬度", clientPt.x, clientPt.y);
+      if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+        swprintf_s(line, L"Client (%d, %d) | Move over the map to see lon/lat", clientPt.x, clientPt.y);
+      } else {
+        swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入地图绘制区查看经纬度", clientPt.x, clientPt.y);
+      }
       st->tilePointerStatusLine = line;
       return;
     }
@@ -970,21 +999,41 @@ static void TilePreviewUpdatePointerGeo(TilePreviewState* st, HWND hwnd, POINT c
       const double v = (static_cast<double>(clientPt.y - dest.top) + 0.5) / static_cast<double>(dh);
       const int px = (std::clamp)(static_cast<int>(u * static_cast<double>(iw - 1)), 0, iw - 1);
       const int py = (std::clamp)(static_cast<int>(v * static_cast<double>(ih - 1)), 0, ih - 1);
-      swprintf_s(line, L"客户区 (%d, %d) | 图像像素 (%d, %d) | 源图尺寸 %d×%d（无地理参照）", clientPt.x, clientPt.y, px, py, iw, ih);
+      if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+        swprintf_s(line, L"Client (%d, %d) | image px (%d, %d) | source %d×%d (no georef)", clientPt.x, clientPt.y, px, py,
+                   iw, ih);
+      } else {
+        swprintf_s(line, L"客户区 (%d, %d) | 图像像素 (%d, %d) | 源图尺寸 %d×%d（无地理参照）", clientPt.x, clientPt.y, px,
+                   py, iw, ih);
+      }
     } else {
-      swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入缩略图区域查看像素坐标", clientPt.x, clientPt.y);
+      if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+        swprintf_s(line, L"Client (%d, %d) | Move over the thumbnail for pixel coords", clientPt.x, clientPt.y);
+      } else {
+        swprintf_s(line, L"客户区 (%d, %d) | 将鼠标移入缩略图区域查看像素坐标", clientPt.x, clientPt.y);
+      }
     }
     st->tilePointerStatusLine = line;
     return;
   }
 
   if (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) {
-    swprintf_s(line, L"客户区 (%d, %d) | 3D Tiles 元数据模式：无平面地图坐标（见上方 BVH/层级说明）", clientPt.x, clientPt.y);
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      swprintf_s(line, L"Client (%d, %d) | 3D Tiles metadata: no flat-map coords (see BVH notes above)", clientPt.x,
+                 clientPt.y);
+    } else {
+      swprintf_s(line, L"客户区 (%d, %d) | 3D Tiles 元数据模式：无平面地图坐标（见上方 BVH/层级说明）", clientPt.x,
+                 clientPt.y);
+    }
     st->tilePointerStatusLine = line;
     return;
   }
 
-  swprintf_s(line, L"客户区 (%d, %d)", clientPt.x, clientPt.y);
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    swprintf_s(line, L"Client (%d, %d)", clientPt.x, clientPt.y);
+  } else {
+    swprintf_s(line, L"客户区 (%d, %d)", clientPt.x, clientPt.y);
+  }
   st->tilePointerStatusLine = line;
 }
 
@@ -1218,18 +1267,30 @@ static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, RGB(28, 36, 52));
   RECT titleRc{prc.left + 10, prc.top + 6, prc.right - 10, prc.top + 22};
-  DrawTextW(hdc, L"输入源投影 → 算法 → 显示 → 屏幕", -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  DrawTextW(hdc,
+            AgisPickUiLang(L"输入源投影 → 算法 → 显示 → 屏幕",
+                           L"Source projection → algorithm → display → screen"),
+            -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   RECT ioRc{prc.left + 10, prc.top + 22, prc.right - 10, prc.top + 102};
   DrawTextW(hdc,
 #if GIS_DESKTOP_HAVE_GDAL
-             L"① 输入源投影：标准 XYZ 纹理 = EPSG:3857（与 z/x/y 一致）\n"
-             L"② 算法：重投影/重采样（PROJ 等）把「显示几何上的点」变到 ① 再取纹素；代码里对每个像素：屏→显示→3857→纹理\n"
-             L"③ 显示：下列为显示用投影/几何；④ 合成到窗口像素。「XYZ 片元线性」下显示与源一致，② 无额外 CRS 步",
+            AgisPickUiLang(
+                L"① 输入源投影：标准 XYZ 纹理 = EPSG:3857（与 z/x/y 一致）\n"
+                L"② 算法：重投影/重采样（PROJ 等）把「显示几何上的点」变到 ① 再取纹素；代码里对每个像素：屏→显示→3857→纹理\n"
+                L"③ 显示：下列为显示用投影/几何；④ 合成到窗口像素。「XYZ 片元线性」下显示与源一致，② 无额外 CRS 步",
+                L"① Source: standard XYZ texture = EPSG:3857 (matches z/x/y)\n"
+                L"② Algorithm: reproject/resample (PROJ) maps display-geometry points to ① then samples texels; per pixel: "
+                L"screen→display→3857→texture\n"
+                L"③ Display: options below; ④ composite to pixels. Under XYZ tile-linear, display matches source; ② adds "
+                L"no extra CRS step"),
 #else
-             L"① 输入源：EPSG:3857 标准 XYZ 纹理\n"
-             L"②④ 当前无 GDAL/PROJ：非 XYZ 为近似几何；请用带 GDAL 的构建做严格 源→显示 重采样。",
+            AgisPickUiLang(L"① 输入源：EPSG:3857 标准 XYZ 纹理\n"
+                           L"②④ 当前无 GDAL/PROJ：非 XYZ 为近似几何；请用带 GDAL 的构建做严格 源→显示 重采样。",
+                           L"① Source: EPSG:3857 XYZ texture\n"
+                           L"②④ No GDAL/PROJ: non-XYZ is approximate; use a GDAL build for strict source→display "
+                           L"resampling."),
 #endif
-             -1, &ioRc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+            -1, &ioRc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
   constexpr int kProjRow0 = 110;
   for (int i = 0; i < kTileSlippyProjectionCount; ++i) {
     wchar_t line[200]{};
@@ -1239,7 +1300,7 @@ static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) 
     DrawTextW(hdc, line, -1, &rowRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   }
   RECT secRc{prc.left + 10, prc.top + 188, prc.right - 8, prc.top + 206};
-  DrawTextW(hdc, L"界面元素", -1, &secRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  DrawTextW(hdc, AgisPickUiLang(L"界面元素", L"UI elements"), -1, &secRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   auto drawCheckRow = [&](int y, bool on, const wchar_t* label) {
     const RECT box{prc.left + 14, y, prc.left + 28, y + 14};
     Rectangle(hdc, box.left, box.top, box.right, box.bottom);
@@ -1250,10 +1311,13 @@ static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) 
     RECT tx{prc.left + 32, y - 2, prc.right - 10, y + 18};
     DrawTextW(hdc, label, -1, &tx, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   };
-  drawCheckRow(prc.top + 210, st->uiShowTopHint, L"顶栏说明（快捷提示）");
-  drawCheckRow(prc.top + 234, st->uiShowSlippyMapHud, L"地图内 HUD（层级与操作说明）");
-  drawCheckRow(prc.top + 258, st->uiShowTileGrid, L"瓦片网格线");
-  drawCheckRow(prc.top + 282, st->uiShowTileLabels, L"瓦片标注（z/x/y 与像素尺寸）");
+  drawCheckRow(prc.top + 210, st->uiShowTopHint,
+               AgisPickUiLang(L"顶栏说明（快捷提示）", L"Top bar hints"));
+  drawCheckRow(prc.top + 234, st->uiShowSlippyMapHud,
+               AgisPickUiLang(L"地图内 HUD（层级与操作说明）", L"In-map HUD (Z and controls)"));
+  drawCheckRow(prc.top + 258, st->uiShowTileGrid, AgisPickUiLang(L"瓦片网格线", L"Tile grid lines"));
+  drawCheckRow(prc.top + 282, st->uiShowTileLabels,
+               AgisPickUiLang(L"瓦片标注（z/x/y 与像素尺寸）", L"Tile labels (z/x/y and pixel size)"));
 }
 
 /// @return true 若点击落在面板内并已消费（含空白区域），调用方勿启动地图拖拽。
@@ -1303,13 +1367,18 @@ static void TilePreviewShowLoadError(HWND owner, const TilePreviewLoadReport& re
   if (rep.ok || rep.errorText.empty()) {
     return;
   }
-  const wchar_t* cap = rep.errorTitle.empty() ? L"瓦片预览" : rep.errorTitle.c_str();
+  const wchar_t* cap =
+      rep.errorTitle.empty() ? AgisPickUiLang(L"瓦片预览", L"Tile preview") : rep.errorTitle.c_str();
   MessageBoxW(owner, rep.errorText.c_str(), cap, MB_OK | MB_ICONWARNING);
 }
 
 /// Slippy 顶栏一行；完整打开方式与支持格式见产品文档 / README，不再占用主视图顶栏。
-static const wchar_t kTilePreviewSlippyTopLine[] =
-    L"本地路径：Open… 或拖入瓦片根目录/文件（无网络服务；标准 XYZ 纹理为 Web 墨卡托 EPSG:3857，「选项」可调显示投影）。滚轮：Z；Shift+滚轮：视口中心；Ctrl+滚轮：片元像素；拖拽平移。";
+static std::wstring TilePreviewSlippyTopLineW() {
+  return std::wstring(AgisPickUiLang(
+      L"本地路径：Open… 或拖入瓦片根目录/文件（无网络服务；标准 XYZ 纹理为 Web 墨卡托 EPSG:3857，「选项」可调显示投影）。滚轮：Z；Shift+滚轮：视口中心；Ctrl+滚轮：片元像素；拖拽平移。",
+      L"Local path: Open… or drop a tile root folder/file (no network; standard XYZ textures are Web Mercator EPSG:3857; "
+      L"Options changes display projection). Wheel: Z; Shift+wheel: center; Ctrl+wheel: tile pixel size; drag to pan."));
+}
 
 static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::wstring& path, TilePreviewLoadReport* report) {
   if (!st) {
@@ -1358,7 +1427,7 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   st->lastPointerClient = {};
   st->pointerOverImage = false;
   st->pointerGeoValid = false;
-  st->tilePointerStatusLine = L"移动鼠标查看坐标";
+  st->tilePointerStatusLine = AgisPickUiLang(L"移动鼠标查看坐标", L"Move the pointer to see coordinates");
   st->tileMouseTrackingLeave = false;
   st->lastPointerQuantX = INT_MIN;
   st->lastPointerQuantY = INT_MIN;
@@ -1370,7 +1439,10 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   st->uiShowTileLabels = saveLabels;
 
   if (st->rootPath.empty()) {
-    st->hint = L"请使用「Open…」、拖放或命令行传入本机路径：XYZ/TMS 目录、单张栅格、本地 tileset.json（3D Tiles 元数据）、或 .mbtiles/.gpkg（需 GDAL）。不支持 http(s)/WMTS 等网络地址。";
+    st->hint = AgisPickUiLang(
+        L"请使用「Open…」、拖放或命令行传入本机路径：XYZ/TMS 目录、单张栅格、本地 tileset.json（3D Tiles 元数据）、或 .mbtiles/.gpkg（需 GDAL）。不支持 http(s)/WMTS 等网络地址。",
+        L"Use Open…, drag-drop, or a command-line path: XYZ/TMS folder, single raster, local tileset.json (3D Tiles "
+        L"metadata), or .mbtiles/.gpkg (needs GDAL). http(s)/WMTS and other network URLs are not supported.");
     InvalidateRect(hwnd, nullptr, FALSE);
     markOk();
     return;
@@ -1387,7 +1459,8 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
         st->bmp = std::move(bm);
         st->mode = TilePreviewState::Mode::kSingleRaster;
         std::wostringstream hs;
-        hs << L"【MBTiles / GeoPackage】GDAL 栅格缩略预览（全球拼图下采样至 <=2048px）。\n路径：\n"
+        hs << AgisPickUiLang(L"【MBTiles / GeoPackage】GDAL 栅格缩略预览（全球拼图下采样至 <=2048px）。\n路径：\n",
+                             L"[MBTiles / GeoPackage] GDAL raster thumbnail (mosaic downsampled to ≤2048 px).\nPath:\n")
            << st->rootPath;
         if (!gdalDiag.empty()) {
           hs << L"\n" << gdalDiag;
@@ -1397,9 +1470,12 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
         markOk();
         return;
       }
-      markFail(L"MBTiles / GeoPackage 预览失败",
-               L"【MBTiles / GeoPackage】GDAL 预览失败：\n" + gdalDiag +
-                   L"\n请检查 GDAL/PROJ/gdal_data 配置，或导出 XYZ 目录后再预览。");
+      markFail(AgisPickUiLang(L"MBTiles / GeoPackage 预览失败", L"MBTiles / GeoPackage preview failed"),
+               std::wstring(AgisPickUiLang(L"【MBTiles / GeoPackage】GDAL 预览失败：\n",
+                                           L"[MBTiles / GeoPackage] GDAL preview failed:\n")) +
+                   gdalDiag +
+                   std::wstring(AgisPickUiLang(L"\n请检查 GDAL/PROJ/gdal_data 配置，或导出 XYZ 目录后再预览。",
+                                               L"\nCheck GDAL/PROJ/gdal_data, or export an XYZ folder and preview again.")));
       return;
     }
   }
@@ -1407,8 +1483,10 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
   if (std::filesystem::is_regular_file(rootFs, ecPath)) {
     const std::wstring ext = rootFs.extension().wstring();
     if (_wcsicmp(ext.c_str(), L".mbtiles") == 0 || _wcsicmp(ext.c_str(), L".gpkg") == 0) {
-      markFail(L"构建未启用 GDAL",
-               L"当前构建未启用 GDAL，无法预览 .mbtiles / .gpkg。\n请使用带 GDAL 的构建，或改为打开 XYZ 瓦片目录 / 单张栅格图。");
+      markFail(AgisPickUiLang(L"构建未启用 GDAL", L"Build without GDAL"),
+               AgisPickUiLang(L"当前构建未启用 GDAL，无法预览 .mbtiles / .gpkg。\n请使用带 GDAL 的构建，或改为打开 XYZ 瓦片目录 / 单张栅格图。",
+                              L"This build has no GDAL; cannot preview .mbtiles / .gpkg.\nUse a GDAL-enabled build, or open "
+                              L"an XYZ tile folder / a single raster image."));
       return;
     }
   }
@@ -1433,12 +1511,20 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
     st->centerTx = sz * 0.5;
     st->centerTy = sz * 0.5;
     std::wostringstream hs;
-    hs << L"【平面四叉树 / XYZ】已索引 " << st->tileCount
-       << L" 个图块。拖拽平移，滚轮换级，Ctrl+滚轮改片元尺度。"
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      hs << L"[Slippy quadtree / XYZ] Indexed " << st->tileCount
+         << L" tiles. Drag to pan, wheel changes Z, Ctrl+wheel changes tile pixel size.";
 #if GIS_DESKTOP_HAVE_GDAL
-       << L"\n启用 GDAL 时：等经纬 / 等积圆柱显示由 PROJ（显示 CRS→EPSG:3857）逐像素重采样。"
+      hs << L"\nWith GDAL: equirectangular / equal-area display uses PROJ (display CRS → EPSG:3857) per-pixel resampling.";
 #endif
-        ;
+    } else {
+      hs << L"【平面四叉树 / XYZ】已索引 " << st->tileCount
+         << L" 个图块。拖拽平移，滚轮换级，Ctrl+滚轮改片元尺度。"
+#if GIS_DESKTOP_HAVE_GDAL
+         << L"\n启用 GDAL 时：等经纬 / 等积圆柱显示由 PROJ（显示 CRS→EPSG:3857）逐像素重采样。"
+#endif
+          ;
+    }
     st->hint = hs.str();
     InvalidateRect(hwnd, nullptr, FALSE);
     markOk();
@@ -1454,8 +1540,10 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
 
   const TileFindResult found = FindSampleTileRaster(st->rootPath);
   if (found.code == TileSampleResult::kContainerUnsupported) {
-    markFail(L"不支持的容器",
-             L"单文件 MBTiles / GeoPackage 不能直接解码为交互瓦片。\n请系统默认打开或导出 XYZ 后预览。");
+    markFail(AgisPickUiLang(L"不支持的容器", L"Unsupported container"),
+             AgisPickUiLang(L"单文件 MBTiles / GeoPackage 不能直接解码为交互瓦片。\n请系统默认打开或导出 XYZ 后预览。",
+                            L"Single-file MBTiles / GeoPackage cannot be decoded as interactive tiles here.\nOpen with the "
+                            L"system default or export XYZ, then preview."));
     return;
   }
   if (found.code == TileSampleResult::kOk && !found.path.empty()) {
@@ -1463,21 +1551,29 @@ static void TilePreviewLoadFromPath(HWND hwnd, TilePreviewState* st, const std::
     auto loaded = std::make_unique<Gdiplus::Bitmap>(st->samplePath.c_str());
     if (loaded && loaded->GetLastStatus() == Gdiplus::Ok) {
       st->bmp = std::move(loaded);
-      st->hint = L"单图采样预览：\n" + st->samplePath;
+      st->hint = std::wstring(AgisPickUiLang(L"单图采样预览：\n", L"Single-image sample preview:\n")) + st->samplePath;
       InvalidateRect(hwnd, nullptr, FALSE);
       markOk();
       return;
     }
-    markFail(L"栅格加载失败", L"无法加载栅格文件（GDI+ 解码失败）：\n" + st->samplePath);
+    markFail(AgisPickUiLang(L"栅格加载失败", L"Raster load failed"),
+             std::wstring(AgisPickUiLang(L"无法加载栅格文件（GDI+ 解码失败）：\n",
+                                         L"Could not load raster (GDI+ decode failed):\n")) +
+                 st->samplePath);
     return;
   }
 
-  markFail(L"无法预览",
-           L"未找到可预览的本地内容：\n"
-           L"· 目录下无 z/x/y（或 TMS）瓦片结构；且\n"
-           L"· 无本地 tileset.json / 有效 .json；且\n"
-           L"· 未找到可读的 PNG/JPG/WebP/BMP/TIF 栅格。\n"
-           L"本窗口仅支持磁盘路径，不支持网络 URL。请确认路径或通过「Open…」按类型重新选择。");
+  markFail(AgisPickUiLang(L"无法预览", L"Nothing to preview"),
+           AgisPickUiLang(L"未找到可预览的本地内容：\n"
+                          L"· 目录下无 z/x/y（或 TMS）瓦片结构；且\n"
+                          L"· 无本地 tileset.json / 有效 .json；且\n"
+                          L"· 未找到可读的 PNG/JPG/WebP/BMP/TIF 栅格。\n"
+                          L"本窗口仅支持磁盘路径，不支持网络 URL。请确认路径或通过「Open…」按类型重新选择。",
+                          L"No local previewable content:\n"
+                          L"· No z/x/y (or TMS) tile layout under the folder; and\n"
+                          L"· No local tileset.json / valid .json; and\n"
+                          L"· No readable PNG/JPG/WebP/BMP/TIF raster.\n"
+                          L"This window only accepts disk paths, not network URLs. Check the path or pick a type via Open…."));
 }
 
 /// Slippy 绘制布局（瓦片层与 HUD 层共用；分阶段绘制以保证 Z 序：瓦片 → 顶栏 UI → 地图 HUD → 底栏）。
@@ -2254,6 +2350,10 @@ static void Utf8AppendJsonEscapedString(std::string* out, const std::wstring& ws
   out->push_back('"');
 }
 
+static void Utf8AppendJsonEscapedStringPick(std::string* out, const wchar_t* zh, const wchar_t* en) {
+  Utf8AppendJsonEscapedString(out, std::wstring(AgisPickUiLang(zh, en)));
+}
+
 /// 已为 UTF-8 的字串写入 JSON 字符串字面量（转义控制字符与引号）。
 static void Utf8AppendJsonEscapedUtf8String(std::string* out, const std::string& utf8) {
   if (!out) {
@@ -2392,7 +2492,9 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     j += ",\n      \"diskTileRowOrder\": ";
     j += st->slippyDiskTmsYIndex ? "\"tms_y_on_disk_mapped_to_xyz_ty\"" : "\"xyz\"";
     j += ",\n      \"pathPatternNoteZh\": ";
-    Utf8AppendJsonEscapedString(&j, L"{z}/{x}/{y} 栅格；磁盘为 TMS 行号时文件名 y 经 (2^z-1-y) 映射为 XYZ 的 ty。");
+    Utf8AppendJsonEscapedStringPick(
+        &j, L"{z}/{x}/{y} 栅格；磁盘为 TMS 行号时文件名 y 经 (2^z-1-y) 映射为 XYZ 的 ty。",
+        L"{z}/{x}/{y} rasters; with TMS row filenames on disk, y maps to XYZ ty via (2^z-1-y).");
     j += "\n    }";
   } else {
     j += "null";
@@ -2404,14 +2506,19 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     if (std::filesystem::is_regular_file(rp, ec)) {
       const std::wstring ext = rp.extension().wstring();
       if (_wcsicmp(ext.c_str(), L".mbtiles") == 0) {
-        Utf8AppendJsonEscapedString(&j, L"根路径为单文件 MBTiles：GDAL 下采样缩略预览，地理参照以数据集 CRS 为准。");
+        Utf8AppendJsonEscapedStringPick(
+            &j, L"根路径为单文件 MBTiles：GDAL 下采样缩略预览，地理参照以数据集 CRS 为准。",
+            L"Root is a single MBTiles file: GDAL downsampled thumbnail; georef follows dataset CRS.");
       } else if (_wcsicmp(ext.c_str(), L".gpkg") == 0) {
-        Utf8AppendJsonEscapedString(&j, L"根路径为单文件 GeoPackage 栅格：GDAL 下采样缩略预览。");
+        Utf8AppendJsonEscapedStringPick(&j, L"根路径为单文件 GeoPackage 栅格：GDAL 下采样缩略预览。",
+                                        L"Root is a single GeoPackage raster: GDAL downsampled thumbnail.");
       } else {
-        Utf8AppendJsonEscapedString(&j, L"根路径为单张栅格文件。");
+        Utf8AppendJsonEscapedStringPick(&j, L"根路径为单张栅格文件。", L"Root is a single raster file.");
       }
     } else {
-      Utf8AppendJsonEscapedString(&j, L"目录下递归采样首张可解码栅格；无内嵌地理参照时仅为像素预览。");
+      Utf8AppendJsonEscapedStringPick(
+          &j, L"目录下递归采样首张可解码栅格；无内嵌地理参照时仅为像素预览。",
+          L"Recursively picks first decodable raster under the folder; pixel-only preview if no embedded georef.");
     }
   } else {
     j += "null";
@@ -2434,27 +2541,37 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
   j += "false";
 #endif
   j += ",\n    \"pipeline\": {\n      \"conceptualFlowZh\": ";
-  Utf8AppendJsonEscapedString(
+  Utf8AppendJsonEscapedStringPick(
       &j, L"【语义顺序】输入源投影（Slippy 纹理 EPSG:3857）→ 重投影/重采样算法 → 显示用几何（选项中的 TileSlippyProjection）→ 光栅合成到屏幕。"
-      L"【实现顺序】对每个输出像素：屏幕 → 逆入显示几何 → PROJ 到 EPSG:3857 → 读源纹理（与语义链等价、方向相反）。");
+      L"【实现顺序】对每个输出像素：屏幕 → 逆入显示几何 → PROJ 到 EPSG:3857 → 读源纹理（与语义链等价、方向相反）。",
+      L"[Semantic order] Source projection (Slippy texture EPSG:3857) → reproject/resample → display geometry "
+      L"(TileSlippyProjection in options) → composite to screen. [Implementation order] Per output pixel: screen → "
+      L"inverse display geometry → PROJ to EPSG:3857 → sample texture (same chain, opposite direction).");
   j += ",\n      \"sourceTextureCrs\": \"EPSG:3857\",\n      \"sourceRoleZh\": ";
-  Utf8AppendJsonEscapedString(
-      &j, L"Slippy 标准瓦片：磁盘 z/x/y 纹理的地理语义为 Web 墨卡托（输入源投影/CRS）；与 textureTileAssumption 一致。");
+  Utf8AppendJsonEscapedStringPick(
+      &j, L"Slippy 标准瓦片：磁盘 z/x/y 纹理的地理语义为 Web 墨卡托（输入源投影/CRS）；与 textureTileAssumption 一致。",
+      L"Standard Slippy tiles: on-disk z/x/y semantics are Web Mercator (source texture CRS); matches textureTileAssumption.");
   j += ",\n      \"algorithmZh\": ";
-  Utf8AppendJsonEscapedString(
+  Utf8AppendJsonEscapedStringPick(
       &j,
       L"桥接「显示几何坐标」与「输入源 EPSG:3857」：逆映射 + PROJ + 双线性/拼贴；整视口可为单遍重采样。"
-      L"「XYZ 片元线性」下显示与源索引一致，无额外 CRS 变换（恒等）。");
+      L"「XYZ 片元线性」下显示与源索引一致，无额外 CRS 变换（恒等）。",
+      L"Bridges display-geometry coordinates and source EPSG:3857: inverse map + PROJ + bilinear/blit; full viewport can be "
+      L"one resample pass. Under XYZ tile-linear, display matches source indices with no extra CRS transform (identity).");
   j += ",\n      \"displayRoleZh\": ";
-  Utf8AppendJsonEscapedString(
-      &j, L"viewportDisplay 与选项单选：用户所选「显示用」平面或索引展开（显示投影/几何语义），不改写源文件。");
+  Utf8AppendJsonEscapedStringPick(
+      &j, L"viewportDisplay 与选项单选：用户所选「显示用」平面或索引展开（显示投影/几何语义），不改写源文件。",
+      L"viewportDisplay mirrors the option: chosen display plane or index layout (display projection semantics); source files "
+      L"unchanged.");
   j += "\n    },\n    \"textureTileAssumption\": ";
   if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
     j += "{\n      \"pixelGridInterpretation\": \"web_mercator_slippy_xyz_texture\",\n";
     j += "      \"crsAuthority\": \"EPSG:3857\",\n";
     j += "      \"meridianModelZh\": ";
-    Utf8AppendJsonEscapedString(
-        &j, L"与常见 OSM/Google XYZ 纹理一致的球面 Web 墨卡托米制范围；各瓦片 bbox3857Meters 与此一致，PROJ 椭球 3857 边界仅有细微差别。");
+    Utf8AppendJsonEscapedStringPick(
+        &j, L"与常见 OSM/Google XYZ 纹理一致的球面 Web 墨卡托米制范围；各瓦片 bbox3857Meters 与此一致，PROJ 椭球 3857 边界仅有细微差别。",
+        L"Spherical Web Mercator meter extents like common OSM/Google XYZ; per-tile bbox3857Meters matches; PROJ spheroid 3857 "
+        L"edges differ slightly.");
     j += ",\n      \"tileIndexTyNorthUp\": true\n    }";
   } else {
     j += "null";
@@ -2469,20 +2586,28 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     switch (st->slippyProjection) {
     case TileSlippyProjection::kWebMercatorGrid:
       j += "{ \"type\": \"fractional_tile_index_plane\", \"noteZh\": ";
-      Utf8AppendJsonEscapedString(&j, L"屏幕为当前 Z 下片元索引的线性展开；不做地理投影展点，纹理仍按 3857 解码。");
+      Utf8AppendJsonEscapedStringPick(
+          &j, L"屏幕为当前 Z 下片元索引的线性展开；不做地理投影展点，纹理仍按 3857 解码。",
+          L"Screen is linear fractional-tile indices at current Z; no geographic plot warp; textures decoded as 3857.");
       j += " }";
       break;
     case TileSlippyProjection::kEquirectangular:
       j += "{ \"type\": \"slippy_fractional_tile_linear_screen\", \"samplingCrs\": \"EPSG:4326\", \"axisZh\": ";
-      Utf8AppendJsonEscapedString(
-          &j, L"等比例经纬度（Plate Carrée）语义：采样用 WGS84 经纬度度。屏上与 XYZ 片元网格同拓扑——片元浮点矩形线性对应地图区；每点经 SlippyTileXYToLonLat（纬向墨卡托非线性）得 WGS84，GDAL 下 PROJ→EPSG:3857 双线性取纹理。非整屏仿射 Plate Carrée，故 JSON 中 pixelsPerDegreeLon/Lat 可不等。");
+      Utf8AppendJsonEscapedStringPick(
+          &j, L"等比例经纬度（Plate Carrée）语义：采样用 WGS84 经纬度度。屏上与 XYZ 片元网格同拓扑——片元浮点矩形线性对应地图区；每点经 SlippyTileXYToLonLat（纬向墨卡托非线性）得 WGS84，GDAL 下 PROJ→EPSG:3857 双线性取纹理。非整屏仿射 Plate Carrée，故 JSON 中 pixelsPerDegreeLon/Lat 可不等。",
+          L"Equirectangular (Plate Carrée) sampling uses WGS84 degrees. Screen shares XYZ tile topology—fractional tile rect "
+          L"maps linearly to the map; each point → SlippyTileXYToLonLat (nonlinear in latitude) → WGS84, then PROJ→EPSG:3857 "
+          L"and bilinear sample. Not global affine Plate Carrée, so pixelsPerDegreeLon/Lat may differ.");
       j += " }";
       break;
     case TileSlippyProjection::kCylindricalEqualArea:
       j += "{ \"type\": \"cea_metric_plane\", \"projInit\": ";
       Utf8AppendJsonEscapedUtf8String(&j, std::string(kTileSlippyCeaWgs84Proj));
       j += ", \"noteZh\": ";
-      Utf8AppendJsonEscapedString(&j, L"显示平面为等积圆柱（Lambert CEA）米制坐标；指针与整视口重采样使用 PROJ：CEA↔EPSG:4326、CEA→EPSG:3857。");
+      Utf8AppendJsonEscapedStringPick(
+          &j, L"显示平面为等积圆柱（Lambert CEA）米制坐标；指针与整视口重采样使用 PROJ：CEA↔EPSG:4326、CEA→EPSG:3857。",
+          L"Display plane is Lambert cylindrical equal-area (CEA) metres; pointer and full-viewport resample use PROJ: "
+          L"CEA↔EPSG:4326, CEA→EPSG:3857.");
       j += " }";
       break;
     default:
@@ -2493,10 +2618,15 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     j += slippyRasterFullViewportProj ? "\"per_pixel_proj_full_viewport\"" : "\"per_tile_bitmap_blit\"";
     j += ",\n      \"projResamplePipelineZh\": ";
 #if GIS_DESKTOP_HAVE_GDAL
-    Utf8AppendJsonEscapedString(
-        &j, L"非「XYZ 网格」时：等比例经纬度模式每像素 SlippyPixelCenterToFractionalTile→SlippyTileXYToLonLat 得 WGS84，经 PROJ EPSG:4326→EPSG:3857 再 Slippy3857MetersToFractionalTile 纹理双线性（屏上映射与 XYZ 片元拓扑一致，非整屏「1°经像素长=1°纬像素长」的仿射 Plate Carrée）。等积圆柱为客户区像素与 SlippyLonLatToScreenCea 互逆得 WGS84 后走 WGS84→CEA→EPSG:3857。");
+    Utf8AppendJsonEscapedStringPick(
+        &j, L"非「XYZ 网格」时：等比例经纬度模式每像素 SlippyPixelCenterToFractionalTile→SlippyTileXYToLonLat 得 WGS84，经 PROJ EPSG:4326→EPSG:3857 再 Slippy3857MetersToFractionalTile 纹理双线性（屏上映射与 XYZ 片元拓扑一致，非整屏「1°经像素长=1°纬像素长」的仿射 Plate Carrée）。等积圆柱为客户区像素与 SlippyLonLatToScreenCea 互逆得 WGS84 后走 WGS84→CEA→EPSG:3857。",
+        L"Not XYZ grid: equirectangular path per pixel SlippyPixelCenterToFractionalTile→SlippyTileXYToLonLat→WGS84, PROJ "
+        L"EPSG:4326→EPSG:3857, Slippy3857MetersToFractionalTile bilinear (same tile topology on screen, not global affine "
+        L"Plate Carrée). CEA: client pixels ↔ SlippyLonLatToScreenCea → WGS84 → WGS84→CEA→EPSG:3857.");
 #else
-    Utf8AppendJsonEscapedString(&j, L"当前构建无 GDAL/PROJ：等经纬/等积圆柱为示意几何，非严格重采样。");
+    Utf8AppendJsonEscapedStringPick(
+        &j, L"当前构建无 GDAL/PROJ：等经纬/等积圆柱为示意几何，非严格重采样。",
+        L"No GDAL/PROJ in this build: equirectangular/CEA are approximate, not strict resampling.");
 #endif
     j += ",\n      \"projTransformersReady\": ";
 #if GIS_DESKTOP_HAVE_GDAL
@@ -2508,7 +2638,8 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
   } else if (st->mode == TilePreviewState::Mode::kSingleRaster) {
     j += "      \"layoutProjectionId\": \"none_raster_fit_window\",\n";
     j += "      \"layoutProjectionLabelZh\": ";
-    Utf8AppendJsonEscapedString(&j, L"单图缩放置中，屏幕像素与地理无变换");
+    Utf8AppendJsonEscapedStringPick(&j, L"单图缩放置中，屏幕像素与地理无变换",
+                                    L"Single image scaled to fit; no geospatial transform of screen pixels.");
     j += ",\n      \"displayPlane\": null,\n";
     j += "      \"compositeToScreen\": \"gdiplus_scaled_blit\",\n";
     j += "      \"projTransformersReady\": false,\n";
@@ -2535,7 +2666,8 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
   } else {
     j += "      \"layoutProjectionId\": \"three_d_tiles_metadata\",\n";
     j += "      \"layoutProjectionLabelZh\": ";
-    Utf8AppendJsonEscapedString(&j, L"3D Tiles 元数据视图；不做平面投影瓦片合成");
+    Utf8AppendJsonEscapedStringPick(&j, L"3D Tiles 元数据视图；不做平面投影瓦片合成",
+                                    L"3D Tiles metadata view; no flat projected tile compositing.");
     j += ",\n      \"displayPlane\": null,\n";
     j += "      \"compositeToScreen\": \"n_a\",\n";
     j += "      \"projTransformersReady\": false\n";
@@ -2555,7 +2687,8 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
     j += "null";
   }
   j += ",\n      \"noteZh\": ";
-  Utf8AppendJsonEscapedString(&j, L"与选项面板中 Slippy 尺度一致；开关类见根字段 ui。");
+  Utf8AppendJsonEscapedStringPick(&j, L"与选项面板中 Slippy 尺度一致；开关类见根字段 ui。",
+                                  L"Matches Slippy scale in Options; toggles are under root ui.");
   j += "\n    }\n  },\n";
   j += "  \"ui\": {\n";
   j += "    \"showOptionsPanel\": ";
@@ -2721,11 +2854,17 @@ static std::string TilePreviewBuildSceneJsonUtf8(HWND hwnd, TilePreviewState* st
       j += std::to_string(n);
     }
     j += ",\n      \"exportNoteZh\": ";
-    Utf8AppendJsonEscapedString(
+    Utf8AppendJsonEscapedStringPick(
         &j, L"gridHudRectClient：橘黄框＝SlippyGetTileClientDestRaw 与 imageArea 求交（SlippyGetTileScreenBounds）；等经纬四角 u,v 不夹取后再求交，避免靠边格压扁。仅供肉眼对照 z/x/y。"
             L"rasterBlitDestClient：SlippyGetTileClientDestRaw（未与 imageArea 求交），与 per-tile DrawImage 目的地一致；per_pixel_proj_full_viewport 时为 null。"
             L"textureDecodeCached：仅 LRU 已缓存时非 null。"
-            L"bbox3857Meters：该片在球面 Web 墨卡托 XYZ 下的纹理空间外包（米），与瓦片 PNG 的 EPSG:3857 覆盖一致；PROJ 椭球 3857 边界略有差异。");
+            L"bbox3857Meters：该片在球面 Web 墨卡托 XYZ 下的纹理空间外包（米），与瓦片 PNG 的 EPSG:3857 覆盖一致；PROJ 椭球 3857 边界略有差异。",
+        L"gridHudRectClient: orange rect = SlippyGetTileClientDestRaw ∩ imageArea (SlippyGetTileScreenBounds); equirectangular "
+        L"corners use u,v before clamp to avoid squashed edge tiles—for visual z/x/y check only. "
+        L"rasterBlitDestClient: SlippyGetTileClientDestRaw (not clipped to imageArea), matches per-tile DrawImage dest; null "
+        L"when per_pixel_proj_full_viewport. textureDecodeCached: non-null only if LRU holds decoded bitmap. "
+        L"bbox3857Meters: texture-space bounds (m) on spherical Web Mercator XYZ, aligned with tile PNG EPSG:3857 extent; "
+        L"PROJ spheroid edges may differ slightly.");
     j += ",\n";
     constexpr int kMaxTileExportList = 2048;
     const int logicalN = lay.spanX * lay.spanY;
@@ -2977,7 +3116,11 @@ static void TilePreviewUpdateSlippyPointerGeo(TilePreviewState* st, const RECT& 
   }
   TileSlippyPaintLayout lay{};
   if (!TileSlippyBuildPaintLayout(cr, st, &lay) || lay.tooMany) {
-    swprintf_s(lineBuf, lineCap, L"客户区 (%d, %d) | 可视块过多，无法读点", clientPt.x, clientPt.y);
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      swprintf_s(lineBuf, lineCap, L"Client (%d, %d) | Too many visible tiles; cannot sample", clientPt.x, clientPt.y);
+    } else {
+      swprintf_s(lineBuf, lineCap, L"客户区 (%d, %d) | 可视块过多，无法读点", clientPt.x, clientPt.y);
+    }
     return;
   }
   if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
@@ -3005,13 +3148,23 @@ static void TilePreviewUpdateSlippyPointerGeo(TilePreviewState* st, const RECT& 
   st->pointerGeoValid = true;
   const double ptrLonDisp = SlippyWrapLongitudeDeg(st->pointerLon);
   const double ptrLatDisp = SlippyClampLatitudeDeg(st->pointerLat);
-  swprintf_s(lineBuf, lineCap,
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    swprintf_s(lineBuf, lineCap,
 #if GIS_DESKTOP_HAVE_GDAL
-             L"客户区 (%d, %d) | λ %.6f° φ %.6f°（WGS84）| 显示 %s | 数据 EPSG:3857 | PROJ | 椭球高 —",
+               L"Client (%d, %d) | λ %.6f° φ %.6f° (WGS84) | display %s | data EPSG:3857 | PROJ | ellipsoidal h —",
 #else
-             L"客户区 (%d, %d) | λ %.6f° φ %.6f° | 显示 %s | 数据 EPSG:3857 | 椭球高 —",
+               L"Client (%d, %d) | λ %.6f° φ %.6f° | display %s | data EPSG:3857 | ellipsoidal h —",
 #endif
-             clientPt.x, clientPt.y, ptrLonDisp, ptrLatDisp, TileSlippyProjectionShortLabel(st->slippyProjection));
+               clientPt.x, clientPt.y, ptrLonDisp, ptrLatDisp, TileSlippyProjectionShortLabel(st->slippyProjection));
+  } else {
+    swprintf_s(lineBuf, lineCap,
+#if GIS_DESKTOP_HAVE_GDAL
+               L"客户区 (%d, %d) | λ %.6f° φ %.6f°（WGS84）| 显示 %s | 数据 EPSG:3857 | PROJ | 椭球高 —",
+#else
+               L"客户区 (%d, %d) | λ %.6f° φ %.6f° | 显示 %s | 数据 EPSG:3857 | 椭球高 —",
+#endif
+               clientPt.x, clientPt.y, ptrLonDisp, ptrLatDisp, TileSlippyProjectionShortLabel(st->slippyProjection));
+  }
 }
 
 static void TilePaintOneSlippyTileGeo(Gdiplus::Graphics& g, TilePreviewState* st, const TileSlippyPaintLayout& lay,
@@ -3165,22 +3318,46 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
 
   wchar_t status[768]{};
   if (lay.tooMany) {
-    swprintf_s(status, L"当前显示层级 Z = %d（金字塔最大 Z = %d）\n可视块过多 (%d×%d)：请滚轮降低 Z 或 Ctrl+滚轮缩小片元。", st->viewZ,
-               st->indexMaxZ, lay.spanX, lay.spanY);
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      swprintf_s(status,
+                 L"View Z = %d (max Z = %d)\nToo many visible tiles (%d×%d): wheel down to lower Z or Ctrl+wheel to "
+                 L"shrink tile pixels.",
+                 st->viewZ, st->indexMaxZ, lay.spanX, lay.spanY);
+    } else {
+      swprintf_s(status, L"当前显示层级 Z = %d（金字塔最大 Z = %d）\n可视块过多 (%d×%d)：请滚轮降低 Z 或 Ctrl+滚轮缩小片元。",
+                 st->viewZ, st->indexMaxZ, lay.spanX, lay.spanY);
+    }
   } else if (st->uiShowSlippyMapHud) {
-    swprintf_s(status,
+    const wchar_t* orangeHint = AgisPickUiLang(
+        L"橘黄框（辅助）：本格 Raw 贴图矩形与地图区之交的可见段。\n",
+        L"Orange box: visible part of raw tile rect intersected with the map area.\n");
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      swprintf_s(status,
 #if GIS_DESKTOP_HAVE_GDAL
-               L"输入：EPSG:3857 → 显示：%s（PROJ 严格变换；非 XYZ 为逐像素重采样）\n"
+                 L"Input: EPSG:3857 → display: %s (PROJ; non-XYZ uses per-pixel resampling)\n"
 #else
-               L"输入：EPSG:3857 → 显示：%s（无 GDAL 时为近似拼贴）\n"
+                 L"Input: EPSG:3857 → display: %s (approximate blit without GDAL)\n"
 #endif
-               L"Z = %d（最大 %d）| 片元约 %.0f×%.0f px | 可视列 [%d..%d] 行 [%d..%d] | 已索引 %zu 块\n"
-               L"%s"
-               L"拖拽平移 | 滚轮 | Shift/Ctrl+滚轮 | 「选项」",
-               TileSlippyProjectionLongLabel(st->slippyProjection), st->viewZ, st->indexMaxZ,
-               static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile), lay.tx0, lay.tx1, lay.ty0,
-               lay.ty1, st->tileCount,
-               L"橘黄框（辅助）：本格 Raw 贴图矩形与地图区之交的可见段。\n");
+                 L"Z = %d (max %d) | ~%.0f×%.0f px/tile | cols [%d..%d] rows [%d..%d] | %zu tiles indexed\n"
+                 L"%s"
+                 L"Drag pan | Wheel | Shift/Ctrl+wheel | Options",
+                 TileSlippyProjectionLongLabel(st->slippyProjection), st->viewZ, st->indexMaxZ,
+                 static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile), lay.tx0, lay.tx1,
+                 lay.ty0, lay.ty1, st->tileCount, orangeHint);
+    } else {
+      swprintf_s(status,
+#if GIS_DESKTOP_HAVE_GDAL
+                 L"输入：EPSG:3857 → 显示：%s（PROJ 严格变换；非 XYZ 为逐像素重采样）\n"
+#else
+                 L"输入：EPSG:3857 → 显示：%s（无 GDAL 时为近似拼贴）\n"
+#endif
+                 L"Z = %d（最大 %d）| 片元约 %.0f×%.0f px | 可视列 [%d..%d] 行 [%d..%d] | 已索引 %zu 块\n"
+                 L"%s"
+                 L"拖拽平移 | 滚轮 | Shift/Ctrl+滚轮 | 「选项」",
+                 TileSlippyProjectionLongLabel(st->slippyProjection), st->viewZ, st->indexMaxZ,
+                 static_cast<double>(st->pixelsPerTile), static_cast<double>(st->pixelsPerTile), lay.tx0, lay.tx1,
+                 lay.ty0, lay.ty1, st->tileCount, orangeHint);
+    }
   }
   const int zPad = 6;
   const int zBandH = lay.tooMany ? 68 : (st->uiShowSlippyMapHud ? 102 : 0);
@@ -3236,7 +3413,11 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
         wchar_t zxyLine[80]{};
         wchar_t dimLine[48]{};
         swprintf_s(zxyLine, L"z/x/y = %d / %d / %d", st->viewZ, tx, ty);
-        swprintf_s(dimLine, L"%d×%d px", bw, bh);
+        if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+          swprintf_s(dimLine, L"%d×%d px", bw, bh);
+        } else {
+          swprintf_s(dimLine, L"%d×%d 像素", bw, bh);
+        }
         const int labelRight = (std::min)(sx + 340, static_cast<int>(imgArea.right) - 2);
         RECT trZ{sx + 3, sy + 3, labelRight, sy + 20};
         TileDrawTextLineSemiBg(hdc, zxyLine, trZ, 3, 2, 200);
@@ -3293,7 +3474,10 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           if (PtInRect(&copyRc, pt)) {
             const std::string json = TilePreviewBuildSceneJsonUtf8(hwnd, st);
             if (!TilePreviewCopyUtf8JsonToClipboard(hwnd, json)) {
-              MessageBoxW(hwnd, L"无法写入剪贴板（或 UTF-8 转换失败）。", L"瓦片预览", MB_OK | MB_ICONWARNING);
+              MessageBoxW(hwnd,
+                          AgisPickUiLang(L"无法写入剪贴板（或 UTF-8 转换失败）。",
+                                         L"Could not write the clipboard (or UTF-8 conversion failed)."),
+                          AgisPickUiLang(L"瓦片预览", L"Tile preview"), MB_OK | MB_ICONWARNING);
             }
             return 0;
           }
@@ -3434,13 +3618,15 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       std::wstring pickerErr;
       if (!TilePreviewShowProtocolAndPickPath(hwnd, &path, &proto, &pickerErr)) {
         if (!pickerErr.empty()) {
-          MessageBoxW(hwnd, pickerErr.c_str(), L"打开本地瓦片", MB_OK | MB_ICONWARNING);
+          MessageBoxW(hwnd, pickerErr.c_str(),
+                      AgisPickUiLang(L"打开本地瓦片", L"Open local tiles"), MB_OK | MB_ICONWARNING);
         }
         return 0;
       }
       std::wstring mismatch;
       if (!TilePreviewValidatePathMatchesProtocol(proto, path, &mismatch)) {
-        MessageBoxW(hwnd, mismatch.c_str(), L"路径与协议不符", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hwnd, mismatch.c_str(),
+                    AgisPickUiLang(L"路径与协议不符", L"Path does not match protocol"), MB_OK | MB_ICONWARNING);
         return 0;
       }
       TilePreviewLoadReport loadRep{};
@@ -3480,20 +3666,20 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         FillRect(hdc, &openRc, btnBg);
         DeleteObject(btnBg);
         Rectangle(hdc, openRc.left, openRc.top, openRc.right, openRc.bottom);
-        DrawTextW(hdc, L"Open...", -1, &openRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        DrawTextW(hdc, AgisPickUiLang(L"打开…", L"Open…"), -1, &openRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         RECT closeRc = TileCloseButtonRect(cr);
         HBRUSH closeBg = CreateSolidBrush(RGB(252, 236, 236));
         FillRect(hdc, &closeRc, closeBg);
         DeleteObject(closeBg);
         Rectangle(hdc, closeRc.left, closeRc.top, closeRc.right, closeRc.bottom);
-        DrawTextW(hdc, L"关闭", -1, &closeRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        DrawTextW(hdc, AgisPickUiLang(L"关闭", L"Close"), -1, &closeRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
           RECT optBtnRc = TileOptionsButtonRect(cr);
           HBRUSH optBg = CreateSolidBrush(st->showOptionsPanel ? RGB(200, 216, 248) : RGB(236, 242, 252));
           FillRect(hdc, &optBtnRc, optBg);
           DeleteObject(optBg);
           Rectangle(hdc, optBtnRc.left, optBtnRc.top, optBtnRc.right, optBtnRc.bottom);
-          DrawTextW(hdc, L"选项", -1, &optBtnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+          DrawTextW(hdc, AgisPickUiLang(L"选项", L"Options"), -1, &optBtnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
         if (TilePreviewHasLoadedPreviewContent(st)) {
           RECT copyBtnRc = TileCopySceneInfoButtonRect(cr, st);
@@ -3501,7 +3687,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           FillRect(hdc, &copyBtnRc, copyBg);
           DeleteObject(copyBg);
           Rectangle(hdc, copyBtnRc.left, copyBtnRc.top, copyBtnRc.right, copyBtnRc.bottom);
-          DrawTextW(hdc, L"复制场景信息", -1, &copyBtnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+          DrawTextW(hdc, AgisPickUiLang(L"复制场景信息", L"Copy scene JSON"), -1, &copyBtnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
         int rightMost = static_cast<int>(closeRc.right);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
@@ -3519,9 +3705,11 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           std::wstring panel;
           if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
             if (st->uiShowTopHint) {
-              panel = std::wstring(kTilePreviewSlippyTopLine) + L"\n\n" + st->hint;
+              panel = TilePreviewSlippyTopLineW() + L"\n\n" + st->hint;
             } else {
-              panel = st->hint.empty() ? L"顶栏说明已关闭（「选项」可再打开）。" : st->hint;
+              panel = st->hint.empty() ? std::wstring(AgisPickUiLang(L"顶栏说明已关闭（「选项」可再打开）。",
+                                                                     L"Top hints are off (enable in Options)."))
+                                       : st->hint;
             }
           } else {
             // 未加载/已加载均不再在顶栏固定展示「打开方式 / 支持的数据」长文；仅显示当前 hint（如错误说明、单图说明等）。
@@ -3599,8 +3787,10 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingTilePreviewRoot = path;
   const DWORD exStyle = owner ? WS_EX_TOOLWINDOW : 0;
-  HWND tw = CreateWindowExW(exStyle, kTilePreviewClass, L"本地瓦片预览 · XYZ / 3D Tiles 元数据",
-                            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
+  HWND tw = CreateWindowExW(
+      exStyle, kTilePreviewClass,
+      AgisPickUiLang(L"本地瓦片预览 · XYZ / 3D Tiles 元数据", L"Local tile preview · XYZ / 3D Tiles metadata"),
+      WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
                             nullptr, GetModuleHandleW(nullptr), nullptr);
   if (tw) {
     AgisCenterWindowInMonitorWorkArea(tw, owner ? owner : g_hwndMain);

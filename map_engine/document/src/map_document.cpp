@@ -1,6 +1,8 @@
 #include "map_engine/map_document.h"
 #include "map_engine/map_engine.h"
 
+#include "utils/agis_ui_l10n.h"
+
 #include "map_engine/map_engine_internal.h"
 #include "map_engine/map_utf8.h"
 
@@ -502,8 +504,12 @@ void MapDocument::NormalizeEmptyMapView() {
 
 bool MapDocument::AddLayerFromFile(const std::wstring& path, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
-  err = L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。请用 AGIS_USE_GDAL=on 重新配置并构建桌面工程（CMake）后重试。"
-        L"python build.py 并确保 CMake 配置成功（依赖见 3rdparty/README-GDAL-BUILD.md）。若仅需壳程序，请用 AGIS_USE_GDAL=off 编译。";
+  err = AgisPickUiLang(
+      L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。请用 AGIS_USE_GDAL=on 重新配置并构建桌面工程（CMake）后重试。"
+      L"python build.py 并确保 CMake 配置成功（依赖见 3rdparty/README-GDAL-BUILD.md）。若仅需壳程序，请用 AGIS_USE_GDAL=off 编译。",
+      L"This build has GDAL disabled (GIS_DESKTOP_HAVE_GDAL=0). Reconfigure and rebuild the desktop project with "
+      L"AGIS_USE_GDAL=on (run python build.py; see 3rdparty/README-GDAL-BUILD.md). For a shell-only build, use "
+      L"AGIS_USE_GDAL=off.");
   return false;
 #else
   const std::string utf8 = Utf8FromWide(path);
@@ -529,7 +535,7 @@ bool MapDocument::AddLayerFromFile(const std::wstring& path, std::wstring& err) 
 bool MapDocument::AddLayerFromTmsUrl(const std::wstring& url, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
   (void)url;
-  err = L"本程序未启用 GDAL，无法使用 TMS/XYZ。请用 AGIS_USE_GDAL=on 重新构建。";
+  err = AgisTr(AgisUiStr::DocErrGdalOffTms);
   return false;
 #else
   AgisEnsureGdalDataPath();
@@ -547,7 +553,7 @@ bool MapDocument::AddLayerFromTmsUrl(const std::wstring& url, std::wstring& err)
 bool MapDocument::AddLayerFromWmtsUrl(const std::wstring& url, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
   (void)url;
-  err = L"本程序未启用 GDAL，无法使用 WMTS。请用 AGIS_USE_GDAL=on 重新构建。";
+  err = AgisTr(AgisUiStr::DocErrGdalOffWmts);
   return false;
 #else
   AgisEnsureGdalDataPath();
@@ -565,7 +571,7 @@ bool MapDocument::AddLayerFromWmtsUrl(const std::wstring& url, std::wstring& err
 bool MapDocument::AddLayerFromArcGisRestJsonUrl(const std::wstring& url, std::wstring& err) {
 #if !GIS_DESKTOP_HAVE_GDAL
   (void)url;
-  err = L"本程序未启用 GDAL，无法使用 ArcGIS REST。请用 AGIS_USE_GDAL=on 重新构建。";
+  err = AgisTr(AgisUiStr::DocErrGdalOffArcGis);
   return false;
 #else
   AgisEnsureGdalDataPath();
@@ -582,11 +588,11 @@ bool MapDocument::AddLayerFromArcGisRestJsonUrl(const std::wstring& url, std::ws
 
 bool MapDocument::ReplaceLayerAt(size_t index, std::unique_ptr<MapLayer> layer, std::wstring& err) {
   if (!layer) {
-    err = L"无效图层";
+    err = AgisTr(AgisUiStr::DocErrInvalidLayer);
     return false;
   }
   if (index >= layers.size()) {
-    err = L"图层索引越界";
+    err = AgisTr(AgisUiStr::DocErrLayerIndex);
     return false;
   }
   layers[index] = std::move(layer);
@@ -596,7 +602,7 @@ bool MapDocument::ReplaceLayerAt(size_t index, std::unique_ptr<MapLayer> layer, 
 
 bool MapDocument::RemoveLayerAt(size_t index, std::wstring& err) {
   if (index >= layers.size()) {
-    err = L"图层索引越界";
+    err = AgisTr(AgisUiStr::DocErrLayerIndex);
     return false;
   }
   layers.erase(layers.begin() + static_cast<ptrdiff_t>(index));
@@ -652,9 +658,12 @@ void MapDocument::Draw(HDC hdcMem, const RECT& client) {
     layer->Draw(hdcMem, innerLocal, view);
   }
 #else
-  UiPaintMapCenterHint(
-      hdcMem, innerLocal,
-      L"当前构建未启用 GDAL。\n请安装 PROJ 与 GDAL（见 3rdparty/README-GDAL-BUILD.md），或设置 AGIS_USE_GDAL=on 与 CMAKE_PREFIX_PATH，再重新配置。");
+  UiPaintMapCenterHint(hdcMem, innerLocal,
+                       AgisPickUiLang(L"当前构建未启用 GDAL。\n请安装 PROJ 与 GDAL（见 3rdparty/README-GDAL-BUILD.md），或设置 "
+                                      L"AGIS_USE_GDAL=on 与 CMAKE_PREFIX_PATH，再重新配置。",
+                                      L"This build does not have GDAL enabled.\nInstall PROJ and GDAL (see "
+                                      L"3rdparty/README-GDAL-BUILD.md), or set AGIS_USE_GDAL=on and CMAKE_PREFIX_PATH, "
+                                      L"then reconfigure."));
 #endif
   DrawScaleBar(hdcMem, innerLocal, view);
 }
@@ -937,7 +946,7 @@ GDALDataset* OpenGdalDatasetForLocalFile(const std::wstring& pathWide, const std
     }
   }
 
-  err = L"无法打开数据源：";
+  err = AgisTr(AgisUiStr::DocErrOpenDsPrefix);
   err += pathWide;
   err += L"\n";
   if (!last_cpl_utf8.empty()) {
@@ -945,16 +954,16 @@ GDALDataset* OpenGdalDatasetForLocalFile(const std::wstring& pathWide, const std
     err += L"\n";
   }
   if (PathLooksLikeOsm(utf8Path) && !GDALGetDriverByName("OSM")) {
-    err += L"OGR 未注册 OSM 驱动（本 GDAL 构建可能未编入 OSM/SQLite；捆绑构建请在 CMake 中启用 GDAL_USE_SQLITE3 与 OGR_ENABLE_DRIVER_OSM）。\n";
+    err += AgisTr(AgisUiStr::DocErrOsmDriver);
   }
   if (last_cpl_utf8.empty()) {
     VSIStatBufL st{};
     if (VSIStatL(utf8Path.c_str(), &st) != 0) {
-      err += L"文件不存在或当前进程无法访问该路径（权限/占用/路径编码）。\n";
+      err += AgisTr(AgisUiStr::DocErrFileAccess);
     }
   }
   if (PathLooksLikeOsm(utf8Path)) {
-    err += L"（若为整 planet .osm.pbf，体积极大，OGR 可能无法打开或需极长时间；建议先用区域 extract 测试。）";
+    err += AgisTr(AgisUiStr::DocErrPlanetPbfHint);
   }
   return nullptr;
 }

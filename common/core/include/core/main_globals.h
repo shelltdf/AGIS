@@ -23,7 +23,7 @@ AGIS_COMMON_API extern HWND g_hwndToolbar;
 AGIS_COMMON_API extern HWND g_hwndLayerStrip;
 AGIS_COMMON_API extern HWND g_hwndLayer;
 AGIS_COMMON_API extern HWND g_hwndMap;
-/** 地图区外壳：`SetMenu` 需非子窗口，故用 WS_POPUP+owner=主窗；客户区内为 `g_hwndMap`（AGISMapHost）。 */
+/** 地图区外壳：主窗 `WS_CHILD`，无菜单；地图相关菜单在「视图 → 地图界面」。内嵌 `g_hwndMap`（AGISMapHost）。 */
 AGIS_COMMON_API extern HWND g_hwndMapShell;
 AGIS_COMMON_API extern HWND g_hwndProps;
 AGIS_COMMON_API extern HWND g_hwndPropsStrip;
@@ -45,6 +45,10 @@ AGIS_COMMON_API extern bool g_propsDockExpanded;
 AGIS_COMMON_API extern int g_toolbarHeight;
 AGIS_COMMON_API extern HIMAGELIST g_toolbarImageList;
 AGIS_COMMON_API extern HMENU g_hmenuProjSub;
+/** 主菜单「视图 → 2D 渲染」子菜单（`SyncViewMenu` 内 `CheckMenuRadioItem`）。 */
+AGIS_COMMON_API extern HMENU g_hmenuRenderSub;
+/** 主菜单「视图 → 地图界面」弹出子菜单句柄（`WM_INITMENUPOPUP` 同步勾选）。 */
+AGIS_COMMON_API extern HMENU g_hmenuMapUiSub;
 AGIS_COMMON_API extern std::wstring g_pendingPreviewModelPath;
 /// 为 true 时 `g_pendingPreviewModelPath` 视为 tileset 目录或 tileset.json，走 3D Tiles→glTF 加载。
 AGIS_COMMON_API extern bool g_pendingPreviewLoadAs3DTiles;

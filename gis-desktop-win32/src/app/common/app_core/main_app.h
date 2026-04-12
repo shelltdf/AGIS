@@ -15,8 +15,7 @@ void GetInnerClient(HWND hwnd, RECT* out);
 void UpdateStatusParts();
 void LayoutChildren();
 
-HMENU BuildMapHostMenu();
-void SyncMapHostMenuPopup(HWND mapShell, HMENU popup);
+void SyncMainFrameMapUiMenu(HMENU mapUiPopup);
 void LayoutMapShellClient(HWND mapShell);
 LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 bool HitLeftSplitter(int x, int y, int innerTop, int innerBottom);
@@ -31,6 +30,8 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 LRESULT CALLBACK LogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void ShowLogDialog(HWND owner);
 void ShowAbout(HWND owner);
+/** 语言切换后刷新 Dock / 日志窗口等控件文案（须已创建子窗口）。 */
+void ApplyWorkbenchPanelsL10n();
 
 std::wstring CurrentWindowTitle();
 void SyncMainTitle();
@@ -78,6 +79,8 @@ void UpdateConvertCmdlinePreview(HWND hwnd);
 bool RunConvertBackend(HWND hwnd);
 void PreviewPath(HWND hwnd, bool inputSide);
 void ShowDataConvertWindow(HWND owner);
+/// 若数据转换窗口已打开，重新应用语言、组合框与中间列参数标签。
+void RefreshConvertWindowL10nIfOpen();
 LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 void OpenModelPreviewWindow(HWND owner, const std::wstring& path);
@@ -93,6 +96,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HMENU BuildMenu();
+void AgisReapplyWorkbenchMenu(HWND hwnd);
 
 bool AgisCopyMainWindowScreenshotToClipboard(HWND mainHwnd);
 void AgisCopyWorkbenchUiStateJsonToClipboard(HWND mainHwnd);

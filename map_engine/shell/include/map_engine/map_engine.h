@@ -48,6 +48,9 @@ class AGIS_MAP_ENGINE_API MapEngine {
 
   void UpdateMapChrome();
 
+  /** 刷新地图宿主内叠加按钮/说明文案（语言菜单切换后调用）。 */
+  void ApplyMapHostUiLanguage(HWND mapHost);
+
   bool IsMapShortcutHelpExpanded() const { return mapShortcutExpanded_; }
   bool IsMapVisibilityPanelExpanded() const { return mapVisExpanded_; }
   bool IsMapUiShowHintOverlay() const { return mapUiShowHint_; }

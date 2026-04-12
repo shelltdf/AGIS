@@ -14,6 +14,7 @@
 #include "core/resource.h"
 #include "debug/ui_debug_pick.h"
 #include "utils/ui_font.h"
+#include "utils/agis_ui_l10n.h"
 #include "utils/ui_theme.h"
 #include "core/app_log.h"
 #include "common/app_core/main_app.h"
@@ -26,80 +27,125 @@
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "shell32.lib")
 
+namespace {
+
+const wchar_t* ProjMenuLabelForUi(MapDisplayProjection p) {
+  return AgisGetUiLanguage() == AgisUiLanguage::kEn ? MapProj_MenuLabelEn(p) : MapProj_MenuLabel(p);
+}
+
+}  // namespace
+
 HMENU BuildMenu() {
   HMENU bar = CreateMenu();
   HMENU file = CreateMenu();
-  AppendMenuW(file, MF_STRING, ID_FILE_NEW_GIS, L"新建(&N)");
-  AppendMenuW(file, MF_STRING, ID_FILE_OPEN_GIS, L"打开(&O)...");
-  AppendMenuW(file, MF_STRING, ID_FILE_SAVE_GIS, L"保存(&S)");
-  AppendMenuW(file, MF_STRING, ID_FILE_SAVE_AS_GIS, L"另存(&A)...");
+  AppendMenuW(file, MF_STRING, ID_FILE_NEW_GIS, AgisTr(AgisUiStr::MenuFileNew));
+  AppendMenuW(file, MF_STRING, ID_FILE_OPEN_GIS, AgisTr(AgisUiStr::MenuFileOpen));
+  AppendMenuW(file, MF_STRING, ID_FILE_SAVE_GIS, AgisTr(AgisUiStr::MenuFileSave));
+  AppendMenuW(file, MF_STRING, ID_FILE_SAVE_AS_GIS, AgisTr(AgisUiStr::MenuFileSaveAs));
   AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(file, MF_STRING, ID_FILE_SCREENSHOT, L"保存地图截图(&S)...");
+  AppendMenuW(file, MF_STRING, ID_FILE_SCREENSHOT, AgisTr(AgisUiStr::MenuFileScreenshot));
   AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(file, MF_STRING, ID_FILE_EXIT, L"退出(&X)");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"文件(&F)");
+  AppendMenuW(file, MF_STRING, ID_FILE_EXIT, AgisTr(AgisUiStr::MenuFileExit));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), AgisTr(AgisUiStr::MenuFile));
 
   HMENU view = CreateMenu();
-  AppendMenuW(view, MF_STRING | MF_CHECKED, ID_VIEW_MODE_2D, L"2D 模式(&2)");
-  AppendMenuW(view, MF_STRING, ID_VIEW_MODE_3D, L"3D 模式(&3)");
+  AppendMenuW(view, MF_STRING | MF_CHECKED, ID_VIEW_MODE_2D, AgisTr(AgisUiStr::MenuView2d));
+  AppendMenuW(view, MF_STRING, ID_VIEW_MODE_3D, AgisTr(AgisUiStr::MenuView3d));
   AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(view, MF_STRING | MF_CHECKED, ID_VIEW_RENDER_GDI, L"2D 渲染：GDI(&G)");
-  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_GDIPLUS, L"2D 渲染：GDI+(&I)");
-  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_D2D, L"2D 渲染：Direct2D(&2)");
-  AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_BGFX_D3D11, L"2D 渲染：Bgfx + D3D11(&D)");
-  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_BGFX_OPENGL, L"2D 渲染：Bgfx + OpenGL(&O)");
-  AppendMenuW(view, MF_STRING, ID_VIEW_RENDER_BGFX_AUTO, L"2D 渲染：Bgfx 自动(&B)");
+  {
+    HMENU renderSub = CreateMenu();
+    AppendMenuW(renderSub, MF_STRING | MF_CHECKED, ID_VIEW_RENDER_GDI, AgisTr(AgisUiStr::MenuRenderGdi));
+    AppendMenuW(renderSub, MF_STRING, ID_VIEW_RENDER_GDIPLUS, AgisTr(AgisUiStr::MenuRenderGdiPlus));
+    AppendMenuW(renderSub, MF_STRING, ID_VIEW_RENDER_D2D, AgisTr(AgisUiStr::MenuRenderD2d));
+    AppendMenuW(renderSub, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(renderSub, MF_STRING, ID_VIEW_RENDER_BGFX_D3D11, AgisTr(AgisUiStr::MenuRenderBgfxD3d11));
+    AppendMenuW(renderSub, MF_STRING, ID_VIEW_RENDER_BGFX_OPENGL, AgisTr(AgisUiStr::MenuRenderBgfxGl));
+    AppendMenuW(renderSub, MF_STRING, ID_VIEW_RENDER_BGFX_AUTO, AgisTr(AgisUiStr::MenuRenderBgfxAuto));
+    AppendMenuW(view, MF_POPUP, reinterpret_cast<UINT_PTR>(renderSub), AgisTr(AgisUiStr::MenuViewRenderRoot));
+    g_hmenuRenderSub = renderSub;
+  }
   AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
   {
     HMENU projSub = CreateMenu();
     for (int i = 0; i < static_cast<int>(MapDisplayProjection::kCount); ++i) {
       AppendMenuW(projSub, MF_STRING, ID_VIEW_PROJ_FIRST + i,
-                  MapProj_MenuLabel(static_cast<MapDisplayProjection>(i)));
+                  ProjMenuLabelForUi(static_cast<MapDisplayProjection>(i)));
     }
-    AppendMenuW(view, MF_POPUP, reinterpret_cast<UINT_PTR>(projSub), L"投影(&J)");
+    AppendMenuW(view, MF_POPUP, reinterpret_cast<UINT_PTR>(projSub), AgisTr(AgisUiStr::MenuViewProjRoot));
     g_hmenuProjSub = projSub;
   }
   AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(view, MF_STRING, ID_VIEW_LOG, L"日志(&L)...");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"视图(&V)");
+  {
+    HMENU mapUiSub = CreateMenu();
+    AppendMenuW(mapUiSub, MF_STRING, IDC_MAP_UI_SHOW_SHORTCUT, AgisTr(AgisUiStr::MenuMapShortcut));
+    AppendMenuW(mapUiSub, MF_STRING, IDC_MAP_UI_SHOW_VIS, AgisTr(AgisUiStr::MenuMapVis));
+    AppendMenuW(mapUiSub, MF_STRING, IDC_MAP_UI_SHOW_BOTTOM, AgisTr(AgisUiStr::MenuMapBottom));
+    AppendMenuW(mapUiSub, MF_STRING, IDC_MAP_UI_SHOW_HINT, AgisTr(AgisUiStr::MenuMapHint));
+    AppendMenuW(mapUiSub, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(mapUiSub, MF_STRING, IDC_MAP_UI_GRID, AgisTr(AgisUiStr::MenuMapGrid));
+    AppendMenuW(view, MF_POPUP, reinterpret_cast<UINT_PTR>(mapUiSub), AgisTr(AgisUiStr::MenuMapChromeRoot));
+    g_hmenuMapUiSub = mapUiSub;
+  }
+  AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(view, MF_STRING, ID_VIEW_LOG, AgisTr(AgisUiStr::MenuViewLog));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view), AgisTr(AgisUiStr::MenuView));
 
   HMENU win = CreateMenu();
-  AppendMenuW(win, MF_STRING | MF_CHECKED, ID_WINDOW_LAYER_DOCK, L"图层 Dock(&L)");
-  AppendMenuW(win, MF_STRING | MF_CHECKED, ID_WINDOW_PROPS_DOCK, L"图层属性 Dock(&P)");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(win), L"窗口(&W)");
+  AppendMenuW(win, MF_STRING | MF_CHECKED, ID_WINDOW_LAYER_DOCK, AgisTr(AgisUiStr::MenuWinLayerDock));
+  AppendMenuW(win, MF_STRING | MF_CHECKED, ID_WINDOW_PROPS_DOCK, AgisTr(AgisUiStr::MenuWinPropsDock));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(win), AgisTr(AgisUiStr::MenuWindow));
 
   HMENU layer = CreateMenu();
   AppendMenuW(layer, MF_STRING | (GIS_DESKTOP_HAVE_GDAL ? MF_ENABLED : MF_GRAYED), ID_LAYER_ADD,
-              L"添加数据图层(&A)...");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(layer), L"图层(&Y)");
+              AgisTr(AgisUiStr::MenuLayerAdd));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(layer), AgisTr(AgisUiStr::MenuLayer));
 
   HMENU tools = CreateMenu();
-  AppendMenuW(tools, MF_STRING, ID_TOOL_DATA_CONVERT, L"数据转换(&C)...");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(tools), L"工具(&T)");
+  AppendMenuW(tools, MF_STRING, ID_TOOL_DATA_CONVERT, AgisTr(AgisUiStr::MenuToolsConvert));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(tools), AgisTr(AgisUiStr::MenuTools));
 
   HMENU lang = CreateMenu();
-  AppendMenuW(lang, MF_STRING | MF_CHECKED, ID_LANG_ZH, L"中文(&Z)");
-  AppendMenuW(lang, MF_STRING, ID_LANG_EN, L"English(&E)");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(lang), L"语言(&L)");
+  AppendMenuW(lang, MF_STRING | (AgisGetUiLanguage() == AgisUiLanguage::kZh ? MF_CHECKED : MF_UNCHECKED), ID_LANG_ZH,
+              AgisTr(AgisUiStr::MenuLangZh));
+  AppendMenuW(lang, MF_STRING | (AgisGetUiLanguage() == AgisUiLanguage::kEn ? MF_CHECKED : MF_UNCHECKED), ID_LANG_EN,
+              AgisTr(AgisUiStr::MenuLangEn));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(lang), AgisTr(AgisUiStr::MenuLang));
 
   HMENU theme = CreateMenu();
-  AppendMenuW(theme, MF_STRING | MF_CHECKED, ID_THEME_SYSTEM, L"跟随系统(&S)");
-  AppendMenuW(theme, MF_STRING, ID_THEME_LIGHT, L"浅色(&I)");
-  AppendMenuW(theme, MF_STRING, ID_THEME_DARK, L"深色(&D)");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(theme), L"主题(&T)");
+  AppendMenuW(theme, MF_STRING | MF_CHECKED, ID_THEME_SYSTEM, AgisTr(AgisUiStr::MenuThemeSystem));
+  AppendMenuW(theme, MF_STRING, ID_THEME_LIGHT, AgisTr(AgisUiStr::MenuThemeLight));
+  AppendMenuW(theme, MF_STRING, ID_THEME_DARK, AgisTr(AgisUiStr::MenuThemeDark));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(theme), AgisTr(AgisUiStr::MenuTheme));
 
   HMENU help = CreateMenu();
-  AppendMenuW(help, MF_STRING, ID_HELP_DATA_DRIVERS, L"数据驱动说明(&D)...");
-  AppendMenuW(help, MF_STRING, ID_HELP_ABOUT, L"关于(&A)...");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"帮助(&H)");
+  AppendMenuW(help, MF_STRING, ID_HELP_DATA_DRIVERS, AgisTr(AgisUiStr::MenuHelpDrivers));
+  AppendMenuW(help, MF_STRING, ID_HELP_ABOUT, AgisTr(AgisUiStr::MenuHelpAbout));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), AgisTr(AgisUiStr::MenuHelp));
 
   HMENU debug = CreateMenu();
-  AppendMenuW(debug, MF_STRING, ID_DEBUG_CLIPBOARD_SCREENSHOT, L"截图到剪贴板(&S)");
-  AppendMenuW(debug, MF_STRING, ID_DEBUG_COPY_UI_JSON, L"复制界面信息 JSON(&J)");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(debug), L"调试(&G)");
+  AppendMenuW(debug, MF_STRING, ID_DEBUG_CLIPBOARD_SCREENSHOT, AgisTr(AgisUiStr::MenuDebugClip));
+  AppendMenuW(debug, MF_STRING, ID_DEBUG_COPY_UI_JSON, AgisTr(AgisUiStr::MenuDebugJson));
+  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(debug), AgisTr(AgisUiStr::MenuDebug));
 
   return bar;
+}
+
+void AgisReapplyWorkbenchMenu(HWND hwnd) {
+  HMENU neu = BuildMenu();
+  HMENU old = GetMenu(hwnd);
+  SetMenu(hwnd, neu);
+  if (old) {
+    DestroyMenu(old);
+  }
+  DrawMenuBar(hwnd);
+  SyncViewMenu(hwnd);
+  SyncWindowMenu(hwnd);
+  SyncMainTitle();
+  UpdateStatusParts();
+  if (g_hwndToolbar) {
+    InvalidateRect(g_hwndToolbar, nullptr, TRUE);
+  }
+  AgisApplyTheme(hwnd);
 }
 
 LRESULT CALLBACK StatusSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
@@ -114,6 +160,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_CREATE: {
       g_hwndMain = hwnd;
+      AgisLoadUiLanguagePreference();
       INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES};
       InitCommonControlsEx(&icc);
       UiFontInit();
@@ -145,8 +192,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       g_hwndLayer = CreateWindowExW(0, kLayerClass, L"",
                                       WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                       0, 0, 100, 100, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-      g_hwndMapShell = CreateWindowExW(WS_EX_TOOLWINDOW, kMapShellClass, L"",
-                                       WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 120, 120, hwnd,
+      g_hwndMapShell = CreateWindowExW(0, kMapShellClass, L"",
+                                       WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 120, 120, hwnd,
                                        nullptr, GetModuleHandleW(nullptr), nullptr);
       if (!g_hwndMapShell || !g_hwndMap) {
         return -1;
@@ -164,15 +211,13 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       }
 
       MapEngine::Instance().RefreshLayerList(GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
-      AppLogLine(L"AGIS 启动完成。");
+      AppLogLine(AgisTr(AgisUiStr::LogStartup));
 #if GIS_DESKTOP_HAVE_GDAL
-      AppLogLine(L"[GIS] GDAL 已启用：可添加数据图层。");
+      AppLogLine(AgisTr(AgisUiStr::LogGdalOn));
 #else
-      AppLogLine(L"[GIS] 本构建未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）；「添加数据图层」入口已禁用。默认构建应已启用 "
-                 L"GDAL（仓库含 3rdparty 源码）；若曾使用 AGIS_USE_GDAL=off，请去掉该设置后重新运行 python "
-                 L"build.py，并确保 CMake 能完成 GDAL/PROJ（见 3rdparty/README-GDAL-BUILD.md）。");
+      AppLogLine(AgisTr(AgisUiStr::LogGdalOff));
 #endif
-      SetWindowTextW(hwnd, L"AGIS — 地图视图（单文档 SDI）");
+      SyncMainTitle();
       SyncViewMenu(hwnd);
       SyncWindowMenu(hwnd);
       LayoutChildren();
@@ -198,7 +243,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       if (lParam && wcscmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0 &&
           g_themeMenu == AgisThemeMenu::kFollowSystem) {
         AgisApplyTheme(hwnd);
-        AppLogLine(L"[主题] 已随系统颜色设置更新（跟随系统）。");
+        AppLogLine(AgisTr(AgisUiStr::LogThemeFollowSystem));
       }
       break;
     case WM_APP_SHOW_LOG:
@@ -220,8 +265,18 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       if (bar && sub == GetSubMenu(bar, 1)) {
         SyncViewMenu(hwnd);
       }
+      if (g_hmenuRenderSub && sub == g_hmenuRenderSub) {
+        SyncViewMenu(hwnd);
+      }
+      if (g_hmenuMapUiSub && sub == g_hmenuMapUiSub) {
+        SyncMainFrameMapUiMenu(sub);
+      }
       if (bar && sub == GetSubMenu(bar, 2)) {
         SyncWindowMenu(hwnd);
+      }
+      if (bar && sub == GetSubMenu(bar, 5)) {
+        const UINT lid = AgisGetUiLanguage() == AgisUiLanguage::kEn ? ID_LANG_EN : ID_LANG_ZH;
+        CheckMenuRadioItem(sub, ID_LANG_ZH, ID_LANG_EN, lid, MF_BYCOMMAND);
       }
       break;
     }
@@ -245,30 +300,42 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         const wchar_t* s = L"";
         switch (tip->iItem) {
+          case ID_FILE_NEW_GIS:
+            s = AgisTr(AgisUiStr::TipFileNew);
+            break;
+          case ID_FILE_OPEN_GIS:
+            s = AgisTr(AgisUiStr::TipFileOpen);
+            break;
+          case ID_FILE_SAVE_GIS:
+            s = AgisTr(AgisUiStr::TipFileSave);
+            break;
+          case ID_FILE_SAVE_AS_GIS:
+            s = AgisTr(AgisUiStr::TipFileSaveAs);
+            break;
           case ID_LAYER_ADD:
 #if GIS_DESKTOP_HAVE_GDAL
-            s = L"添加图层（先选择 GDAL / TMS / WMS） — 无全局快捷键";
+            s = AgisTr(AgisUiStr::TipLayerAdd);
 #else
-            s = L"添加图层（本构建未启用 GDAL，已禁用） — 无全局快捷键";
+            s = AgisTr(AgisUiStr::TipLayerAddNoGdal);
 #endif
             break;
           case ID_FILE_SCREENSHOT:
-            s = L"将当前地图视图保存为 PNG — 无全局快捷键";
+            s = AgisTr(AgisUiStr::TipScreenshot);
             break;
           case ID_VIEW_LOG:
-            s = L"打开日志窗口 — 无全局快捷键";
+            s = AgisTr(AgisUiStr::TipLog);
             break;
           case ID_VIEW_MODE_2D:
-            s = L"2D 地图 — 无全局快捷键";
+            s = AgisTr(AgisUiStr::Tip2d);
             break;
           case ID_VIEW_MODE_3D:
-            s = L"3D 模式（占位） — 无全局快捷键";
+            s = AgisTr(AgisUiStr::Tip3d);
             break;
           case ID_HELP_DATA_DRIVERS:
-            s = L"数据驱动说明（图层类型、GDAL 格式、输入方式） — F1";
+            s = AgisTr(AgisUiStr::TipHelpDrivers);
             break;
           case ID_HELP_ABOUT:
-            s = L"关于 AGIS — 无全局快捷键";
+            s = AgisTr(AgisUiStr::TipAbout);
             break;
           default:
             break;
@@ -285,14 +352,13 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       if (id == IDC_LAYER_DOCK_STRIP_BTN && notify == BN_CLICKED) {
         g_layerDockExpanded = !g_layerDockExpanded;
         LayoutChildren();
-        AppLogLine(g_layerDockExpanded ? L"[窗口] 已展开图层 Dock 内容区。" : L"[窗口] 已折叠图层 Dock 内容区。");
+        AppLogLine(AgisTr(g_layerDockExpanded ? AgisUiStr::LogDockLayerExpanded : AgisUiStr::LogDockLayerCollapsed));
         return 0;
       }
       if (id == IDC_PROPS_DOCK_STRIP_BTN && notify == BN_CLICKED) {
         g_propsDockExpanded = !g_propsDockExpanded;
         LayoutChildren();
-        AppLogLine(g_propsDockExpanded ? L"[窗口] 已展开图层属性 Dock 内容区。"
-                                       : L"[窗口] 已折叠图层属性 Dock 内容区。");
+        AppLogLine(AgisTr(g_propsDockExpanded ? AgisUiStr::LogDockPropsExpanded : AgisUiStr::LogDockPropsCollapsed));
         return 0;
       }
       if (id == ID_FILE_EXIT) {
@@ -323,14 +389,14 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         g_showLayerDock = !g_showLayerDock;
         SyncWindowMenu(hwnd);
         LayoutChildren();
-        AppLogLine(g_showLayerDock ? L"[窗口] 已显示图层 Dock。" : L"[窗口] 已隐藏图层 Dock。");
+        AppLogLine(AgisTr(g_showLayerDock ? AgisUiStr::LogWinLayerShown : AgisUiStr::LogWinLayerHidden));
         return 0;
       }
       if (id == ID_WINDOW_PROPS_DOCK) {
         g_showPropsDock = !g_showPropsDock;
         SyncWindowMenu(hwnd);
         LayoutChildren();
-        AppLogLine(g_showPropsDock ? L"[窗口] 已显示图层属性 Dock。" : L"[窗口] 已隐藏图层属性 Dock。");
+        AppLogLine(AgisTr(g_showPropsDock ? AgisUiStr::LogWinPropsShown : AgisUiStr::LogWinPropsHidden));
         return 0;
       }
       if (id == ID_VIEW_MODE_2D) {
@@ -338,7 +404,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         SyncViewMenu(hwnd);
         InvalidateRect(g_hwndMap, nullptr, TRUE);
         UpdateStatusParts();
-        AppLogLine(L"[视图] 已切换到 2D 模式。");
+        AppLogLine(AgisTr(AgisUiStr::LogView2dOn));
         return 0;
       }
       if (id == ID_VIEW_MODE_3D) {
@@ -346,7 +412,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         SyncViewMenu(hwnd);
         InvalidateRect(g_hwndMap, nullptr, TRUE);
         UpdateStatusParts();
-        AppLogLine(L"[视图] 已切换到 3D 模式（占位）。");
+        AppLogLine(AgisTr(AgisUiStr::LogView3dOn));
         return 0;
       }
       if (id >= ID_VIEW_RENDER_FIRST && id <= ID_VIEW_RENDER_LAST) {
@@ -372,9 +438,10 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
           MapEngine::Instance().Document().SetDisplayProjection(static_cast<MapDisplayProjection>(pi));
           SyncViewMenu(hwnd);
           InvalidateRect(g_hwndMap, nullptr, FALSE);
-          AppLogLine(std::wstring(L"[视图] 投影：") + MapProj_MenuLabel(static_cast<MapDisplayProjection>(pi)));
+          AppLogLine(std::wstring(AgisTr(AgisUiStr::LogViewProjPrefix)) +
+                     ProjMenuLabelForUi(static_cast<MapDisplayProjection>(pi)));
           if (!MapEngine::Instance().Document().layers.empty()) {
-            AppLogLine(L"[提示] 当前已有图层，视图仍以数据坐标系绘制；投影切换主要作用于无图层时的经纬网显示。");
+            AppLogLine(AgisTr(AgisUiStr::LogProjLayersHint));
           }
         }
         return 0;
@@ -383,13 +450,16 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         ShowLogDialog(hwnd);
         return 0;
       }
+      if (id >= IDC_MAP_UI_SHOW_SHORTCUT && id <= IDC_MAP_UI_GRID && notify == 0) {
+        if (g_hwndMap && IsWindow(g_hwndMap)) {
+          SendMessageW(g_hwndMap, WM_COMMAND, wParam, lParam);
+        }
+        return 0;
+      }
       if (id == ID_LAYER_ADD) {
 #if !GIS_DESKTOP_HAVE_GDAL
-        MessageBoxW(hwnd,
-                    L"本程序未启用 GDAL（GIS_DESKTOP_HAVE_GDAL=0）。\n\n默认构建应已启用 GDAL（仓库含 3rdparty "
-                    L"源码）。若曾设置 AGIS_USE_GDAL=off，请去掉后重新运行 python build.py；否则请检查 CMake 是否找到 "
-                    L"GDAL/PROJ（见 3rdparty/README-GDAL-BUILD.md）。",
-                    L"AGIS", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(hwnd, AgisTr(AgisUiStr::MsgGdalOffBody), AgisTr(AgisUiStr::MsgGdalOffTitle),
+                    MB_OK | MB_ICONINFORMATION);
 #else
         MapEngine::Instance().OnAddLayerFromDialog(hwnd, GetDlgItem(g_hwndLayer, IDC_LAYER_LIST));
 #endif
@@ -409,9 +479,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       }
       if (id == ID_DEBUG_CLIPBOARD_SCREENSHOT) {
         if (AgisCopyMainWindowScreenshotToClipboard(hwnd)) {
-          AppLogLine(L"[调试] 主窗口截图已复制到剪贴板（位图）。");
+          AppLogLine(AgisTr(AgisUiStr::DebugClipOk));
         } else {
-          AppLogLine(L"[调试] 主窗口截图复制到剪贴板失败。");
+          AppLogLine(AgisTr(AgisUiStr::DebugClipFail));
         }
         return 0;
       }
@@ -420,11 +490,20 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
       }
       if (id == ID_LANG_ZH || id == ID_LANG_EN) {
-        HMENU bar = GetMenu(hwnd);
-        HMENU lang = GetSubMenu(bar, 5);
-        CheckMenuRadioItem(lang, ID_LANG_ZH, ID_LANG_EN, id, MF_BYCOMMAND);
-        AppLogLine(id == ID_LANG_ZH ? L"[语言] 已选择：中文（界面字符串后续资源包化）"
-                                    : L"[语言] Selected: English (UI pending resource bundle)");
+        AgisSetUiLanguage(id == ID_LANG_EN ? AgisUiLanguage::kEn : AgisUiLanguage::kZh);
+        AgisSaveUiLanguagePreference();
+        AgisReapplyWorkbenchMenu(hwnd);
+        ApplyWorkbenchPanelsL10n();
+        RefreshConvertWindowL10nIfOpen();
+        if (g_hwndMap && IsWindow(g_hwndMap)) {
+          MapEngine::Instance().ApplyMapHostUiLanguage(g_hwndMap);
+        }
+        if (g_hwndLayer && IsWindow(g_hwndLayer)) {
+          if (HWND lb = GetDlgItem(g_hwndLayer, IDC_LAYER_LIST)) {
+            MapEngine::Instance().RefreshLayerList(lb);
+          }
+        }
+        AppLogLine(AgisTr(id == ID_LANG_ZH ? AgisUiStr::LogLangZh : AgisUiStr::LogLangEn));
         return 0;
       }
       if (id == ID_THEME_SYSTEM || id == ID_THEME_LIGHT || id == ID_THEME_DARK) {
@@ -437,7 +516,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         AgisSaveThemePreference();
         AgisApplyTheme(hwnd);
-        AppLogLine(AgisEffectiveUiDark() ? L"[主题] 已应用深色界面。" : L"[主题] 已应用浅色界面。");
+        AppLogLine(AgisTr(AgisEffectiveUiDark() ? AgisUiStr::ThemeAppliedDark : AgisUiStr::ThemeAppliedLight));
         return 0;
       }
       return 0;
@@ -560,7 +639,8 @@ bool RegisterClasses(HINSTANCE inst) {
   }
   wc.lpfnWndProc = MapHostProc;
   wc.lpszClassName = kMapClass;
-  wc.style = CS_OWNDC;
+  // 勿用 CS_OWNDC：与 D2D HWND RenderTarget / bgfx 子窗呈现叠用易导致 resize 闪烁或错一帧。
+  wc.style = 0;
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   if (!RegisterClassW(&wc)) {
     return false;
@@ -635,6 +715,7 @@ static std::wstring WorkbenchCliGisPathFromCommandLine() {
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
   const std::wstring cliGisPath = WorkbenchCliGisPathFromCommandLine();
+  AgisLoadUiLanguagePreference();
   UiGdiplusInit();
   MapEngine::Instance().Init();
   if (!RegisterClasses(hInst)) {
@@ -642,7 +723,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
     return 1;
   }
   HWND hwnd = CreateWindowExW(
-      0, kMainClass, L"AGIS — 地图视图（单文档 SDI）",
+      0, kMainClass, AgisTr(AgisUiStr::WinTitleNoDoc),
       WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800,
       nullptr, nullptr, hInst, nullptr);

@@ -14,13 +14,17 @@
 #include <vector>
 
 #include <windowsx.h>
+#include <commctrl.h>
 #include <commdlg.h>
+
+#pragma comment(lib, "comctl32.lib")
 
 #include <gdiplus.h>
 
 #include "core/resource.h"
 #include "utils/ui_font.h"
 #include "core/app_log.h"
+#include "utils/agis_ui_l10n.h"
 #include "ui_engine/gdiplus_ui.h"
 
 #pragma comment(lib, "comdlg32.lib")
@@ -40,6 +44,48 @@ namespace {
 constexpr int kLayerListItemHeight = 80;
 constexpr int kVisToggleWidth = 32;
 
+/** WM_MOUSEWHEEL 发往「焦点窗口」；焦点在地图子按钮/静态控件上时父窗口收不到滚轮，表现为缩放/平移无反应（与 D2D/GDI 无关，但 D2D 下更易察觉）。 */
+constexpr UINT_PTR kMapHostChildInputSubclassId = static_cast<UINT_PTR>(0x41474953u);
+
+LRESULT CALLBACK MapHostChildInputSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR subclassId,
+                                           DWORD_PTR mapHwndAsPtr) {
+  (void)subclassId;
+  const HWND mapHwnd = reinterpret_cast<HWND>(mapHwndAsPtr);
+  switch (m) {
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
+      if (mapHwnd && IsWindow(mapHwnd)) {
+        return SendMessageW(mapHwnd, m, w, l);
+      }
+      break;
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MBUTTONDBLCLK:
+      if (mapHwnd && IsWindow(mapHwnd)) {
+        POINT pt{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+        MapWindowPoints(h, mapHwnd, &pt, 1);
+        return SendMessageW(mapHwnd, m, w, MAKELPARAM(pt.x, pt.y));
+      }
+      break;
+    default:
+      break;
+  }
+  return DefSubclassProc(h, m, w, l);
+}
+
+void MapHostAttachChildInputForwarding(HWND mapHwnd) {
+  for (HWND c = GetWindow(mapHwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+    SetWindowSubclass(c, MapHostChildInputSubclass, kMapHostChildInputSubclassId,
+                      reinterpret_cast<DWORD_PTR>(mapHwnd));
+  }
+}
+
+void MapHostDetachChildInputForwarding(HWND mapHwnd) {
+  for (HWND c = GetWindow(mapHwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+    RemoveWindowSubclass(c, MapHostChildInputSubclass, kMapHostChildInputSubclassId);
+  }
+}
+
 void ApplyUiFontToChildren(HWND parent) {
   const HFONT f = UiGetAppFont();
   for (HWND c = GetWindow(parent, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
@@ -53,19 +99,19 @@ void ApplyUiFontToChildren(HWND parent) {
 static const wchar_t* MapLayerDriverKindShort(MapLayerDriverKind k) {
   switch (k) {
     case MapLayerDriverKind::kGdalFile:
-      return L"GDAL 文件";
+      return AgisTr(AgisUiStr::MapDriverShortGdal);
     case MapLayerDriverKind::kTmsXyz:
-      return L"TMS/XYZ";
+      return AgisTr(AgisUiStr::MapDriverShortTms);
     case MapLayerDriverKind::kWmts:
-      return L"WMTS";
+      return AgisTr(AgisUiStr::MapDriverShortWmts);
     case MapLayerDriverKind::kArcGisRestJson:
-      return L"ArcGIS JSON";
+      return AgisTr(AgisUiStr::MapDriverShortArcGis);
     case MapLayerDriverKind::kSoapPlaceholder:
-      return L"SOAP（占位）";
+      return AgisTr(AgisUiStr::MapDriverShortSoap);
     case MapLayerDriverKind::kWmsPlaceholder:
-      return L"WMS（占位）";
+      return AgisTr(AgisUiStr::MapDriverShortWms);
     default:
-      return L"未知";
+      return AgisTr(AgisUiStr::LayerUnknown);
   }
 }
 
@@ -145,14 +191,14 @@ void AppendGdalObjectMetadataDomains(GDALMajorObjectH obj, std::wstring* out) {
     if (!meta || meta[0] == nullptr) {
       continue;
     }
-    *out += L"【GDAL 元数据";
     if (dom[0] == '\0') {
-      *out += L" · 默认域 \"\"";
+      *out += AgisPickUiLang(L"【GDAL 元数据 · 默认域 \"\"】\r\n",
+                            L"[GDAL metadata · default domain \"\"]\r\n");
     } else {
-      *out += L" · ";
+      *out += AgisPickUiLang(L"【GDAL 元数据 · ", L"[GDAL metadata · ");
       *out += WideFromUtf8(dom);
+      *out += AgisPickUiLang(L"】\r\n", L"]\r\n");
     }
-    *out += L"】\r\n";
     AppendUtf8MetaLines(meta, out);
     *out += L"\r\n";
   }
@@ -163,7 +209,7 @@ void AppendDriverMetadata(GDALDriver* drv, std::wstring* out) {
   if (!drv || !out) {
     return;
   }
-  *out += L"【GDAL 驱动对象】\r\n";
+  *out += AgisPickUiLang(L"【GDAL 驱动对象】\r\n", L"[GDAL driver object]\r\n");
   *out += L"  ShortName: ";
   *out += WideFromUtf8(drv->GetDescription());
   *out += L"\r\n";
@@ -175,7 +221,7 @@ void AppendDriverMetadata(GDALDriver* drv, std::wstring* out) {
   }
   char** dm = drv->GetMetadata();
   if (dm && dm[0]) {
-    *out += L"  驱动元数据项:\r\n";
+    *out += AgisPickUiLang(L"  驱动元数据项:\r\n", L"  Driver metadata items:\r\n");
     AppendUtf8MetaLines(dm, out);
   }
   *out += L"\r\n";
@@ -189,7 +235,8 @@ void AppendDatasetFileList(GDALDataset* ds, std::wstring* out) {
   if (!fl || !fl[0]) {
     return;
   }
-  *out += L"【数据集组成文件 GDALDataset::GetFileList】\r\n";
+  *out += AgisPickUiLang(L"【数据集组成文件 GDALDataset::GetFileList】\r\n",
+                        L"[Dataset files GDALDataset::GetFileList]\r\n");
   for (int i = 0; fl[i] != nullptr; ++i) {
     *out += L"  ";
     *out += WideFromUtf8(fl[i]);
@@ -207,8 +254,10 @@ void AppendGcpSummary(GDALDataset* ds, std::wstring* out) {
   if (n <= 0) {
     return;
   }
-  *out += L"【GCP 地面控制点 GDALDataset::GetGCPs】\r\n";
-  *out += L"  数量: " + std::to_wstring(n) + L"\r\n";
+  *out += AgisPickUiLang(L"【GCP 地面控制点 GDALDataset::GetGCPs】\r\n",
+                        L"[GCPs GDALDataset::GetGCPs]\r\n");
+  *out += AgisPickUiLang(L"  数量: ", L"  Count: ");
+  *out += std::to_wstring(n) + L"\r\n";
   const char* gcpProj = ds->GetGCPProjection();
   if (gcpProj && gcpProj[0]) {
     std::wstring w = WideFromUtf8(gcpProj);
@@ -232,7 +281,9 @@ void AppendGcpSummary(GDALDataset* ds, std::wstring* out) {
       *out += L"\r\n";
     }
     if (n > show) {
-      *out += L"  … 其余 " + std::to_wstring(n - show) + L" 条未列出\r\n";
+      *out += AgisPickUiLang(L"  … 其余 ", L"  … ");
+      *out += std::to_wstring(n - show);
+      *out += AgisPickUiLang(L" 条未列出\r\n", L" more not listed\r\n");
     }
   }
   *out += L"\r\n";
@@ -265,11 +316,12 @@ void AppendRasterBandExtras(GDALRasterBand* b, std::wstring* out) {
   }
   GDALColorTable* ct = b->GetColorTable();
   if (ct && ct->GetColorEntryCount() > 0) {
-    *out += L"    颜色表项数: " + std::to_wstring(ct->GetColorEntryCount()) + L"\r\n";
+    *out += AgisPickUiLang(L"    颜色表项数: ", L"    Color table entries: ");
+    *out += std::to_wstring(ct->GetColorEntryCount()) + L"\r\n";
   }
   const char* desc = b->GetDescription();
   if (desc && desc[0]) {
-    *out += L"    波段描述 GetDescription: ";
+    *out += AgisPickUiLang(L"    波段描述 GetDescription: ", L"    Band description GetDescription: ");
     *out += WideFromUtf8(desc);
     *out += L"\r\n";
   }
@@ -280,17 +332,21 @@ void AppendOgrLayerDetails(OGRLayer* lay, int index, std::wstring* out) {
   if (!lay || !out) {
     return;
   }
-  *out += L"【OGRLayer · GetLayer(" + std::to_wstring(index) + L")】\r\n";
+  *out += AgisPickUiLang(L"【OGRLayer · GetLayer(", L"[OGRLayer · GetLayer(");
+  *out += std::to_wstring(index);
+  *out += AgisPickUiLang(L")】\r\n", L")]\r\n");
   *out += L"  GetName: ";
   *out += WideFromUtf8(lay->GetName());
   *out += L"\r\n";
   *out += L"  GetGeomType: ";
   *out += WideFromUtf8(OGRGeometryTypeToName(wkbFlatten(lay->GetGeomType())));
   *out += L"\r\n";
-  *out += L"  GetFeatureCount(1): " + std::to_wstring(lay->GetFeatureCount(true)) + L"（估算/扫描，依驱动而定）\r\n";
+  *out += L"  GetFeatureCount(1): " + std::to_wstring(lay->GetFeatureCount(true));
+  *out += AgisPickUiLang(L"（估算/扫描，依驱动而定）\r\n",
+                        L" (estimate/scan; driver-dependent)\r\n");
   const char* fid = lay->GetFIDColumn();
   *out += L"  GetFIDColumn: ";
-  *out += WideFromUtf8(fid && fid[0] ? fid : "(默认)");
+  *out += (fid && fid[0]) ? WideFromUtf8(fid) : AgisPickUiLang(L"(默认)", L"(default)");
   *out += L"\r\n";
   const char* gcn = lay->GetGeometryColumn();
   if (gcn && gcn[0]) {
@@ -316,11 +372,13 @@ void AppendOgrLayerDetails(OGRLayer* lay, int index, std::wstring* out) {
       CPLFree(wkt);
     }
   } else {
-    *out += L"  GetSpatialRef: （无）\r\n";
+    *out += AgisPickUiLang(L"  GetSpatialRef: （无）\r\n", L"  GetSpatialRef: (none)\r\n");
   }
   OGRFeatureDefn* defn = lay->GetLayerDefn();
   if (defn) {
-    *out += L"  OGRFeatureDefn 字段数 GetFieldCount: " + std::to_wstring(defn->GetFieldCount()) + L"\r\n";
+    *out += AgisPickUiLang(L"  OGRFeatureDefn 字段数 GetFieldCount: ",
+                          L"  OGRFeatureDefn field count GetFieldCount: ");
+    *out += std::to_wstring(defn->GetFieldCount()) + L"\r\n";
     for (int fi = 0; fi < defn->GetFieldCount(); ++fi) {
       OGRFieldDefn* f = defn->GetFieldDefn(fi);
       if (!f) {
@@ -333,7 +391,7 @@ void AppendOgrLayerDetails(OGRLayer* lay, int index, std::wstring* out) {
       *out += L"\r\n";
     }
   }
-  *out += L"  图层元数据（各域）:\r\n";
+  *out += AgisPickUiLang(L"  图层元数据（各域）:\r\n", L"  Layer metadata (all domains):\r\n");
   AppendGdalObjectMetadataDomains(reinterpret_cast<GDALMajorObjectH>(lay), out);
 }
 
@@ -717,7 +775,7 @@ std::unique_ptr<MapLayer> CreateLayerFromDataset(GDALDataset* ds, const std::wst
     return std::make_unique<VectorMapLayer>(ds, baseName, sourcePath, driverKind);
   }
   GDALClose(ds);
-  err = L"文件中未找到栅格或矢量图层。";
+  err = AgisTr(AgisUiStr::ErrNoRasterOrVectorInFile);
   return nullptr;
 }
 
@@ -730,7 +788,7 @@ std::unique_ptr<MapLayer> CreateLayerFromTmsUrl(const std::wstring& urlIn, std::
     u.erase(u.begin());
   }
   if (u.empty()) {
-    err = L"URL 为空。";
+    err = AgisTr(AgisUiStr::ErrUrlEmpty);
     return nullptr;
   }
   const std::string u8 = Utf8FromWide(u);
@@ -743,13 +801,13 @@ std::unique_ptr<MapLayer> CreateLayerFromTmsUrl(const std::wstring& urlIn, std::
         GDALOpenEx(u8.c_str(), GDAL_OF_RASTER | GDAL_OF_VECTOR | GDAL_OF_SHARED, nullptr, nullptr, nullptr));
   }
   if (!ds) {
-    err = L"无法打开数据源（已尝试 ZXY: 与直接 URL）。\n";
+    err = AgisTr(AgisUiStr::ErrOpenDsTms);
     err += u;
     return nullptr;
   }
   if (ds->GetRasterCount() <= 0) {
     GDALClose(ds);
-    err = L"该数据源不包含栅格波段。";
+    err = AgisTr(AgisUiStr::ErrNoRasterBands);
     return nullptr;
   }
   std::wstring name = L"TMS";
@@ -813,7 +871,7 @@ std::wstring NormalizeArcGisRestJsonUrl(const std::wstring& in) {
 std::unique_ptr<MapLayer> CreateLayerFromWmtsUrl(const std::wstring& urlIn, std::wstring& err) {
   const std::wstring u = TrimUrlWhitespace(urlIn);
   if (u.empty()) {
-    err = L"URL 为空。";
+    err = AgisTr(AgisUiStr::ErrUrlEmpty);
     return nullptr;
   }
   std::string conn;
@@ -826,13 +884,13 @@ std::unique_ptr<MapLayer> CreateLayerFromWmtsUrl(const std::wstring& urlIn, std:
   GDALDataset* ds = static_cast<GDALDataset*>(
       GDALOpenEx(conn.c_str(), GDAL_OF_RASTER | GDAL_OF_SHARED, nullptr, nullptr, nullptr));
   if (!ds) {
-    err = L"无法以 WMTS 打开数据源。\n";
+    err = AgisTr(AgisUiStr::ErrOpenDsWmts);
     err += u;
     return nullptr;
   }
   if (ds->GetRasterCount() <= 0) {
     GDALClose(ds);
-    err = L"该 WMTS 数据源不包含栅格波段。";
+    err = AgisTr(AgisUiStr::ErrWmtsNoBands);
     return nullptr;
   }
   std::wstring name = L"WMTS";
@@ -853,7 +911,7 @@ std::unique_ptr<MapLayer> CreateLayerFromWmtsUrl(const std::wstring& urlIn, std:
 std::unique_ptr<MapLayer> CreateLayerFromArcGisRestJsonUrl(const std::wstring& urlIn, std::wstring& err) {
   std::wstring u = NormalizeArcGisRestJsonUrl(urlIn);
   if (u.empty()) {
-    err = L"URL 为空。";
+    err = AgisTr(AgisUiStr::ErrUrlEmpty);
     return nullptr;
   }
   std::wstring lower = u;
@@ -861,21 +919,20 @@ std::unique_ptr<MapLayer> CreateLayerFromArcGisRestJsonUrl(const std::wstring& u
     c = static_cast<wchar_t>(std::towlower(static_cast<wint_t>(c)));
   }
   if (lower.find(L"/mapserver") == std::wstring::npos && lower.find(L"/imageserver") == std::wstring::npos) {
-    err = L"ArcGIS REST JSON 需要 MapServer 或 ImageServer 的服务 URL（来自 REST Services Directory）。\n"
-          L"示例：…/arcgis/rest/services/…/MapServer";
+    err = AgisTr(AgisUiStr::ErrArcGisUrlHint);
     return nullptr;
   }
   const std::string u8 = Utf8FromWide(u);
   GDALDataset* ds = static_cast<GDALDataset*>(
       GDALOpenEx(u8.c_str(), GDAL_OF_RASTER | GDAL_OF_SHARED, nullptr, nullptr, nullptr));
   if (!ds) {
-    err = L"无法打开 ArcGIS REST 数据源（需可访问的 MapServer/ImageServer JSON）。\n";
+    err = AgisTr(AgisUiStr::ErrOpenArcGis);
     err += u;
     return nullptr;
   }
   if (ds->GetRasterCount() <= 0) {
     GDALClose(ds);
-    err = L"该数据源不包含栅格波段。";
+    err = AgisTr(AgisUiStr::ErrArcGisNoBands);
     return nullptr;
   }
   std::wstring name = L"ArcGIS";
@@ -929,13 +986,13 @@ const wchar_t* MapRenderBackendDisplayName(MapRenderBackend b) {
     case MapRenderBackend::kD2d:
       return L"Direct2D";
     case MapRenderBackend::kBgfxD3d11:
-      return L"Bgfx（D3D11）";
+      return AgisPickUiLang(L"Bgfx（D3D11）", L"Bgfx (D3D11)");
     case MapRenderBackend::kBgfxOpenGL:
-      return L"Bgfx（OpenGL）";
+      return AgisPickUiLang(L"Bgfx（OpenGL）", L"Bgfx (OpenGL)");
     case MapRenderBackend::kBgfxAuto:
-      return L"Bgfx（自动后端）";
+      return AgisTr(AgisUiStr::MapBackendBgfxAuto);
     default:
-      return L"未知";
+      return AgisTr(AgisUiStr::MapBackendUnknown);
   }
 }
 
@@ -944,23 +1001,24 @@ const wchar_t* MapRenderBackendDisplayName(MapRenderBackend b) {
 void MapEngine::SetRenderBackend(MapRenderBackend backend) {
   mapRenderBackend_ = backend;
   if (!mapHwnd_ || !IsWindow(mapHwnd_)) {
-    AppLogLine(std::wstring(L"[地图] 呈现方式已设为 ") + MapRenderBackendDisplayName(backend) +
-               L"（地图宿主尚未创建，将在窗口就绪后应用）。");
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendSetPendingHead)) + MapRenderBackendDisplayName(backend) +
+               AgisTr(AgisUiStr::MapLogBackendSetPendingTail));
     return;
   }
 
   if (!MapGpu_Init(mapHwnd_, backend)) {
-    AppLogLine(std::wstring(L"[地图] 呈现切换失败：") + MapRenderBackendDisplayName(backend) +
-               L" 初始化未成功，正在回退为 GDI。");
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendFailHead)) + MapRenderBackendDisplayName(backend) +
+               AgisTr(AgisUiStr::MapLogBackendFailTail));
     mapRenderBackend_ = MapRenderBackend::kGdi;
     if (!MapGpu_Init(mapHwnd_, MapRenderBackend::kGdi)) {
-      AppLogLine(L"[地图] 呈现切换失败：GDI 回退初始化仍失败，地图可能无法绘制。");
+      AppLogLine(AgisTr(AgisUiStr::MapLogGdiFallbackFail));
     } else {
-      AppLogLine(L"[地图] 已回退为 GDI 并完成初始化。");
+      AppLogLine(AgisTr(AgisUiStr::MapLogGdiFallbackOk));
     }
   } else {
     const MapRenderBackend active = MapGpu_GetActiveBackend();
-    AppLogLine(std::wstring(L"[地图] 呈现切换成功：") + MapRenderBackendDisplayName(active) + L"。");
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::MapLogBackendOkTail)) + MapRenderBackendDisplayName(active) +
+               (AgisGetUiLanguage() == AgisUiLanguage::kEn ? L"." : L"。"));
   }
 
   RECT cr{};
@@ -985,7 +1043,7 @@ void MapEngine::RefreshLayerList(HWND listbox) {
     SendMessageW(listbox, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(layer->DisplayName().c_str()));
   }
   if (doc_.layers.empty()) {
-    SendMessageW(listbox, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"（无图层，使用「图层」菜单添加）"));
+    SendMessageW(listbox, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisTr(AgisUiStr::MapMsgNoLayers)));
   }
   SendMessageW(listbox, LB_SETITEMHEIGHT, 0, MAKELPARAM(kLayerListItemHeight, 0));
 }
@@ -1054,7 +1112,7 @@ void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
   const int n = static_cast<int>(doc_.layers.size());
   if (n == 0 && item == 0) {
     Gdiplus::SolidBrush hint(dark ? Gdiplus::Color(255, 155, 160, 175) : Gdiplus::Color(255, 130, 135, 150));
-    g.DrawString(L"（无图层，使用「图层」菜单添加）", -1, &metaF,
+    g.DrawString(AgisTr(AgisUiStr::MapMsgNoLayers), -1, &metaF,
                  Gdiplus::RectF(static_cast<Gdiplus::REAL>(rc.left + 10), static_cast<Gdiplus::REAL>(rc.top + 8),
                                 static_cast<Gdiplus::REAL>(w - 20), static_cast<Gdiplus::REAL>(h - 16)),
                  &fmt, &hint);
@@ -1080,7 +1138,7 @@ void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
                &fg);
 
   wchar_t line2[256]{};
-  _snwprintf_s(line2, _TRUNCATE, L"可见：%s    驱动：%s", vis ? L"显示" : L"隐藏",
+  _snwprintf_s(line2, _TRUNCATE, AgisTr(AgisUiStr::MapFmtLayerRow2), vis ? AgisTr(AgisUiStr::MapLabelShow) : AgisTr(AgisUiStr::MapLabelHide),
                MapLayerDriverKindShort(layer->DriverKind()));
   g.DrawString(line2, -1, &metaF,
                Gdiplus::RectF(static_cast<float>(rc.left + 8), static_cast<float>(rc.top + 28),
@@ -1088,7 +1146,7 @@ void MapEngine::PaintLayerListItem(const DRAWITEMSTRUCT* dis) {
                &fmt, &metaFg);
 
   wchar_t line3[128]{};
-  _snwprintf_s(line3, _TRUNCATE, L"数据：%s", MapLayerKindLabel(layer->GetKind()));
+  _snwprintf_s(line3, _TRUNCATE, AgisTr(AgisUiStr::MapFmtDataLine), MapLayerKindLabel(layer->GetKind()));
   g.DrawString(line3, -1, &metaF,
                Gdiplus::RectF(static_cast<float>(rc.left + 8), static_cast<float>(rc.top + 48),
                               static_cast<float>(w - 16), 18.0f),
@@ -1138,9 +1196,9 @@ void MapEngine::GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstrin
   outSourceProps->clear();
 #if GIS_DESKTOP_HAVE_GDAL
   if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
-    *outTitle = L"未选择图层";
-    *outDriverProps = L"在左侧「图层」列表中单击一行，可在此查看驱动与格式相关属性。";
-    *outSourceProps = L"选中图层后，此处显示数据源路径、文件列表与数据集描述等。";
+    *outTitle = AgisTr(AgisUiStr::PropsNoSelTitle);
+    *outDriverProps = AgisTr(AgisUiStr::PropsNoSelDriver);
+    *outSourceProps = AgisTr(AgisUiStr::PropsNoSelSource);
     return;
   }
   const auto& layer = doc_.layers[static_cast<size_t>(index)];
@@ -1150,15 +1208,15 @@ void MapEngine::GetLayerInfoForUi(int index, std::wstring* outTitle, std::wstrin
   layer->AppendDriverProperties(outDriverProps);
   layer->AppendSourceProperties(outSourceProps);
   if (outDriverProps->empty()) {
-    *outDriverProps = L"（无驱动侧附加属性）";
+    *outDriverProps = AgisTr(AgisUiStr::PropsNoDriverExtra);
   }
   if (outSourceProps->empty()) {
-    *outSourceProps = L"（无数据源侧附加属性）";
+    *outSourceProps = AgisTr(AgisUiStr::PropsNoSourceExtra);
   }
 #else
-  *outTitle = L"图层属性";
-  *outDriverProps = L"当前构建未启用 GDAL。";
-  *outSourceProps = L"无矢量/栅格图层信息。";
+  *outTitle = AgisTr(AgisUiStr::PropsTitle);
+  *outDriverProps = AgisTr(AgisUiStr::PropsGdalOffDriver);
+  *outSourceProps = AgisTr(AgisUiStr::PropsGdalOffSource);
 #endif
 }
 
@@ -1177,13 +1235,13 @@ bool MapEngine::IsRasterGdalLayer(int index) const {
 bool MapEngine::BuildOverviewsForLayer(int index, std::wstring& err) {
 #if GIS_DESKTOP_HAVE_GDAL
   if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
-    err = L"无效图层。";
+    err = AgisTr(AgisUiStr::ErrInvalidLayer);
     return false;
   }
   return doc_.layers[static_cast<size_t>(index)]->BuildOverviews(err);
 #else
   (void)index;
-  err = L"未启用 GDAL。";
+  err = AgisTr(AgisUiStr::ErrGdalDisabled);
   return false;
 #endif
 }
@@ -1191,13 +1249,13 @@ bool MapEngine::BuildOverviewsForLayer(int index, std::wstring& err) {
 bool MapEngine::ClearOverviewsForLayer(int index, std::wstring& err) {
 #if GIS_DESKTOP_HAVE_GDAL
   if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
-    err = L"无效图层。";
+    err = AgisTr(AgisUiStr::ErrInvalidLayer);
     return false;
   }
   return doc_.layers[static_cast<size_t>(index)]->ClearOverviews(err);
 #else
   (void)index;
-  err = L"未启用 GDAL。";
+  err = AgisTr(AgisUiStr::ErrGdalDisabled);
   return false;
 #endif
 }
@@ -1210,7 +1268,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
   return false;
 #else
   if (index < 0 || index >= static_cast<int>(doc_.layers.size())) {
-    MessageBoxW(owner, L"请先选择有效图层。", L"AGIS", MB_OK | MB_ICONWARNING);
+    MessageBoxW(owner, AgisTr(AgisUiStr::MsgSelectValidLayer), L"AGIS", MB_OK | MB_ICONWARNING);
     return false;
   }
   MapLayerDriverKind kind{};
@@ -1219,15 +1277,11 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
     return false;
   }
   if (kind == MapLayerDriverKind::kWmsPlaceholder) {
-    MessageBoxW(owner,
-                L"WMS（KVP GetCapabilities/GetMap）尚未接入。\n请使用 WMTS、ArcGIS REST JSON、TMS/XYZ 或本地 GDAL 文件。",
-                L"AGIS", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(owner, AgisTr(AgisUiStr::MsgWmsNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return false;
   }
   if (kind == MapLayerDriverKind::kSoapPlaceholder) {
-    MessageBoxW(owner,
-                L"OGC Web Services SOAP 绑定尚未接入。\n请使用 WMTS、ArcGIS REST JSON、TMS/XYZ 或本地 GDAL 文件。",
-                L"AGIS", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(owner, AgisTr(AgisUiStr::MsgSoapNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return false;
   }
   std::wstring err;
@@ -1242,21 +1296,21 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
       urlExtra.erase(urlExtra.begin());
     }
     if (urlExtra.empty()) {
-      MessageBoxW(owner, L"请填写瓦片 URL。", L"AGIS", MB_OK | MB_ICONWARNING);
+      MessageBoxW(owner, AgisTr(AgisUiStr::MsgFillTileUrl), L"AGIS", MB_OK | MB_ICONWARNING);
       return false;
     }
     auto layer = agis_detail::CreateLayerFromTmsUrl(urlExtra, err);
     if (!layer) {
-      AppLogLine(std::wstring(L"[错误] 更换数据源失败：") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrReplaceSrcPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
     if (!doc_.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
-      AppLogLine(std::wstring(L"[错误] ") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrGenericPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    AppLogLine(std::wstring(L"[图层] 已更换为 TMS：") + urlExtra);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerReplacedTms)) + urlExtra);
   } else if (kind == MapLayerDriverKind::kWmts) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
@@ -1266,21 +1320,21 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
       urlExtra.erase(urlExtra.begin());
     }
     if (urlExtra.empty()) {
-      MessageBoxW(owner, L"请填写 WMTS GetCapabilities 或服务 URL。", L"AGIS", MB_OK | MB_ICONWARNING);
+      MessageBoxW(owner, AgisTr(AgisUiStr::MsgFillWmtsUrl), L"AGIS", MB_OK | MB_ICONWARNING);
       return false;
     }
     auto layer = agis_detail::CreateLayerFromWmtsUrl(urlExtra, err);
     if (!layer) {
-      AppLogLine(std::wstring(L"[错误] 更换数据源失败：") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrReplaceSrcPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
     if (!doc_.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
-      AppLogLine(std::wstring(L"[错误] ") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrGenericPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    AppLogLine(std::wstring(L"[图层] 已更换为 WMTS：") + urlExtra);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerReplacedWmts)) + urlExtra);
   } else if (kind == MapLayerDriverKind::kArcGisRestJson) {
     while (!urlExtra.empty() &&
            (urlExtra.back() == L' ' || urlExtra.back() == L'\t' || urlExtra.back() == L'\r' || urlExtra.back() == L'\n')) {
@@ -1290,21 +1344,21 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
       urlExtra.erase(urlExtra.begin());
     }
     if (urlExtra.empty()) {
-      MessageBoxW(owner, L"请填写 ArcGIS MapServer/ImageServer 的 REST URL。", L"AGIS", MB_OK | MB_ICONWARNING);
+      MessageBoxW(owner, AgisTr(AgisUiStr::MsgFillArcGisUrl), L"AGIS", MB_OK | MB_ICONWARNING);
       return false;
     }
     auto layer = agis_detail::CreateLayerFromArcGisRestJsonUrl(urlExtra, err);
     if (!layer) {
-      AppLogLine(std::wstring(L"[错误] 更换数据源失败：") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrReplaceSrcPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
     if (!doc_.ReplaceLayerAt(static_cast<size_t>(index), std::move(layer), err)) {
-      AppLogLine(std::wstring(L"[错误] ") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrGenericPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    AppLogLine(std::wstring(L"[图层] 已更换为 ArcGIS REST：") + urlExtra);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerReplacedArcGis)) + urlExtra);
   } else {
     wchar_t path[MAX_PATH]{};
     OPENFILENAMEW ofn{};
@@ -1312,10 +1366,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
     ofn.hwndOwner = owner;
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = L"栅格/矢量\0"
-                      L"*.tif;*.tiff;*.png;*.jpg;*.jp2;*.img;*.shp;*.geojson;*.json;*.gpkg;*.kml;*.vrt;*.osm;*.pbf\0"
-                      L"所有文件\0"
-                      L"*.*\0\0";
+    ofn.lpstrFilter = AgisGdalDataFileFilterPtr();
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
     if (!GetOpenFileNameW(&ofn)) {
@@ -1341,7 +1392,7 @@ bool MapEngine::ReplaceLayerSourceFromUi(HWND owner, HWND layerListbox, int inde
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return false;
     }
-    AppLogLine(std::wstring(L"[图层] 已更换数据源（GDAL）：") + base);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerReplacedGdal)) + base);
   }
   RefreshLayerList(layerListbox);
   if (mapHwnd_) {
@@ -1398,42 +1449,43 @@ LRESULT CALLBACK LayerDriverDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return -1;
       }
       HINSTANCE inst = GetModuleHandleW(nullptr);
-      CreateWindowW(L"STATIC", L"选择图层数据源类型：", WS_CHILD | WS_VISIBLE, 16, 10, 400, 18, hwnd, nullptr, inst,
-                    nullptr);
+      CreateWindowW(L"STATIC", AgisTr(AgisUiStr::DlgPickLayerSourceType), WS_CHILD | WS_VISIBLE, 16, 10, 400, 18, hwnd,
+                    nullptr, inst, nullptr);
       ctx->hGdal =
-          CreateWindowW(L"BUTTON", L"GDAL — 本地文件 / 虚拟路径（.tif、.shp、VSI 等）",
+          CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::DlgLayerRadioGdal),
                         WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 16, 32, 400, 22, hwnd,
                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_GDAL)), inst, nullptr);
       ctx->hTms = CreateWindowW(
-          L"BUTTON", L"TMS / XYZ — 网络瓦片（{z}/{x}/{y}，GDAL XYZ）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
-          16, 54, 420, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_TMS)), inst, nullptr);
+          L"BUTTON", AgisTr(AgisUiStr::DlgLayerRadioTms), WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP, 16,
+          54, 420, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_TMS)), inst, nullptr);
       ctx->hWmts =
-          CreateWindowW(L"BUTTON", L"WMTS — OGC Web Map Tile Service（GetCapabilities URL，GDAL WMTS）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
-                        16, 76, 420, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_WMTS)), inst,
-                        nullptr);
+          CreateWindowW(L"BUTTON",
+                        AgisPickUiLang(L"WMTS — OGC Web Map Tile Service（GetCapabilities URL，GDAL WMTS）",
+                                       L"WMTS — OGC Web Map Tile Service (GetCapabilities URL, GDAL WMTS)"),
+                        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP, 16, 76, 420, 20, hwnd,
+                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_WMTS)), inst, nullptr);
       ctx->hArcgis = CreateWindowW(
-          L"BUTTON",
-          L"JSON — ArcGIS REST Services Directory（MapServer/ImageServer URL，GDAL 按 JSON 解析瓦片）",
-          WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP, 16, 98, 420, 20, hwnd,
-          reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_ARCGIS_JSON)), inst, nullptr);
+          L"BUTTON", AgisTr(AgisUiStr::DlgLayerRadioArcGis), WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
+          16, 98, 420, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_ARCGIS_JSON)), inst,
+          nullptr);
       ctx->hSoap =
-          CreateWindowW(L"BUTTON", L"SOAP — OGC Web Services SOAP 绑定（占位，尚未接入）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
+          CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::DlgLayerRadioSoap), WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
                         16, 120, 420, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_SOAP)), inst,
                         nullptr);
-      ctx->hWms = CreateWindowW(L"BUTTON", L"WMS — KVP GetMap/GetCapabilities（占位，尚未接入）", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
+      ctx->hWms = CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::DlgLayerRadioWms), WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_TABSTOP,
                                 16, 142, 420, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DRV_WMS)),
                                 inst, nullptr);
       SendMessageW(ctx->hGdal, BM_SETCHECK, BST_CHECKED, 0);
-      CreateWindowW(L"STATIC", L"URL（TMS / WMTS / ArcGIS REST 时填写）：", WS_CHILD | WS_VISIBLE, 16, 170, 420, 18, hwnd,
+      CreateWindowW(L"STATIC", AgisTr(AgisUiStr::DlgLayerUrlLabel), WS_CHILD | WS_VISIBLE, 16, 170, 420, 18, hwnd,
                     nullptr, inst, nullptr);
       ctx->hUrl = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_TABSTOP, 16, 190, 420, 24, hwnd,
                                   reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_URL)), inst, nullptr);
       EnableWindow(ctx->hUrl, FALSE);
-      CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP, 220, 408, 100, 26, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DLG_OK)), inst, nullptr);
-      CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 330, 408, 100, 26, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DLG_CANCEL)), inst, nullptr);
+      CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::BtnOK), WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP, 220,
+                    408, 100, 26, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DLG_OK)), inst, nullptr);
+      CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::BtnCancel), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 330, 408,
+                    100, 26, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LAYER_DLG_CANCEL)), inst, nullptr);
       ApplyUiFontToChildren(hwnd);
       return 0;
     }
@@ -1538,7 +1590,8 @@ bool MapEngine::ShowLayerDriverDialog(HWND owner, MapLayerDriverKind* outKind, s
     x = rc.left + ((rc.right - rc.left) - dw) / 2;
     y = rc.top + ((rc.bottom - rc.top) - dh) / 2;
   }
-  HWND dlg = CreateWindowExW(kDlgEx, kLayerDriverDlgClass, L"添加图层 — 数据源", kDlgStyle, x, y, dw, dh, owner, nullptr,
+  HWND dlg = CreateWindowExW(kDlgEx, kLayerDriverDlgClass, AgisTr(AgisUiStr::DlgAddLayerTitle), kDlgStyle, x, y, dw, dh,
+                             owner, nullptr,
                              GetModuleHandleW(nullptr), &ctx);
   if (!dlg) {
     return false;
@@ -1566,7 +1619,7 @@ bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector
 
 bool MapEngine::SaveMapScreenshotToFile(HWND mapHwnd, const wchar_t* path, std::wstring& err) {
   if (!mapHwnd || !path || !path[0]) {
-    err = L"参数无效。";
+    err = AgisTr(AgisUiStr::ErrInvalidParam);
     return false;
   }
   RECT client{};
@@ -1574,16 +1627,16 @@ bool MapEngine::SaveMapScreenshotToFile(HWND mapHwnd, const wchar_t* path, std::
   const int w = client.right - client.left;
   const int h = client.bottom - client.top;
   if (w <= 0 || h <= 0) {
-    err = L"地图区域大小无效。";
+    err = AgisTr(AgisUiStr::ErrMapSizeInvalid);
     return false;
   }
   std::vector<uint8_t> pix;
   if (!MapHostRenderClientToTopDownBgra(mapHwnd, client, &pix)) {
-    err = L"渲染失败。";
+    err = AgisTr(AgisUiStr::ErrRenderFailed);
     return false;
   }
   if (!UiSaveBgraTopDownToPngFile(pix.data(), w, h, path)) {
-    err = L"写入 PNG 失败。";
+    err = AgisTr(AgisUiStr::ErrPngWriteFailed);
     return false;
   }
   return true;
@@ -1601,7 +1654,7 @@ void MapEngine::PromptSaveMapScreenshot(HWND owner, HWND mapHwnd) {
   ofn.hwndOwner = owner;
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"PNG 图像\0*.png\0所有文件\0*.*\0\0";
+  ofn.lpstrFilter = AgisPngFileFilterPtr();
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
   ofn.lpstrDefExt = L"png";
@@ -1610,9 +1663,9 @@ void MapEngine::PromptSaveMapScreenshot(HWND owner, HWND mapHwnd) {
   }
   std::wstring err;
   if (SaveMapScreenshotToFile(mapHwnd, path, err)) {
-    AppLogLine(std::wstring(L"[截图] 已保存：") + path);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogScreenshotSavedPrefix)) + path);
   } else {
-    AppLogLine(std::wstring(L"[错误] 截图失败：") + err);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogScreenshotFailPrefix)) + err);
   }
 }
 
@@ -1623,17 +1676,13 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
     return;
   }
   if (kind == MapLayerDriverKind::kWmsPlaceholder) {
-    AppLogLine(L"[图层] WMS（KVP）尚未接入。");
-    MessageBoxW(owner,
-                L"WMS（KVP GetCapabilities/GetMap）尚未接入。\n请使用 WMTS、ArcGIS REST JSON、TMS/XYZ 或本地 GDAL 文件。",
-                L"AGIS", MB_OK | MB_ICONINFORMATION);
+    AppLogLine(AgisTr(AgisUiStr::LogLayerWmsNyi));
+    MessageBoxW(owner, AgisTr(AgisUiStr::MsgWmsNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (kind == MapLayerDriverKind::kSoapPlaceholder) {
-    AppLogLine(L"[图层] SOAP 驱动尚未接入。");
-    MessageBoxW(owner,
-                L"OGC Web Services SOAP 绑定尚未接入。\n请使用 WMTS、ArcGIS REST JSON、TMS/XYZ 或本地 GDAL 文件。",
-                L"AGIS", MB_OK | MB_ICONINFORMATION);
+    AppLogLine(AgisTr(AgisUiStr::LogLayerSoapNyi));
+    MessageBoxW(owner, AgisTr(AgisUiStr::MsgSoapNotAvail), L"AGIS", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (kind == MapLayerDriverKind::kTmsXyz) {
@@ -1645,17 +1694,17 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
       urlExtra.erase(urlExtra.begin());
     }
     if (urlExtra.empty()) {
-      AppLogLine(L"[错误] 请输入 TMS/XYZ 瓦片 URL。");
-      MessageBoxW(owner, L"请填写瓦片 URL（模板中含 {z}、{x}、{y}）。", L"AGIS", MB_OK | MB_ICONWARNING);
+      AppLogLine(AgisTr(AgisUiStr::LogErrEnterTmsUrl));
+      MessageBoxW(owner, AgisTr(AgisUiStr::MsgFillTmsUrlDetail), L"AGIS", MB_OK | MB_ICONWARNING);
       return;
     }
     std::wstring err;
     if (!doc_.AddLayerFromTmsUrl(urlExtra, err)) {
-      AppLogLine(std::wstring(L"[错误] 添加 TMS 图层失败：") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrAddTmsPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return;
     }
-    AppLogLine(std::wstring(L"[图层] 已添加 TMS：") + urlExtra);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedTms)) + urlExtra);
     RefreshLayerList(layerList);
     if (mapHwnd_) {
       InvalidateRect(mapHwnd_, nullptr, FALSE);
@@ -1671,17 +1720,17 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
       urlExtra.erase(urlExtra.begin());
     }
     if (urlExtra.empty()) {
-      AppLogLine(L"[错误] 请输入 WMTS URL。");
-      MessageBoxW(owner, L"请填写 WMTS GetCapabilities 或服务 URL（可省略 WMTS: 前缀）。", L"AGIS", MB_OK | MB_ICONWARNING);
+      AppLogLine(AgisTr(AgisUiStr::LogErrEnterWmtsUrl));
+      MessageBoxW(owner, AgisTr(AgisUiStr::MsgFillWmtsUrlDetail), L"AGIS", MB_OK | MB_ICONWARNING);
       return;
     }
     std::wstring err;
     if (!doc_.AddLayerFromWmtsUrl(urlExtra, err)) {
-      AppLogLine(std::wstring(L"[错误] 添加 WMTS 图层失败：") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrAddWmtsPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return;
     }
-    AppLogLine(std::wstring(L"[图层] 已添加 WMTS：") + urlExtra);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedWmts)) + urlExtra);
     RefreshLayerList(layerList);
     if (mapHwnd_) {
       InvalidateRect(mapHwnd_, nullptr, FALSE);
@@ -1697,18 +1746,17 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
       urlExtra.erase(urlExtra.begin());
     }
     if (urlExtra.empty()) {
-      AppLogLine(L"[错误] 请输入 ArcGIS REST URL。");
-      MessageBoxW(owner, L"请填写 MapServer 或 ImageServer 的服务 URL（REST Services Directory 中的链接）。", L"AGIS",
-                  MB_OK | MB_ICONWARNING);
+      AppLogLine(AgisTr(AgisUiStr::LogErrEnterArcGisUrl));
+      MessageBoxW(owner, AgisTr(AgisUiStr::MsgFillArcGisUrlDetail), L"AGIS", MB_OK | MB_ICONWARNING);
       return;
     }
     std::wstring err;
     if (!doc_.AddLayerFromArcGisRestJsonUrl(urlExtra, err)) {
-      AppLogLine(std::wstring(L"[错误] 添加 ArcGIS REST 图层失败：") + err);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrAddArcGisPrefix)) + err);
       MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
       return;
     }
-    AppLogLine(std::wstring(L"[图层] 已添加 ArcGIS REST：") + urlExtra);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedArcGis)) + urlExtra);
     RefreshLayerList(layerList);
     if (mapHwnd_) {
       InvalidateRect(mapHwnd_, nullptr, FALSE);
@@ -1722,10 +1770,7 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
   ofn.hwndOwner = owner;
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"栅格/矢量\0"
-                    L"*.tif;*.tiff;*.png;*.jpg;*.jp2;*.img;*.shp;*.geojson;*.json;*.gpkg;*.kml;*.vrt;*.osm;*.pbf\0"
-                    L"所有文件\0"
-                    L"*.*\0\0";
+  ofn.lpstrFilter = AgisGdalDataFileFilterPtr();
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
   if (!GetOpenFileNameW(&ofn)) {
@@ -1733,7 +1778,7 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
   }
   std::wstring err;
   if (!doc_.AddLayerFromFile(path, err)) {
-    AppLogLine(std::wstring(L"[错误] 添加图层失败：") + err);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrAddLayerPrefix)) + err);
     return;
   }
   {
@@ -1742,7 +1787,7 @@ void MapEngine::OnAddLayerFromDialog(HWND owner, HWND layerList) {
     if (slash != std::wstring::npos) {
       base = base.substr(slash + 1);
     }
-    AppLogLine(std::wstring(L"[图层] 已添加（GDAL）：") + base);
+    AppLogLine(std::wstring(AgisTr(AgisUiStr::LogLayerAddedGdal)) + base);
   }
   RefreshLayerList(layerList);
   if (mapHwnd_) {
@@ -1757,6 +1802,35 @@ void MapEngine::UpdateMapChrome() {
   wchar_t buf[32]{};
   _snwprintf_s(buf, _TRUNCATE, L"%d%%", doc_.ScalePercentForUi());
   SetWindowTextW(mapChromeScale_, buf);
+}
+
+void MapEngine::ApplyMapHostUiLanguage(HWND mapHost) {
+  if (!mapHost || !IsWindow(mapHost)) {
+    return;
+  }
+  if (HWND t = GetDlgItem(mapHost, IDC_MAP_SHORTCUT_TOGGLE)) {
+    SetWindowTextW(t, mapShortcutExpanded_ ? AgisTr(AgisUiStr::MapBtnShortcutExpanded)
+                                           : AgisTr(AgisUiStr::MapBtnShortcutCollapsed));
+  }
+  if (HWND e = GetDlgItem(mapHost, IDC_MAP_SHORTCUT_EDIT)) {
+    SetWindowTextW(e, AgisTr(AgisUiStr::MapShortcutHelpBody));
+  }
+  if (HWND t = GetDlgItem(mapHost, IDC_MAP_VIS_TOGGLE)) {
+    SetWindowTextW(t,
+                   mapVisExpanded_ ? AgisTr(AgisUiStr::MapBtnVisExpanded) : AgisTr(AgisUiStr::MapBtnVisCollapsed));
+  }
+  if (HWND g = GetDlgItem(mapHost, IDC_MAP_VIS_GRID)) {
+    SetWindowTextW(g, AgisTr(AgisUiStr::MapChkLatLonGrid));
+  }
+  if (HWND b = GetDlgItem(mapHost, IDC_MAP_FIT)) {
+    SetWindowTextW(b, AgisTr(AgisUiStr::MapBtnFit));
+  }
+  if (HWND b = GetDlgItem(mapHost, IDC_MAP_ORIGIN)) {
+    SetWindowTextW(b, AgisTr(AgisUiStr::MapBtnOrigin));
+  }
+  if (HWND b = GetDlgItem(mapHost, IDC_MAP_RESET)) {
+    SetWindowTextW(b, AgisTr(AgisUiStr::MapBtnReset));
+  }
 }
 
 namespace {
@@ -1881,7 +1955,7 @@ bool MapHostRenderClientToTopDownBgra(HWND hwnd, const RECT& client, std::vector
   const RECT inner{0, 0, cw, ch};
   MapEngine::Instance().Document().Draw(mem, inner);
   if (MapEngine::Instance().IsMapUiShowHintOverlay()) {
-    UiPaintMapHintOverlay(mem, inner, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+    UiPaintMapHintOverlay(mem, inner, AgisTr(AgisUiStr::MapHintPanZoom));
   }
   const size_t nbytes = static_cast<size_t>(cw) * static_cast<size_t>(ch) * 4u;
   outPixels->resize(nbytes);
@@ -1904,7 +1978,7 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       eng.doc_.refViewWidthDeg = 360.0;
       eng.doc_.refViewHeightDeg = 180.0;
       if (!MapGpu_Init(hwnd, eng.mapRenderBackend_)) {
-        AppLogLine(L"[地图] GPU 呈现初始化失败，已回退为 GDI。");
+        AppLogLine(AgisTr(AgisUiStr::MapLogGpuInitFail));
         eng.mapRenderBackend_ = MapRenderBackend::kGdi;
         MapGpu_Init(hwnd, MapRenderBackend::kGdi);
       }
@@ -1915,26 +1989,25 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
       }
       {
         HINSTANCE inst = GetModuleHandleW(nullptr);
-        CreateWindowW(L"BUTTON", L"快捷键 ▼", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 8, 8, 80, 22, hwnd,
-                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_SHORTCUT_TOGGLE)), inst, nullptr);
-        const wchar_t kHelp[] =
-            L"中键拖拽：平移\r\n滚轮：缩放（指针为锚点）\r\n"
-            L"左下：适应 / 原点 / 还原与 ±\r\n无全局快捷键（可后续绑定）";
-        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", kHelp,
+        CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::MapBtnShortcutCollapsed), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 8, 8,
+                      80, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_SHORTCUT_TOGGLE)), inst,
+                      nullptr);
+        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", AgisTr(AgisUiStr::MapShortcutHelpBody),
                         WS_CHILD | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP, 8, 36, 280,
                         100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_SHORTCUT_EDIT)), inst, nullptr);
         ShowWindow(GetDlgItem(hwnd, IDC_MAP_SHORTCUT_EDIT), SW_HIDE);
-        CreateWindowW(L"BUTTON", L"可见性 ▲", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 200, 8, 100, 22, hwnd,
-                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_VIS_TOGGLE)), inst, nullptr);
-        CreateWindowW(L"BUTTON", L"显示经纬网", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP, 200, 36, 120, 22,
-                      hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_VIS_GRID)), inst, nullptr);
+        CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::MapBtnVisExpanded), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 200, 8, 100,
+                      22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_VIS_TOGGLE)), inst, nullptr);
+        CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::MapChkLatLonGrid), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                      200, 36, 120, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_VIS_GRID)), inst,
+                      nullptr);
         SendMessageW(GetDlgItem(hwnd, IDC_MAP_VIS_GRID), BM_SETCHECK, BST_CHECKED, 0);
-        CreateWindowW(L"BUTTON", L"适应", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 8, 200, 52, 22, hwnd,
-                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_FIT)), inst, nullptr);
-        CreateWindowW(L"BUTTON", L"原点", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 64, 200, 52, 22, hwnd,
-                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_ORIGIN)), inst, nullptr);
-        CreateWindowW(L"BUTTON", L"还原", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 120, 200, 52, 22, hwnd,
-                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_RESET)), inst, nullptr);
+        CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::MapBtnFit), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 8, 200,
+                      52, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_FIT)), inst, nullptr);
+        CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::MapBtnOrigin), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 64,
+                      200, 52, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_ORIGIN)), inst, nullptr);
+        CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::MapBtnReset), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 120,
+                      200, 52, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_RESET)), inst, nullptr);
         CreateWindowW(L"BUTTON", L"−", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 8, 228, 28, 22, hwnd,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_ZOOM_OUT)), inst, nullptr);
         eng.mapChromeScale_ =
@@ -1944,19 +2017,27 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MAP_ZOOM_IN)), inst, nullptr);
         LayoutMapOverlayControls(hwnd);
         ApplyUiFontToChildren(hwnd);
+        MapHostAttachChildInputForwarding(hwnd);
         eng.UpdateMapChrome();
       }
       return 0;
     case WM_DESTROY:
+      MapHostDetachChildInputForwarding(hwnd);
       MapGpu_Shutdown(hwnd);
       eng.mapHwnd_ = nullptr;
       eng.mapChromeScale_ = nullptr;
       return 0;
     case WM_SIZE: {
-      RECT sr{};
-      GetClientRect(hwnd, &sr);
-      MapGpu_OnResize(sr.right - sr.left, sr.bottom - sr.top);
+      // 使用 WM_SIZE 附带尺寸，避免与 GetClientRect 在消息处理顺序上差一帧；GPU RT / bgfx reset 与后续 WM_PAINT 一致。
+      int nw = LOWORD(lParam);
+      int nh = HIWORD(lParam);
+      if (wParam == SIZE_MINIMIZED) {
+        nw = 0;
+        nh = 0;
+      }
+      MapGpu_OnResize(nw, nh);
       LayoutMapOverlayControls(hwnd);
+      InvalidateRect(hwnd, nullptr, FALSE);
       return 0;
     }
     case WM_COMMAND: {
@@ -2026,7 +2107,8 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
             ShowWindow(hEd, eng.mapShortcutExpanded_ ? SW_SHOW : SW_HIDE);
           }
           SetWindowTextW(GetDlgItem(hwnd, IDC_MAP_SHORTCUT_TOGGLE),
-                         eng.mapShortcutExpanded_ ? L"快捷键 ▲" : L"快捷键 ▼");
+                         eng.mapShortcutExpanded_ ? AgisTr(AgisUiStr::MapBtnShortcutExpanded)
+                                                : AgisTr(AgisUiStr::MapBtnShortcutCollapsed));
           LayoutMapOverlayControls(hwnd);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
@@ -2037,7 +2119,8 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
             ShowWindow(hGr, eng.mapVisExpanded_ ? SW_SHOW : SW_HIDE);
           }
           SetWindowTextW(GetDlgItem(hwnd, IDC_MAP_VIS_TOGGLE),
-                         eng.mapVisExpanded_ ? L"可见性 ▲" : L"可见性 ▼");
+                         eng.mapVisExpanded_ ? AgisTr(AgisUiStr::MapBtnVisExpanded)
+                                             : AgisTr(AgisUiStr::MapBtnVisCollapsed));
           LayoutMapOverlayControls(hwnd);
           InvalidateRect(hwnd, nullptr, FALSE);
           return 0;
@@ -2153,7 +2236,7 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
         const HGDIOBJ oldBmp = SelectObject(mem, bmp);
         eng.doc_.Draw(mem, client);
         if (eng.IsMapUiShowHintOverlay()) {
-          UiPaintMapHintOverlay(mem, client, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+          UiPaintMapHintOverlay(mem, client, AgisTr(AgisUiStr::MapHintPanZoom));
         }
         BitBlt(hdc, 0, 0, cw, ch, mem, 0, 0, SRCCOPY);
         SelectObject(mem, oldBmp);
@@ -2167,7 +2250,7 @@ AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wPa
         HDC memdc = gx.GetHDC();
         eng.doc_.Draw(memdc, client);
         if (eng.IsMapUiShowHintOverlay()) {
-          UiPaintMapHintOverlay(memdc, client, L"中键拖拽平移 · 滚轮缩放（指针锚点）");
+          UiPaintMapHintOverlay(memdc, client, AgisTr(AgisUiStr::MapHintPanZoom));
         }
         gx.ReleaseHDC(memdc);
         Gdiplus::Graphics screen(hdc);

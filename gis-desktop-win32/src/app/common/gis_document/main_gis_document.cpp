@@ -8,6 +8,7 @@
 #include "common/app_core/main_app.h"
 #include "core/main_globals.h"
 #include "core/app_log.h"
+#include "utils/agis_ui_l10n.h"
 #include "main_gis_xml.h"
 #include "map_engine/map_engine.h"
 #include "map_engine/map_projection.h"
@@ -16,7 +17,7 @@
 
 std::wstring CurrentWindowTitle() {
   if (g_currentGisPath.empty()) {
-    return L"AGIS — 地图视图（单文档 SDI）";
+    return AgisTr(AgisUiStr::WinTitleNoDoc);
   }
   return std::wstring(L"AGIS — ") + g_currentGisPath;
 }
@@ -140,7 +141,7 @@ bool LoadGisXmlFrom(const std::wstring& path, std::wstring* err) {
   std::wifstream ifs(path);
   if (!ifs.is_open()) {
     if (err) {
-      *err = L"无法打开文件。";
+      *err = AgisTr(AgisUiStr::GisErrOpenFile);
     }
     return false;
   }
@@ -149,7 +150,7 @@ bool LoadGisXmlFrom(const std::wstring& path, std::wstring* err) {
   const std::wstring xml = ss.str();
   if (xml.find(L"<agis-gis") == std::wstring::npos) {
     if (err) {
-      *err = L"不是有效的 .gis(XML) 文件。";
+      *err = AgisTr(AgisUiStr::GisErrInvalidXml);
     }
     return false;
   }
@@ -200,7 +201,8 @@ bool LoadGisXmlFrom(const std::wstring& path, std::wstring* err) {
     }
     if (!ok) {
       ++failed;
-      AppLogLine(std::wstring(L"[GIS] 图层恢复失败：") + source + L"，原因：" + loadErr);
+      AppLogLine(std::wstring(AgisTr(AgisUiStr::GisLogLayerRestoreFailPrefix)) + source +
+                 AgisTr(AgisUiStr::GisLogLayerRestoreReasonSep) + loadErr);
       continue;
     }
     ++loaded;
@@ -211,8 +213,9 @@ bool LoadGisXmlFrom(const std::wstring& path, std::wstring* err) {
   if (!doc.view.valid()) {
     doc.FitViewToLayers();
   }
-  AppLogLine(L"[GIS] 已读取 .gis 文件：图层与显示状态已恢复。");
-  AppLogLine(std::wstring(L"[GIS] 恢复图层成功/失败：") + std::to_wstring(loaded) + L"/" + std::to_wstring(failed));
+  AppLogLine(AgisTr(AgisUiStr::GisLogFileReadOk));
+  AppLogLine(std::wstring(AgisTr(AgisUiStr::GisLogRestoreStatsPrefix)) + std::to_wstring(loaded) + L"/" +
+             std::to_wstring(failed));
   return true;
 }
 
@@ -221,7 +224,7 @@ std::wstring PromptOpenGisPath(HWND owner) {
   OPENFILENAMEW ofn{};
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = owner;
-  ofn.lpstrFilter = L"AGIS GIS 文件 (*.gis)\0*.gis\0XML 文件 (*.xml)\0*.xml\0所有文件 (*.*)\0*.*\0";
+  ofn.lpstrFilter = AgisOpenGisFileFilterPtr();
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
@@ -239,7 +242,7 @@ std::wstring PromptSaveGisPath(HWND owner, const std::wstring& seed) {
   OPENFILENAMEW ofn{};
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = owner;
-  ofn.lpstrFilter = L"AGIS GIS 文件 (*.gis)\0*.gis\0XML 文件 (*.xml)\0*.xml\0";
+  ofn.lpstrFilter = AgisSaveGisFileFilterPtr();
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
   ofn.lpstrDefExt = L"gis";
@@ -259,8 +262,8 @@ void GisNew(HWND owner) {
   RefreshUiAfterDocumentReload();
   g_currentGisPath.clear();
   SyncMainTitle();
-  AppLogLine(L"[GIS] 新建 .gis 文档。");
-  MessageBoxW(owner, L"已新建空白 .gis 文档（XML）。", L"AGIS", MB_OK | MB_ICONINFORMATION);
+  AppLogLine(AgisTr(AgisUiStr::GisLogNewDoc));
+  MessageBoxW(owner, AgisTr(AgisUiStr::GisMsgNewDocOk), L"AGIS", MB_OK | MB_ICONINFORMATION);
 }
 
 void GisOpenFromPath(HWND owner, const std::wstring& path) {
@@ -270,14 +273,14 @@ void GisOpenFromPath(HWND owner, const std::wstring& path) {
   std::wstring err;
   if (!LoadGisXmlFrom(path, &err)) {
     if (owner) {
-      MessageBoxW(owner, err.c_str(), L"打开 .gis 失败", MB_OK | MB_ICONWARNING);
+      MessageBoxW(owner, err.c_str(), AgisTr(AgisUiStr::GisCapOpenFail), MB_OK | MB_ICONWARNING);
     }
     return;
   }
   g_currentGisPath = path;
   RefreshUiAfterDocumentReload();
   SyncMainTitle();
-  AppLogLine(std::wstring(L"[GIS] 打开文件：") + path);
+  AppLogLine(std::wstring(AgisTr(AgisUiStr::GisLogOpenedPrefix)) + path);
 }
 
 void GisOpen(HWND owner) {
@@ -294,12 +297,12 @@ void GisSaveAs(HWND owner) {
     return;
   }
   if (!SaveGisXmlTo(path)) {
-    MessageBoxW(owner, L"保存失败。", L"保存 .gis", MB_OK | MB_ICONWARNING);
+    MessageBoxW(owner, AgisTr(AgisUiStr::GisMsgSaveFail), AgisTr(AgisUiStr::GisCapSave), MB_OK | MB_ICONWARNING);
     return;
   }
   g_currentGisPath = path;
   SyncMainTitle();
-  AppLogLine(std::wstring(L"[GIS] 已保存：") + path);
+  AppLogLine(std::wstring(AgisTr(AgisUiStr::GisLogSavedPrefix)) + path);
 }
 
 void GisSave(HWND owner) {
@@ -308,8 +311,8 @@ void GisSave(HWND owner) {
     return;
   }
   if (!SaveGisXmlTo(g_currentGisPath)) {
-    MessageBoxW(owner, L"保存失败。", L"保存 .gis", MB_OK | MB_ICONWARNING);
+    MessageBoxW(owner, AgisTr(AgisUiStr::GisMsgSaveFail), AgisTr(AgisUiStr::GisCapSave), MB_OK | MB_ICONWARNING);
     return;
   }
-  AppLogLine(std::wstring(L"[GIS] 已保存：") + g_currentGisPath);
+  AppLogLine(std::wstring(AgisTr(AgisUiStr::GisLogSavedPrefix)) + g_currentGisPath);
 }

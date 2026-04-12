@@ -38,6 +38,7 @@
 #include "utils/ui_layout.h"
 #include "utils/ui_font.h"
 #include "utils/ui_theme.h"
+#include "utils/agis_ui_l10n.h"
 #include "common/app_core/main_app.h"
 #include "core/main_globals.h"
 #include "common/gis_document/main_gis_xml.h"
@@ -46,6 +47,15 @@
 
 std::wstring GetConvertMajorTypeArg(HWND hwnd, bool inputSide);
 std::wstring GetConvertSubtypeArg(HWND hwnd, bool inputSide);
+
+void FillConvertTypeCombo(HWND combo);
+void FillConvertSubtypeCombo(HWND combo, int majorType);
+void FillConvertTextureFormatCombo(HWND combo);
+void FillObjTextureModeCombo(HWND combo);
+void FillObjVisualEffectCombo(HWND combo);
+void FillGisDemInterpCombo(HWND combo);
+void FillGisMeshTopologyCombo(HWND combo);
+void FillModelBudgetModeCombo(HWND combo);
 
 namespace {
 PROCESS_INFORMATION g_convertPi{};
@@ -232,13 +242,13 @@ void CopyControlTextToClipboard(HWND hwnd, int ctrlId, const wchar_t* okMsg) {
   }
   const int n = GetWindowTextLengthW(hCtrl);
   if (n <= 0) {
-    WriteConvertLog(hwnd, L"[提示] 当前没有可复制内容。");
+    WriteConvertLog(hwnd, AgisPickUiLang(L"[提示] 当前没有可复制内容。", L"[Tip] Nothing to copy."));
     return;
   }
   std::wstring text(static_cast<size_t>(n), L'\0');
   GetWindowTextW(hCtrl, text.data(), n + 1);
   if (!OpenClipboard(hwnd)) {
-    WriteConvertLog(hwnd, L"[错误] 打开剪贴板失败。");
+    WriteConvertLog(hwnd, AgisPickUiLang(L"[错误] 打开剪贴板失败。", L"[Error] Failed to open clipboard."));
     return;
   }
   EmptyClipboard();
@@ -267,7 +277,11 @@ void SetConvertProgress(HWND hwnd, int pct, const std::wstring& statusPrefix) {
   g_convertProgressFloor = p;
   SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, p, 0);
   wchar_t msg[256]{};
-  swprintf_s(msg, L"%s（%d%%）", statusPrefix.c_str(), p);
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    swprintf_s(msg, L"%s (%d%%)", statusPrefix.c_str(), p);
+  } else {
+    swprintf_s(msg, L"%s（%d%%）", statusPrefix.c_str(), p);
+  }
   SetWindowTextW(FindConvertCtrl(hwnd, IDC_CONV_MSG), msg);
   auto fmtHms = [](ULONGLONG sec) {
     const ULONGLONG h = sec / 3600ULL;
@@ -277,9 +291,9 @@ void SetConvertProgress(HWND hwnd, int pct, const std::wstring& statusPrefix) {
     swprintf_s(b, L"%02llu:%02llu:%02llu", h, m, s);
     return std::wstring(b);
   };
-  std::wstring line2 = L"阶段：";
+  std::wstring line2 = AgisPickUiLang(L"阶段：", L"Stage: ");
   line2 += g_convertRuntimeInfo.stage.empty() ? L"-" : g_convertRuntimeInfo.stage;
-  line2 += L"  文件：";
+  line2 += AgisPickUiLang(L"  文件：", L"  Files: ");
   if (g_convertRuntimeInfo.fileTotal > 0) {
     line2 += std::to_wstring((std::max)(1, g_convertRuntimeInfo.fileCurrent));
     line2 += L"/";
@@ -287,10 +301,10 @@ void SetConvertProgress(HWND hwnd, int pct, const std::wstring& statusPrefix) {
   } else {
     line2 += L"-";
   }
-  line2 += L"  I/O：";
+  line2 += AgisPickUiLang(L"  I/O：", L"  I/O: ");
   line2 += g_convertRuntimeInfo.io.empty() ? L"-" : g_convertRuntimeInfo.io;
   if (!g_convertRuntimeInfo.currentFile.empty()) {
-    line2 += L"\r\n当前文件：";
+    line2 += AgisPickUiLang(L"\r\n当前文件：", L"\r\nCurrent file: ");
     line2 += g_convertRuntimeInfo.currentFile;
   }
   if (g_convertRuntimeInfo.startTick != 0) {
@@ -309,11 +323,11 @@ void SetConvertProgress(HWND hwnd, int pct, const std::wstring& statusPrefix) {
         eta = eb;
       }
     }
-    std::wstring line3 = L"已用：";
+    std::wstring line3 = AgisPickUiLang(L"已用：", L"Elapsed: ");
     line3 += fmtHms(elapsedSec);
-    line3 += L"  剩余：";
+    line3 += AgisPickUiLang(L"  剩余：", L"  Remaining: ");
     line3 += (p >= 100) ? L"00:00:00" : fmtHms(remainSec);
-    line3 += L"  预计结束：";
+    line3 += AgisPickUiLang(L"  预计结束：", L"  ETA: ");
     line3 += (p >= 100) ? L"--:--:--" : eta;
     SetWindowTextW(FindConvertCtrl(hwnd, IDC_CONV_MSG_DETAIL), (line2 + L"\r\n" + line3).c_str());
   } else {
@@ -421,7 +435,10 @@ void PollConvertPipeToLog(HWND hwnd) {
         int pct = 0;
         std::wstring msg;
         if (TryParseBackendProgress(line, &pct, &msg)) {
-          SetConvertProgress(hwnd, pct, msg.empty() ? L"处理中：后端上报进度" : msg);
+          SetConvertProgress(hwnd, pct,
+                             msg.empty() ? std::wstring(AgisPickUiLang(L"处理中：后端上报进度",
+                                                                      L"Running: backend progress"))
+                                         : msg);
         }
       }
     };
@@ -485,7 +502,8 @@ struct ConvertPairRule {
   const wchar_t* outType;
   const wchar_t* outSub;
   bool allow;
-  const wchar_t* reason;
+  const wchar_t* reasonZh;
+  const wchar_t* reasonEn;
 };
 
 static bool MatchRuleToken(const wchar_t* ruleToken, const std::wstring& value) {
@@ -504,24 +522,27 @@ static bool EvaluateConvertPairSupport(const std::wstring& inType, const std::ws
                                        const std::wstring& outSub, std::wstring* reason) {
   // 规则按顺序匹配：越具体越靠前；最后必须有兜底规则。
   static const ConvertPairRule kRules[] = {
-      {L"model", L"3dmesh", L"model", L"pointcloud", true, L""},
-      {L"model", L"pointcloud", L"model", L"3dmesh", true, L""},
-      {L"model", L"*", L"model", L"*", false, L"model→model 仅支持 Mesh 与点云互转（不能同类直转）。"},
-      {L"gis", L"*", L"gis", L"*", false, L"当前不支持 gis→gis 同类型转换。"},
-      {L"tile", L"*", L"tile", L"*", false, L"当前不支持 tile→tile 同类型转换。"},
-      {L"*", L"*", L"*", L"*", true, L""},
+      {L"model", L"3dmesh", L"model", L"pointcloud", true, L"", L""},
+      {L"model", L"pointcloud", L"model", L"3dmesh", true, L"", L""},
+      {L"model", L"*", L"model", L"*", false, L"model→model 仅支持 Mesh 与点云互转（不能同类直转）。",
+       L"model→model: only mesh ↔ point cloud (no same-type conversion)."},
+      {L"gis", L"*", L"gis", L"*", false, L"当前不支持 gis→gis 同类型转换。",
+       L"gis→gis same-type conversion is not supported."},
+      {L"tile", L"*", L"tile", L"*", false, L"当前不支持 tile→tile 同类型转换。",
+       L"tile→tile same-type conversion is not supported."},
+      {L"*", L"*", L"*", L"*", true, L"", L""},
   };
   for (const ConvertPairRule& r : kRules) {
     if (!MatchConvertPairRule(r, inType, inSub, outType, outSub)) {
       continue;
     }
     if (reason) {
-      *reason = (r.reason ? r.reason : L"");
+      *reason = (r.reasonZh && r.reasonZh[0]) ? AgisPickUiLang(r.reasonZh, r.reasonEn) : L"";
     }
     return r.allow;
   }
   if (reason) {
-    *reason = L"当前输入/输出组合不支持。";
+    *reason = AgisPickUiLang(L"当前输入/输出组合不支持。", L"This input/output pair is not supported.");
   }
   return false;
 }
@@ -693,7 +714,10 @@ void LayoutConvertMidColumn(HWND hwnd, int midColX, int colW, int m, int /*topH*
       }
       std::wstring why;
       IsConvertPairSupportedBySubtype(hwnd, &why);
-      SetWindowTextW(note, why.empty() ? L"当前输入/输出类型组合不支持。请调整输入/输出类型或子类型。" : why.c_str());
+      SetWindowTextW(note, why.empty() ? AgisPickUiLang(L"当前输入/输出类型组合不支持。请调整输入/输出类型或子类型。",
+                                                        L"This input/output type pair is not supported. Adjust types or "
+                                                        L"subtypes.")
+                                       : why.c_str());
       MoveWindow(note, 8, 10, (std::max)(120, colW - 16), 24, TRUE);
       ShowWindow(note, SW_SHOW);
     }
@@ -770,7 +794,8 @@ static void UpdateConvertLogFoldUi(HWND hwnd) {
     return nullptr;
   };
   if (HWND btn = logCtl(IDC_CONV_TOGGLE_LOG)) {
-    SetWindowTextW(btn, g_convertLogCollapsed ? L"展开日志" : L"折叠日志");
+    SetWindowTextW(btn, g_convertLogCollapsed ? AgisPickUiLang(L"展开日志", L"Expand log")
+                                              : AgisPickUiLang(L"折叠日志", L"Collapse log"));
   }
   if (HWND copy = logCtl(IDC_CONV_COPY_LOG)) {
     ShowWindow(copy, g_convertLogCollapsed ? SW_HIDE : SW_SHOW);
@@ -778,6 +803,135 @@ static void UpdateConvertLogFoldUi(HWND hwnd) {
   if (HWND log = logCtl(IDC_CONV_LOG)) {
     ShowWindow(log, g_convertLogCollapsed ? SW_HIDE : SW_SHOW);
   }
+}
+
+void ApplyConvertWindowChromeAndCombosL10n(HWND hwnd) {
+  SetWindowTextW(hwnd, AgisPickUiLang(L"数据转换", L"Data conversion"));
+  auto st = [&](int id, const wchar_t* zh, const wchar_t* en) {
+    if (HWND h = FindConvertCtrl(hwnd, id)) {
+      SetWindowTextW(h, AgisPickUiLang(zh, en));
+    }
+  };
+  st(IDC_CONV_GRP_INPUT_PANEL, L"输入数据", L"Input data");
+  st(IDC_CONV_INPUT_TITLE, L"输入数据源", L"Input data source");
+  st(IDC_CONV_INPUT_BROWSE, L"浏览", L"Browse…");
+  st(IDC_CONV_INPUT_PREVIEW, L"预览", L"Preview");
+  st(IDC_CONV_GRP_OUTPUT_PANEL, L"输出数据", L"Output data");
+  st(IDC_CONV_OUTPUT_TITLE, L"输出目标", L"Output target");
+  st(IDC_CONV_OUTPUT_BROWSE, L"浏览", L"Browse…");
+  st(IDC_CONV_OUTPUT_PREVIEW, L"预览", L"Preview");
+  st(IDC_CONV_GRP_TASK_PANEL, L"任务状态", L"Task status");
+  st(IDC_CONV_COPY_CMD, L"复制命令", L"Copy command");
+  st(IDC_CONV_RUN, L"开始转换", L"Start conversion");
+  st(IDC_CONV_COPY_LOG, L"复制输出", L"Copy output");
+  st(IDC_CONV_MSG, L"就绪：请先选择输入与输出数据。", L"Ready: choose input and output data.");
+  st(IDC_CONV_MSG_DETAIL, L"阶段：-  文件：-  I/O：-", L"Stage: -  Files: -  I/O: -");
+  st(IDC_CONV_GRP_IN_TYPE, L"输入选项（--input-*）", L"Input options (--input-*)");
+  st(IDC_CONV_GRP_IN_SUB, L"输入子类型（--input-subtype）", L"Input subtype (--input-subtype)");
+  st(IDC_CONV_GRP_OUT_TYPE, L"输出选项（--output-*）", L"Output options (--output-*)");
+  st(IDC_CONV_GRP_OUT_SUB, L"输出子类型（--output-subtype）", L"Output subtype (--output-subtype)");
+
+  auto saveSel = [](HWND cb) -> int {
+    if (!cb) {
+      return 0;
+    }
+    const int s = static_cast<int>(SendMessageW(cb, CB_GETCURSEL, 0, 0));
+    return s < 0 ? 0 : s;
+  };
+  HWND inType = FindConvertCtrl(hwnd, IDC_CONV_INPUT_TYPE);
+  HWND inSub = FindConvertCtrl(hwnd, IDC_CONV_INPUT_SUBTYPE);
+  HWND outType = FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TYPE);
+  HWND outSub = FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_SUBTYPE);
+  const int siM = saveSel(inType);
+  const int siS = saveSel(inSub);
+  const int soM = saveSel(outType);
+  const int soS = saveSel(outSub);
+
+  HWND outUnit = FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_UNIT);
+  const int selOutUnit = saveSel(outUnit);
+  HWND texFmt = FindConvertCtrl(hwnd, IDC_CONV_TEXTURE_FORMAT);
+  const int selTex = saveSel(texFmt);
+  HWND objFp = FindConvertCtrl(hwnd, IDC_CONV_OBJ_FP_TYPE);
+  const int selFp = saveSel(objFp);
+  HWND coord = FindConvertCtrl(hwnd, IDC_CONV_MODEL_COORD);
+  const int selCoord = saveSel(coord);
+  HWND vmode = FindConvertCtrl(hwnd, IDC_CONV_VECTOR_MODE);
+  const int selVmode = saveSel(vmode);
+  HWND objTex = FindConvertCtrl(hwnd, IDC_CONV_OBJ_TEX_MODE);
+  const int selObjTex = saveSel(objTex);
+  HWND objVis = FindConvertCtrl(hwnd, IDC_CONV_OBJ_VIS_EFFECT);
+  const int selObjVis = saveSel(objVis);
+  HWND demI = FindConvertCtrl(hwnd, IDC_CONV_GIS_DEM_INTERP);
+  const int selDem = saveSel(demI);
+  HWND meshT = FindConvertCtrl(hwnd, IDC_CONV_GIS_MESH_TOPO);
+  const int selMesh = saveSel(meshT);
+  HWND budM = FindConvertCtrl(hwnd, IDC_CONV_MODEL_BUDGET_MODE);
+  const int selBud = saveSel(budM);
+
+  FillConvertTypeCombo(inType);
+  SendMessageW(inType, CB_SETCURSEL, static_cast<WPARAM>((siM >= 0 && siM <= 2) ? siM : 0), 0);
+  FillConvertSubtypeCombo(inSub, siM);
+  {
+    const int n = static_cast<int>(SendMessageW(inSub, CB_GETCOUNT, 0, 0));
+    SendMessageW(inSub, CB_SETCURSEL, static_cast<WPARAM>((siS >= 0 && siS < n) ? siS : 0), 0);
+  }
+  FillConvertTypeCombo(outType);
+  SendMessageW(outType, CB_SETCURSEL, static_cast<WPARAM>((soM >= 0 && soM <= 2) ? soM : 0), 0);
+  FillConvertSubtypeCombo(outSub, soM);
+  {
+    const int n = static_cast<int>(SendMessageW(outSub, CB_GETCOUNT, 0, 0));
+    SendMessageW(outSub, CB_SETCURSEL, static_cast<WPARAM>((soS >= 0 && soS < n) ? soS : 0), 0);
+  }
+
+  if (outUnit) {
+    SendMessageW(outUnit, CB_RESETCONTENT, 0, 0);
+    SendMessageW(outUnit, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(AgisPickUiLang(L"米（m）", L"Meters (m)")));
+    SendMessageW(outUnit, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(AgisPickUiLang(L"千米（km）", L"Kilometers (km)")));
+    SendMessageW(outUnit, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(AgisPickUiLang(L"千千米（1000 km）", L"1000 km unit")));
+    SendMessageW(outUnit, CB_SETCURSEL, static_cast<WPARAM>((selOutUnit >= 0 && selOutUnit < 3) ? selOutUnit : 0), 0);
+  }
+  FillConvertTextureFormatCombo(texFmt);
+  SendMessageW(texFmt, CB_SETCURSEL, static_cast<WPARAM>(selTex), 0);
+  if (objFp) {
+    SendMessageW(objFp, CB_RESETCONTENT, 0, 0);
+    SendMessageW(objFp, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(AgisPickUiLang(L"double（默认）", L"double (default)")));
+    SendMessageW(objFp, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"float"));
+    SendMessageW(objFp, CB_SETCURSEL, static_cast<WPARAM>((selFp >= 0 && selFp < 2) ? selFp : 0), 0);
+  }
+  if (coord) {
+    SendMessageW(coord, CB_RESETCONTENT, 0, 0);
+    SendMessageW(coord, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(AgisPickUiLang(L"projected（投影坐标，单位随 CRS）",
+                                                         L"projected (units follow CRS)")));
+    SendMessageW(coord, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(AgisPickUiLang(L"cecf（地心地固 XYZ）", L"cecf (ECEF XYZ)")));
+    SendMessageW(coord, CB_SETCURSEL, static_cast<WPARAM>((selCoord >= 0 && selCoord < 2) ? selCoord : 0), 0);
+  }
+  if (vmode) {
+    SendMessageW(vmode, CB_RESETCONTENT, 0, 0);
+    SendMessageW(vmode, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(AgisPickUiLang(L"geometry（矢量转几何）", L"geometry (vectors to geometry)")));
+    SendMessageW(vmode, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(
+                     AgisPickUiLang(L"bake_texture（矢量烘焙到贴图）", L"bake_texture (bake vectors to texture)")));
+    SendMessageW(vmode, CB_SETCURSEL, static_cast<WPARAM>((selVmode >= 0 && selVmode < 2) ? selVmode : 0), 0);
+  }
+  FillObjTextureModeCombo(objTex);
+  SendMessageW(objTex, CB_SETCURSEL, static_cast<WPARAM>(selObjTex), 0);
+  FillObjVisualEffectCombo(objVis);
+  SendMessageW(objVis, CB_SETCURSEL, static_cast<WPARAM>(selObjVis), 0);
+  FillGisDemInterpCombo(demI);
+  SendMessageW(demI, CB_SETCURSEL, static_cast<WPARAM>(selDem), 0);
+  FillGisMeshTopologyCombo(meshT);
+  SendMessageW(meshT, CB_SETCURSEL, static_cast<WPARAM>(selMesh), 0);
+  FillModelBudgetModeCombo(budM);
+  SendMessageW(budM, CB_SETCURSEL, static_cast<WPARAM>(selBud), 0);
+
+  UpdateConvertLogFoldUi(hwnd);
 }
 
 void LayoutConvertWindow(HWND hwnd) {
@@ -885,9 +1039,13 @@ void LayoutConvertWindow(HWND hwnd) {
 
 void FillConvertTypeCombo(HWND combo) {
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GIS数据（矢量/栅格）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"模型数据（Mesh/点云）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"瓦片数据（XYZ/TMS/WMTS/MBTiles/GPKG/3DTiles）"));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"GIS数据（矢量/栅格）", L"GIS (vector/raster)")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"模型数据（Mesh/点云）", L"Model (mesh/point cloud)")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"瓦片数据（XYZ/TMS/WMTS/MBTiles/GPKG/3DTiles）",
+                                                       L"Tiles (XYZ/TMS/WMTS/MBTiles/GPKG/3D Tiles)")));
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
@@ -895,23 +1053,37 @@ void FillConvertSubtypeCombo(HWND combo, int majorType) {
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
   switch (majorType) {
     case 0:
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"全部（自动识别）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"矢量（Shapefile/GeoJSON）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"栅格（GeoTIFF/FLT）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"空间数据库（GPKG）"));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"全部（自动识别）", L"All (auto-detect)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"矢量（Shapefile/GeoJSON）",
+                                                           L"Vector (Shapefile/GeoJSON)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"栅格（GeoTIFF/FLT）", L"Raster (GeoTIFF/FLT)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"空间数据库（GPKG）", L"Geopackage (GPKG)")));
       break;
     case 1:
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Mesh（网格模型）"));
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"Mesh（网格模型）", L"Mesh")));
       SendMessageW(combo, CB_ADDSTRING, 0,
-                   reinterpret_cast<LPARAM>(L"点云（LAS；选 LAZ 时在已编入 LASzip 的构建中输出真 LAZ）"));
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(
+                       L"点云（LAS；选 LAZ 时在已编入 LASzip 的构建中输出真 LAZ）",
+                       L"Point cloud (LAS; LAZ needs LASzip in this build for true LAZ output)")));
       break;
     default:
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ（金字塔瓦片）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TMS（倒序行号）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"WMTS（服务化瓦片）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"MBTiles（SQLite 单文件）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GPKG Tiles（GeoPackage）"));
-      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3DTiles（tileset.json + b3dm）"));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"XYZ（金字塔瓦片）", L"XYZ (slippy tiles)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"TMS（倒序行号）", L"TMS (flipped Y)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"WMTS（服务化瓦片）", L"WMTS (service)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"MBTiles（SQLite 单文件）", L"MBTiles (SQLite file)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"GPKG Tiles（GeoPackage）", L"GPKG tiles (GeoPackage)")));
+      SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(AgisPickUiLang(L"3DTiles（tileset.json + b3dm）",
+                                                           L"3D Tiles (tileset.json + b3dm)")));
       break;
   }
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
@@ -934,6 +1106,24 @@ void RebuildConvertSubtypeComboForSide(HWND hwnd, bool inputSide) {
 }
 
 const wchar_t* ConvertTypeTooltipByMajor(int major) {
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    switch (major) {
+      case 0:
+        return L"GIS data: mapping and analysis.\n"
+               L"- Vector: points/lines/polygons with attributes.\n"
+               L"- Raster: grids (imagery/DEM, etc.).\n"
+               L"- Geopackage: multi-layer containers (e.g. GPKG).";
+      case 1:
+        return L"Model data: 3D / terrain.\n"
+               L"- Mesh: unified mesh output; TIN/DEM via parameters.\n"
+               L"- Point cloud: LAS (PDRF 2 RGB); convertible with mesh.";
+      default:
+        return L"Tile data: fast display and delivery.\n"
+               L"- XYZ: common web tiling.\n"
+               L"- TMS: Y order opposite to XYZ.\n"
+               L"- WMTS: standard OGC service.";
+    }
+  }
   switch (major) {
     case 0:
       return L"GIS数据：面向地图生产与分析。\n"
@@ -953,6 +1143,68 @@ const wchar_t* ConvertTypeTooltipByMajor(int major) {
 }
 
 const wchar_t* ConvertSubtypeTooltipByMajorSubtype(int major, int sub) {
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    if (major == 0) {
+      switch (sub) {
+        case 0:
+          return L"All (auto-detect)\n"
+                 L"Detect vector/raster/container from path and content.\n"
+                 L"Use when the source is unknown or for batch runs.";
+        case 1:
+          return L"Vector (Shapefile/GeoJSON)\n"
+                 L"Files: .shp/.dbf/.shx or .geojson\n"
+                 L"Keeps features and attributes; mind encoding, CRS, field widths.";
+        case 2:
+          return L"Raster (GeoTIFF/FLT)\n"
+                 L"Files: .tif/.tiff/.flt\n"
+                 L"Resolution, NoData, compression, overviews.";
+        default:
+          return L"Geopackage (GPKG)\n"
+                 L"File: .gpkg (SQLite)\n"
+                 L"Multi-layer container with metadata.";
+      }
+    }
+    if (major == 1) {
+      switch (sub) {
+        case 0:
+          return L"Mesh\n"
+                 L"Common: Wavefront OBJ subset, etc.\n"
+                 L"TIN/DEM via `--gis-dem-interp` / `--gis-mesh-topology`; convertible to point cloud.";
+        case 1:
+          return L"Point cloud (LAS)\n"
+                 L"Files: .las / .laz (LAS 1.2 PDRF 2 RGB; LAZ needs bundled LASzip or falls back to .las).\n"
+                 L"Can be sampled from textured OBJ+MTL.";
+        default:
+          return L"(Unknown model subtype)";
+      }
+    }
+    switch (sub) {
+      case 0:
+        return L"XYZ (slippy)\n"
+               L"Layout: /{z}/{x}/{y}\n"
+               L"Compatible with most web maps.";
+      case 1:
+        return L"TMS (flipped Y)\n"
+               L"Same path pattern but Y opposite to XYZ.\n"
+               L"Legacy services.";
+      case 2:
+        return L"WMTS\n"
+               L"OGC WMTS (KVP/REST)\n"
+               L"TileMatrixSet, styles, capabilities.";
+      case 3:
+        return L"MBTiles (SQLite)\n"
+               L"Single .mbtiles file\n"
+               L"Offline-friendly.";
+      case 4:
+        return L"GPKG tiles\n"
+               L"Single .gpkg\n"
+               L"Standard geo container.";
+      default:
+        return L"3D Tiles (Cesium)\n"
+               L"tileset.json + b3dm\n"
+               L"Minimal single-node placeholder output.";
+    }
+  }
   if (major == 0) {
     switch (sub) {
       case 0:
@@ -1059,9 +1311,11 @@ void ShowConvertHelpDialog(HWND hwnd, bool inputSide, bool typeHelp) {
                                  : ConvertSubtypeTooltipByMajorSubtype(major < 0 ? 0 : major, sub < 0 ? 0 : sub);
   const wchar_t* title = nullptr;
   if (inputSide) {
-    title = typeHelp ? L"输入类型说明" : L"输入子类型说明";
+    title = typeHelp ? AgisPickUiLang(L"输入类型说明", L"Input type help")
+                     : AgisPickUiLang(L"输入子类型说明", L"Input subtype help");
   } else {
-    title = typeHelp ? L"输出类型说明" : L"输出子类型说明";
+    title = typeHelp ? AgisPickUiLang(L"输出类型说明", L"Output type help")
+                     : AgisPickUiLang(L"输出子类型说明", L"Output subtype help");
   }
   MessageBoxW(hwnd, body, title, MB_OK | MB_ICONINFORMATION);
 }
@@ -1098,9 +1352,11 @@ std::wstring GetConvertMajorTypeArg(HWND hwnd, bool inputSide) {
   int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
   if (sel < 0) {
     const std::wstring t = GetComboSelectedText(combo);
-    if (t.find(L"模型") != std::wstring::npos || t.find(L"model") != std::wstring::npos || t.find(L"Mesh") != std::wstring::npos) {
+    if (t.find(L"模型") != std::wstring::npos || t.find(L"model") != std::wstring::npos ||
+        t.find(L"Model") != std::wstring::npos || t.find(L"Mesh") != std::wstring::npos) {
       sel = 1;
-    } else if (t.find(L"瓦片") != std::wstring::npos || t.find(L"tile") != std::wstring::npos || t.find(L"3DTiles") != std::wstring::npos) {
+    } else if (t.find(L"瓦片") != std::wstring::npos || t.find(L"tile") != std::wstring::npos ||
+               t.find(L"Tile") != std::wstring::npos || t.find(L"3DTiles") != std::wstring::npos) {
       sel = 2;
     } else if (t.find(L"GIS") != std::wstring::npos || t.find(L"gis") != std::wstring::npos) {
       sel = 0;
@@ -1126,7 +1382,9 @@ std::wstring GetConvertSubtypeArg(HWND hwnd, bool inputSide) {
   if (sub < 0) {
     const std::wstring t = GetComboSelectedText(subCombo);
     if (major == 1) {
-      if (t.find(L"点云") != std::wstring::npos || t.find(L"point") != std::wstring::npos || t.find(L"LAS") != std::wstring::npos) sub = 1;
+      if (t.find(L"点云") != std::wstring::npos || t.find(L"Point cloud") != std::wstring::npos ||
+          t.find(L"point") != std::wstring::npos || t.find(L"LAS") != std::wstring::npos)
+        sub = 1;
       else sub = 0;
     } else if (major == 2) {
       if (t.find(L"TMS") != std::wstring::npos) sub = 1;
@@ -1253,17 +1511,26 @@ void RefreshConvertSettingPanels(HWND hwnd) {
   const std::wstring outType = GetConvertMajorTypeArg(hwnd, false);
   const std::wstring outSub = GetConvertSubtypeArg(hwnd, false);
 
-  const std::wstring hint = L"中间列按四段与 CLI 对齐 | " + inType + L"/" + inSub + L" → " + outType + L"/" + outSub;
+  const std::wstring hint =
+      std::wstring(AgisPickUiLang(L"中间列按四段与 CLI 对齐 | ", L"Middle column matches CLI | ")) + inType + L"/" +
+      inSub + L" → " + outType + L"/" + outSub;
   SetWindowTextW(GetDlgItem(hwnd, IDC_CONV_MSG), hint.c_str());
 
   wchar_t t1[192]{};
   wchar_t t2[192]{};
   wchar_t t3[192]{};
   wchar_t t4[192]{};
-  swprintf_s(t1, L"① 输入类型（%s）", inType.c_str());
-  swprintf_s(t2, L"② 输入子类型（%s）", inSub.c_str());
-  swprintf_s(t3, L"③ 输出类型（%s）", outType.c_str());
-  swprintf_s(t4, L"④ 输出子类型（%s）", outSub.c_str());
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    swprintf_s(t1, L"① Input type (%s)", inType.c_str());
+    swprintf_s(t2, L"② Input subtype (%s)", inSub.c_str());
+    swprintf_s(t3, L"③ Output type (%s)", outType.c_str());
+    swprintf_s(t4, L"④ Output subtype (%s)", outSub.c_str());
+  } else {
+    swprintf_s(t1, L"① 输入类型（%s）", inType.c_str());
+    swprintf_s(t2, L"② 输入子类型（%s）", inSub.c_str());
+    swprintf_s(t3, L"③ 输出类型（%s）", outType.c_str());
+    swprintf_s(t4, L"④ 输出子类型（%s）", outSub.c_str());
+  }
   const int grpIds[] = {IDC_CONV_GRP_IN_TYPE, IDC_CONV_GRP_IN_SUB, IDC_CONV_GRP_OUT_TYPE, IDC_CONV_GRP_OUT_SUB};
   const wchar_t* grpTexts[] = {t1, t2, t3, t4};
   for (int i = 0; i < 4; ++i) {
@@ -1278,19 +1545,20 @@ void RefreshConvertSettingPanels(HWND hwnd) {
 
 void SetConvertParamLabel(HWND hwnd, int labelId, const wchar_t* baseText, bool pairedControlEnabled,
                           const wchar_t* hintWhenDisabled) {
-  if (!baseText || !GetDlgItem(hwnd, labelId)) {
+  HWND hLbl = FindConvertCtrl(hwnd, labelId);
+  if (!baseText || !hLbl) {
     return;
   }
   std::wstring t = baseText;
   if (!pairedControlEnabled && hintWhenDisabled && hintWhenDisabled[0]) {
-    t += L"（";
+    t += AgisPickUiLang(L"（", L" (");
     t += hintWhenDisabled;
-    t += L"）";
+    t += AgisPickUiLang(L"）", L")");
     g_convertMutedParamLabelIds.insert(labelId);
   } else {
     g_convertMutedParamLabelIds.erase(labelId);
   }
-  SetWindowTextW(GetDlgItem(hwnd, labelId), t.c_str());
+  SetWindowTextW(hLbl, t.c_str());
 }
 
 void UpdateConvertEditableControlStates(HWND hwnd) {
@@ -1301,45 +1569,69 @@ void UpdateConvertEditableControlStates(HWND hwnd) {
     if (HWND hMsg = FindConvertCtrl(hwnd, IDC_CONV_MSG)) {
       std::wstring why;
       IsConvertPairSupportedBySubtype(hwnd, &why);
-      SetWindowTextW(hMsg, why.empty() ? L"当前输入/输出类型组合不支持。" : why.c_str());
+      SetWindowTextW(hMsg, why.empty() ? AgisPickUiLang(L"当前输入/输出类型组合不支持。",
+                                                       L"This input/output type pair is not supported.")
+                                       : why.c_str());
     }
   }
 
   const auto paired = [](bool show, bool en) { return !show || en; };
-  SetConvertParamLabel(hwnd, IDC_CONV_VECTOR_MODE_LBL, L"矢量参与转换策略：", paired(v.show_g1_vector, v.en_vector),
-                       L"需任一侧为 GIS");
-  SetConvertParamLabel(hwnd, IDC_CONV_ELEV_HORIZ_LBL, L"高程/水平比（1 = 1:1）：", paired(v.show_g1_elev, v.en_elev),
-                       L"需 GIS 或模型参与");
-  SetConvertParamLabel(hwnd, IDC_CONV_TARGET_CRS_LBL, L"目标坐标系（留空=自动）：", paired(v.show_g3_crs, v.en_crs),
-                       L"需 GIS 或瓦片参与");
-  SetConvertParamLabel(hwnd, IDC_CONV_MODEL_COORD_LBL, L"模型顶点坐标语义：",
-                       paired(v.show_coord_g1 || v.show_g3_coord_out, v.en_coord), L"需模型输出或 GIS→瓦片");
-  SetConvertParamLabel(hwnd, IDC_CONV_OUTPUT_UNIT_LBL, L"输出模型单位：", paired(v.show_g3_unit, v.en_unit),
-                       L"需输出为模型");
-  SetConvertParamLabel(hwnd, IDC_CONV_MESH_SPACING_LBL, L"Mesh 间距（模型单位）：", paired(v.show_g3_mesh, v.en_mesh),
-                       L"需任一侧为模型");
-  SetConvertParamLabel(hwnd, IDC_CONV_OBJ_FP_TYPE_LBL, L"OBJ 数值精度：", paired(v.show_g3_obj, v.en_obj),
-                       L"需任一侧为模型");
-  SetConvertParamLabel(hwnd, IDC_CONV_TEXTURE_FMT_LBL, L"模型贴图格式：", paired(v.show_g3_tex, v.en_tex),
-                       L"需输出为模型或瓦片");
-  SetConvertParamLabel(hwnd, IDC_CONV_RASTER_MAX_LBL, L"栅格读取最大边（px，0=原始）：",
-                       paired(v.show_g2_raster, v.en_raster), L"当前任务不读栅格贴图时可忽略");
-  SetConvertParamLabel(hwnd, IDC_CONV_TILE_LEVELS_LBL, L"Tile 层数（auto/1..23）：",
-                       paired(v.show_g4_tile_levels, v.en_tile_levels), L"需输出为瓦片");
-  SetConvertParamLabel(hwnd, IDC_CONV_OBJ_TEX_MODE_LBL, L"OBJ 贴图输出：",
-                       paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
-  SetConvertParamLabel(hwnd, IDC_CONV_OBJ_VIS_EFFECT_LBL, L"OBJ 特效模式：",
-                       paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
-  SetConvertParamLabel(hwnd, IDC_CONV_OBJ_SNOW_SCALE_LBL, L"积雪尺度（snow 时）：",
-                       paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
-  SetConvertParamLabel(hwnd, IDC_CONV_GIS_DEM_INTERP_LBL, L"DEM 插值算法：",
-                       paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
-  SetConvertParamLabel(hwnd, IDC_CONV_GIS_MESH_TOPO_LBL, L"网格拓扑算法：",
-                       paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
-  SetConvertParamLabel(hwnd, IDC_CONV_MODEL_BUDGET_MODE_LBL, L"预算口径：",
-                       paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
-  SetConvertParamLabel(hwnd, IDC_CONV_MODEL_BUDGET_MB_LBL, L"预算上限（MB）：",
-                       paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), L"仅 GIS→模型可用");
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_VECTOR_MODE_LBL,
+      AgisPickUiLang(L"矢量参与转换策略：", L"Vector conversion mode:"), paired(v.show_g1_vector, v.en_vector),
+      AgisPickUiLang(L"需任一侧为 GIS", L"needs GIS on one side"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_ELEV_HORIZ_LBL,
+      AgisPickUiLang(L"高程/水平比（1 = 1:1）：", L"Elev / horizontal scale (1 = 1:1):"),
+      paired(v.show_g1_elev, v.en_elev), AgisPickUiLang(L"需 GIS 或模型参与", L"needs GIS or model"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_TARGET_CRS_LBL,
+      AgisPickUiLang(L"目标坐标系（留空=自动）：", L"Target CRS (empty = auto):"), paired(v.show_g3_crs, v.en_crs),
+      AgisPickUiLang(L"需 GIS 或瓦片参与", L"needs GIS or tiles"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_MODEL_COORD_LBL, AgisPickUiLang(L"模型顶点坐标语义：", L"Model vertex coordinates:"),
+      paired(v.show_coord_g1 || v.show_g3_coord_out, v.en_coord),
+      AgisPickUiLang(L"需模型输出或 GIS→瓦片", L"needs model out or GIS→tiles"));
+  SetConvertParamLabel(hwnd, IDC_CONV_OUTPUT_UNIT_LBL, AgisPickUiLang(L"输出模型单位：", L"Output model units:"),
+                       paired(v.show_g3_unit, v.en_unit), AgisPickUiLang(L"需输出为模型", L"needs model output"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_MESH_SPACING_LBL, AgisPickUiLang(L"Mesh 间距（模型单位）：", L"Mesh spacing (model units):"),
+      paired(v.show_g3_mesh, v.en_mesh), AgisPickUiLang(L"需任一侧为模型", L"needs model on one side"));
+  SetConvertParamLabel(hwnd, IDC_CONV_OBJ_FP_TYPE_LBL, AgisPickUiLang(L"OBJ 数值精度：", L"OBJ numeric precision:"),
+                       paired(v.show_g3_obj, v.en_obj),
+                       AgisPickUiLang(L"需任一侧为模型", L"needs model on one side"));
+  SetConvertParamLabel(hwnd, IDC_CONV_TEXTURE_FMT_LBL, AgisPickUiLang(L"模型贴图格式：", L"Model texture format:"),
+                       paired(v.show_g3_tex, v.en_tex),
+                       AgisPickUiLang(L"需输出为模型或瓦片", L"needs model or tile output"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_RASTER_MAX_LBL,
+      AgisPickUiLang(L"栅格读取最大边（px，0=原始）：", L"Raster read max side (px, 0=full):"),
+      paired(v.show_g2_raster, v.en_raster),
+      AgisPickUiLang(L"当前任务不读栅格贴图时可忽略", L"ignore if this task skips raster textures"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_TILE_LEVELS_LBL, AgisPickUiLang(L"Tile 层数（auto/1..23）：", L"Tile levels (auto/1..23):"),
+      paired(v.show_g4_tile_levels, v.en_tile_levels), AgisPickUiLang(L"需输出为瓦片", L"needs tile output"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_OBJ_TEX_MODE_LBL, AgisPickUiLang(L"OBJ 贴图输出：", L"OBJ texture output:"),
+      paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), AgisPickUiLang(L"仅 GIS→模型可用", L"GIS→model only"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_OBJ_VIS_EFFECT_LBL, AgisPickUiLang(L"OBJ 特效模式：", L"OBJ visual effect:"),
+      paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), AgisPickUiLang(L"仅 GIS→模型可用", L"GIS→model only"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_OBJ_SNOW_SCALE_LBL, AgisPickUiLang(L"积雪尺度（snow 时）：", L"Snow scale (when snow):"),
+      paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), AgisPickUiLang(L"仅 GIS→模型可用", L"GIS→model only"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_GIS_DEM_INTERP_LBL, AgisPickUiLang(L"DEM 插值算法：", L"DEM interpolation:"),
+      paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), AgisPickUiLang(L"仅 GIS→模型可用", L"GIS→model only"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_GIS_MESH_TOPO_LBL, AgisPickUiLang(L"网格拓扑算法：", L"Mesh topology:"),
+      paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), AgisPickUiLang(L"仅 GIS→模型可用", L"GIS→model only"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_MODEL_BUDGET_MODE_LBL, AgisPickUiLang(L"预算口径：", L"Budget mode:"),
+      paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), AgisPickUiLang(L"仅 GIS→模型可用", L"GIS→model only"));
+  SetConvertParamLabel(
+      hwnd, IDC_CONV_MODEL_BUDGET_MB_LBL, AgisPickUiLang(L"预算上限（MB）：", L"Budget cap (MB):"),
+      paired(v.show_g4_gis_model_adv, v.en_gis_model_adv), AgisPickUiLang(L"仅 GIS→模型可用", L"GIS→model only"));
 
   RECT rcMid{};
   int midW = 240;
@@ -1386,14 +1678,15 @@ static std::wstring WidePrefixFromUtf8(const char* u8, size_t maxLen) {
 static void AppendAgisGisSummaryForConvert(std::wstring* s, const std::wstring& path) {
   std::wifstream ifs(path);
   if (!ifs) {
-    *s += L"\r\n\r\n【.gis】无法读取文件。";
+    *s += AgisPickUiLang(L"\r\n\r\n【.gis】无法读取文件。", L"\r\n\r\n[.gis] Cannot read file.");
     return;
   }
   std::wstringstream wss;
   wss << ifs.rdbuf();
   const std::wstring xml = wss.str();
   if (xml.find(L"<agis-gis") == std::wstring::npos) {
-    *s += L"\r\n\r\n【.gis】根节点不是 <agis-gis>。";
+    *s += AgisPickUiLang(L"\r\n\r\n【.gis】根节点不是 <agis-gis>。",
+                        L"\r\n\r\n[.gis] Root element is not <agis-gis>.");
     return;
   }
   int projIdx = ParseIntAttr(xml, L"projection", 0);
@@ -1414,15 +1707,19 @@ static void AppendAgisGisSummaryForConvert(std::wstring* s, const std::wstring& 
     scan += 7;
   }
 
-  *s += L"\r\n\r\n【.gis 文档摘要】\r\n";
-  *s += L"显示投影（2D 视图）：";
-  *s += MapProj_MenuLabel(mp);
-  *s += L"\r\n经纬网：";
-  *s += grid ? L"显示" : L"隐藏";
+  *s += AgisPickUiLang(L"\r\n\r\n【.gis 文档摘要】\r\n", L"\r\n\r\n[.gis document summary]\r\n");
+  *s += AgisPickUiLang(L"显示投影（2D 视图）：", L"Display projection (2D): ");
+  *s += (AgisGetUiLanguage() == AgisUiLanguage::kEn ? MapProj_MenuLabelEn(mp) : MapProj_MenuLabel(mp));
+  *s += AgisPickUiLang(L"\r\n经纬网：", L"\r\nLat/lon grid: ");
+  *s += grid ? AgisPickUiLang(L"显示", L"On") : AgisPickUiLang(L"隐藏", L"Off");
   wchar_t vb[384]{};
-  swprintf_s(vb, L"\r\n视口范围：[%.8g , %.8g] — [%.8g , %.8g]", mnX, mnY, mxX, mxY);
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    swprintf_s(vb, L"\r\nView extent: [%.8g , %.8g] — [%.8g , %.8g]", mnX, mnY, mxX, mxY);
+  } else {
+    swprintf_s(vb, L"\r\n视口范围：[%.8g , %.8g] — [%.8g , %.8g]", mnX, mnY, mxX, mxY);
+  }
   *s += vb;
-  *s += L"\r\n图层数量：";
+  *s += AgisPickUiLang(L"\r\n图层数量：", L"\r\nLayer count: ");
   *s += std::to_wstring(layerCount);
 
   scan = 0;
@@ -1439,17 +1736,17 @@ static void AppendAgisGisSummaryForConvert(std::wstring* s, const std::wstring& 
     if (src.size() > 56) {
       src = src.substr(0, 53) + L"...";
     }
-    *s += L"\r\n  · ";
-    *s += name.empty() ? L"（未命名）" : name;
+    *s += AgisPickUiLang(L"\r\n  · ", L"\r\n  · ");
+    *s += name.empty() ? AgisPickUiLang(L"（未命名）", L"(unnamed)") : name;
     *s += L"  |  ";
     *s += driver.empty() ? L"?" : driver;
     *s += L"\r\n    ";
-    *s += src.empty() ? L"（无 source）" : src;
+    *s += src.empty() ? AgisPickUiLang(L"（无 source）", L"(no source)") : src;
   }
   if (layerCount > listed) {
-    *s += L"\r\n  … 另有 ";
+    *s += AgisPickUiLang(L"\r\n  … 另有 ", L"\r\n  … ");
     *s += std::to_wstring(layerCount - listed);
-    *s += L" 个图层";
+    *s += AgisPickUiLang(L" 个图层", L" more layer(s)");
   }
 }
 
@@ -1467,35 +1764,36 @@ static void AppendGdalSummaryForConvert(std::wstring* s, const std::wstring& pat
   }
   GDALDatasetH ds = GDALOpenEx(u8.c_str(), GDAL_OF_READONLY | GDAL_OF_RASTER | GDAL_OF_VECTOR, nullptr, nullptr, nullptr);
   if (!ds) {
-    *s += L"\r\n\r\n【GDAL】无法打开该路径（格式、驱动或权限）。";
+    *s += AgisPickUiLang(L"\r\n\r\n【GDAL】无法打开该路径（格式、驱动或权限）。",
+                        L"\r\n\r\n[GDAL] Cannot open path (format, driver, or permissions).");
     return;
   }
-  *s += L"\r\n\r\n【GDAL 数据源摘要】\r\n";
+  *s += AgisPickUiLang(L"\r\n\r\n【GDAL 数据源摘要】\r\n", L"\r\n\r\n[GDAL data source summary]\r\n");
   const int rx = GDALGetRasterXSize(ds);
   const int ry = GDALGetRasterYSize(ds);
   if (rx > 0 && ry > 0) {
-    *s += L"栅格尺寸：";
+    *s += AgisPickUiLang(L"栅格尺寸：", L"Raster size: ");
     *s += std::to_wstring(rx);
     *s += L" × ";
     *s += std::to_wstring(ry);
     const int bands = GDALGetRasterCount(ds);
     if (bands > 0) {
-      *s += L"  波段数：";
+      *s += AgisPickUiLang(L"  波段数：", L"  Bands: ");
       *s += std::to_wstring(bands);
     }
     *s += L"\r\n";
   }
   const char* wkt = GDALGetProjectionRef(ds);
   if (wkt && wkt[0]) {
-    *s += L"数据集投影(WKT 前缀)：";
+    *s += AgisPickUiLang(L"数据集投影(WKT 前缀)：", L"Dataset CRS (WKT prefix): ");
     *s += WidePrefixFromUtf8(wkt, 220);
     *s += L"\r\n";
   } else {
-    *s += L"数据集投影：未设置或未知\r\n";
+    *s += AgisPickUiLang(L"数据集投影：未设置或未知\r\n", L"Dataset CRS: not set or unknown\r\n");
   }
   const int nVec = GDALDatasetGetLayerCount(ds);
   if (nVec > 0) {
-    *s += L"矢量图层数：";
+    *s += AgisPickUiLang(L"矢量图层数：", L"Vector layers: ");
     *s += std::to_wstring(nVec);
     *s += L"\r\n";
     for (int li = 0; li < nVec && li < 8; ++li) {
@@ -1503,13 +1801,13 @@ static void AppendGdalSummaryForConvert(std::wstring* s, const std::wstring& pat
       if (!lyr) continue;
       *s += L"  · ";
       const char* nm = OGR_L_GetName(lyr);
-      *s += nm ? WidePrefixFromUtf8(nm, 120) : L"（未命名）";
+      *s += nm ? WidePrefixFromUtf8(nm, 120) : AgisPickUiLang(L"（未命名）", L"(unnamed)");
       *s += L"\r\n";
     }
     if (nVec > 8) {
-      *s += L"  … 另有 ";
+      *s += AgisPickUiLang(L"  … 另有 ", L"  … ");
       *s += std::to_wstring(nVec - 8);
-      *s += L" 个矢量图层\r\n";
+      *s += AgisPickUiLang(L" 个矢量图层\r\n", L" more vector layer(s)\r\n");
     }
   }
   GDALClose(ds);
@@ -1528,11 +1826,13 @@ static std::wstring BuildConvertSideInfoExtras(HWND hwnd, bool inputSide, int ma
   }
 
   if (inputSide) {
-    x += L"路径：";
-    x += path.empty() ? L"（未选择）\r\n" : path + L"\r\n";
+    x += AgisPickUiLang(L"路径：", L"Path: ");
     if (path.empty()) {
+      x += AgisPickUiLang(L"（未选择）\r\n", L"(not selected)\r\n");
       return x;
     }
+    x += path;
+    x += L"\r\n";
     std::wstring ext = std::filesystem::path(path).extension().wstring();
     for (auto& ch : ext) ch = static_cast<wchar_t>(std::towlower(ch));
     if (ext == L".gis") {
@@ -1541,31 +1841,38 @@ static std::wstring BuildConvertSideInfoExtras(HWND hwnd, bool inputSide, int ma
 #if GIS_DESKTOP_HAVE_GDAL
       AppendGdalSummaryForConvert(&x, path);
 #else
-      x += L"（未启用 GDAL：无法自动读取 CRS/尺寸；扩展名：";
-      x += ext.empty() ? L"无" : ext;
-      x += L"）\r\n";
+      x += AgisPickUiLang(L"（未启用 GDAL：无法自动读取 CRS/尺寸；扩展名：",
+                          L"(GDAL disabled: cannot read CRS/size; extension: ");
+      x += ext.empty() ? std::wstring(AgisPickUiLang(L"无", L"none")) : ext;
+      x += AgisPickUiLang(L"）\r\n", L")\r\n");
 #endif
     }
     return x;
   }
 
-  x += L"路径：";
-  x += path.empty() ? L"（未指定）\r\n" : path + L"\r\n";
-  if (!path.empty()) {
+  x += AgisPickUiLang(L"路径：", L"Path: ");
+  if (path.empty()) {
+    x += AgisPickUiLang(L"（未指定）\r\n", L"(not specified)\r\n");
+    return x;
+  }
+  x += path;
+  x += L"\r\n";
+  {
     std::error_code ec;
     const std::filesystem::path fp(path);
     if (std::filesystem::is_directory(fp, ec)) {
-      x += L"类型：目录\r\n";
+      x += AgisPickUiLang(L"类型：目录\r\n", L"Type: folder\r\n");
     } else if (std::filesystem::is_regular_file(fp, ec)) {
-      x += L"类型：文件\r\n";
+      x += AgisPickUiLang(L"类型：文件\r\n", L"Type: file\r\n");
       const auto sz = std::filesystem::file_size(fp, ec);
       if (!ec && sz != static_cast<std::uintmax_t>(-1)) {
-        x += L"大小：";
+        x += AgisPickUiLang(L"大小：", L"Size: ");
         x += std::to_wstring(static_cast<unsigned long long>(sz));
-        x += L" 字节\r\n";
+        x += AgisPickUiLang(L" 字节\r\n", L" bytes\r\n");
       }
     } else {
-      x += L"（路径在当前磁盘上尚不存在；转换将尝试创建）\r\n";
+      x += AgisPickUiLang(L"（路径在当前磁盘上尚不存在；转换将尝试创建）\r\n",
+                          L"(Path does not exist on disk yet; conversion will try to create it)\r\n");
     }
   }
   return x;
@@ -1685,13 +1992,16 @@ void FillConvertTextureFormatCombo(HWND combo) {
     return;
   }
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"PNG（默认）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"PNG（默认）", L"PNG (default)")));
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TIFF / GeoTIFF"));
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"TGA"));
   SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"BMP"));
 #if AGIS_HAVE_BASISU
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"KTX2（UASTC + mip + Basis 超压）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"KTX2 ETC1S（更小）"));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"KTX2（UASTC + mip + Basis 超压）",
+                                                       L"KTX2 (UASTC + mip + Basis)")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"KTX2 ETC1S（更小）", L"KTX2 ETC1S (smaller)")));
 #endif
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
@@ -1699,47 +2009,58 @@ void FillConvertTextureFormatCombo(HWND combo) {
 void FillObjTextureModeCombo(HWND combo) {
   if (!combo) return;
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"color（仅 albedo）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"pbr（normal/roughness/metallic/ao）"));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"color（仅 albedo）", L"color (albedo only)")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(
+                   AgisPickUiLang(L"pbr（normal/roughness/metallic/ao）", L"pbr (normal/roughness/metallic/ao)")));
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
 void FillObjVisualEffectCombo(HWND combo) {
   if (!combo) return;
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"none（无）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"night（夜景）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"snow（积雪）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"none（无）", L"none")));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"night（夜景）", L"night")));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"snow（积雪）", L"snow")));
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
 void FillGisDemInterpCombo(HWND combo) {
   if (!combo) return;
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bilinear（双线性，默认）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"nearest（最近邻）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"cell_avg（像元平均）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"dem_avg（DEM平均）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"median（中值）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"bicubic（双三次）"));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"bilinear（双线性，默认）", L"bilinear (default)")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"nearest（最近邻）", L"nearest")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"cell_avg（像元平均）", L"cell_avg")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"dem_avg（DEM平均）", L"dem_avg")));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"median（中值）", L"median")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"bicubic（双三次）", L"bicubic")));
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
 void FillGisMeshTopologyCombo(HWND combo) {
   if (!combo) return;
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"grid（规则网格）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"tin（TIN）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"delaunay（德劳内）"));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"grid（规则网格）", L"grid")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"tin（TIN）", L"tin (TIN)")));
+  SendMessageW(combo, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"delaunay（德劳内）", L"delaunay")));
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
 void FillModelBudgetModeCombo(HWND combo) {
   if (!combo) return;
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"memory（内存）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"file（文件体积）"));
-  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"vram（显存）"));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"memory（内存）", L"memory")));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"file（文件体积）", L"file")));
+  SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"vram（显存）", L"vram")));
   SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
@@ -1784,12 +2105,64 @@ std::wstring GetTileLevelsArg(HWND hwnd) {
   return std::to_wstring(v);
 }
 
+namespace {
+// OPENFILENAMEW ``lpstrFilter``：描述与扩展名对以 \0 分隔，整体以 \0\0 结束。
+const wchar_t kConvOfnAllZh[] = L"所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnAllEn[] = L"All files (*.*)\0*.*\0\0";
+const wchar_t kConvOfnInGisZh[] =
+    L"AGIS 工程 (*.gis)\0*.gis\0"
+    L"栅格 GeoTIFF/FLT (*.tif;*.tiff;*.flt)\0*.tif;*.tiff;*.flt\0"
+    L"矢量 (*.shp;*.geojson)\0*.shp;*.geojson\0"
+    L"GeoPackage (*.gpkg)\0*.gpkg\0"
+    L"所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnInGisEn[] =
+    L"AGIS project (*.gis)\0*.gis\0"
+    L"Raster GeoTIFF/FLT (*.tif;*.tiff;*.flt)\0*.tif;*.tiff;*.flt\0"
+    L"Vector (*.shp;*.geojson)\0*.shp;*.geojson\0"
+    L"GeoPackage (*.gpkg)\0*.gpkg\0"
+    L"All files (*.*)\0*.*\0\0";
+const wchar_t kConvOfnInModelZh[] = L"Wavefront OBJ (*.obj)\0*.obj\0"
+                                    L"LAS 点云 (*.las)\0*.las\0"
+                                    L"LAZ 点云 (*.laz)\0*.laz\0"
+                                    L"所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnInModelEn[] = L"Wavefront OBJ (*.obj)\0*.obj\0"
+                                    L"LAS point cloud (*.las)\0*.las\0"
+                                    L"LAZ point cloud (*.laz)\0*.laz\0"
+                                    L"All files (*.*)\0*.*\0\0";
+const wchar_t kConvOfnOpenMbtilesZh[] = L"MBTiles (*.mbtiles)\0*.mbtiles\0所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnOpenMbtilesEn[] = L"MBTiles (*.mbtiles)\0*.mbtiles\0All files (*.*)\0*.*\0\0";
+const wchar_t kConvOfnOpenGpkgZh[] = L"GeoPackage (*.gpkg)\0*.gpkg\0所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnOpenGpkgEn[] = L"GeoPackage (*.gpkg)\0*.gpkg\0All files (*.*)\0*.*\0\0";
+const wchar_t kConvOfnSaveGisZh[] = L"AGIS 工程 (*.gis)\0*.gis\0"
+                                    L"GeoJSON (*.geojson)\0*.geojson\0"
+                                    L"GeoTIFF/FLT (*.tif;*.tiff;*.flt)\0*.tif;*.tiff;*.flt\0"
+                                    L"所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnSaveGisEn[] = L"AGIS project (*.gis)\0*.gis\0"
+                                    L"GeoJSON (*.geojson)\0*.geojson\0"
+                                    L"GeoTIFF/FLT (*.tif;*.tiff;*.flt)\0*.tif;*.tiff;*.flt\0"
+                                    L"All files (*.*)\0*.*\0\0";
+const wchar_t kConvOfnSavePcZh[] = L"LAS 点云 (*.las)\0*.las\0"
+                                   L"LAZ 点云 (*.laz)\0*.laz\0"
+                                   L"所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnSavePcEn[] = L"LAS point cloud (*.las)\0*.las\0"
+                                   L"LAZ point cloud (*.laz)\0*.laz\0"
+                                   L"All files (*.*)\0*.*\0\0";
+const wchar_t kConvOfnSaveMeshZh[] = L"Mesh 文件 (*.obj;*.flt)\0*.obj;*.flt\0"
+                                     L"Wavefront OBJ (*.obj)\0*.obj\0"
+                                     L"FLT 网格 (*.flt)\0*.flt\0"
+                                     L"所有文件 (*.*)\0*.*\0\0";
+const wchar_t kConvOfnSaveMeshEn[] = L"Mesh files (*.obj;*.flt)\0*.obj;*.flt\0"
+                                     L"Wavefront OBJ (*.obj)\0*.obj\0"
+                                     L"FLT mesh (*.flt)\0*.flt\0"
+                                     L"All files (*.*)\0*.*\0\0";
+}  // namespace
+
 std::wstring PromptOpenInputPath(HWND owner) {
   wchar_t path[MAX_PATH]{};
   OPENFILENAMEW ofn{};
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = owner;
-  ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0\0";
+  ofn.lpstrFilter = AgisPickUiLang(kConvOfnAllZh, kConvOfnAllEn);
   ofn.nFilterIndex = 1;
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
@@ -1803,18 +2176,11 @@ static std::wstring PromptOpenConvertInputPath(HWND owner, int inMajor) {
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = owner;
   if (inMajor == 0) {
-    ofn.lpstrFilter = L"AGIS 工程 (*.gis)\0*.gis\0"
-                      L"栅格 GeoTIFF/FLT (*.tif;*.tiff;*.flt)\0*.tif;*.tiff;*.flt\0"
-                      L"矢量 (*.shp;*.geojson)\0*.shp;*.geojson\0"
-                      L"GeoPackage (*.gpkg)\0*.gpkg\0"
-                      L"所有文件 (*.*)\0*.*\0\0";
+    ofn.lpstrFilter = AgisPickUiLang(kConvOfnInGisZh, kConvOfnInGisEn);
   } else if (inMajor == 1) {
-    ofn.lpstrFilter = L"Wavefront OBJ (*.obj)\0*.obj\0"
-                      L"LAS 点云 (*.las)\0*.las\0"
-                      L"LAZ 点云 (*.laz)\0*.laz\0"
-                      L"所有文件 (*.*)\0*.*\0\0";
+    ofn.lpstrFilter = AgisPickUiLang(kConvOfnInModelZh, kConvOfnInModelEn);
   } else {
-    ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0\0";
+    ofn.lpstrFilter = AgisPickUiLang(kConvOfnAllZh, kConvOfnAllEn);
   }
   ofn.nFilterIndex = 1;
   ofn.lpstrFile = path;
@@ -1828,8 +2194,8 @@ static std::wstring PromptOpenTileContainerFile(HWND owner, bool mbtiles) {
   OPENFILENAMEW ofn{};
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = owner;
-  ofn.lpstrFilter = mbtiles ? L"MBTiles (*.mbtiles)\0*.mbtiles\0所有文件\0*.*\0\0"
-                            : L"GeoPackage (*.gpkg)\0*.gpkg\0所有文件\0*.*\0\0";
+  ofn.lpstrFilter = mbtiles ? AgisPickUiLang(kConvOfnOpenMbtilesZh, kConvOfnOpenMbtilesEn)
+                            : AgisPickUiLang(kConvOfnOpenGpkgZh, kConvOfnOpenGpkgEn);
   ofn.nFilterIndex = 1;
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
@@ -1843,8 +2209,8 @@ static std::wstring PromptSaveTileContainerFile(HWND owner, bool mbtiles) {
   OPENFILENAMEW c{};
   c.lStructSize = sizeof(c);
   c.hwndOwner = owner;
-  c.lpstrFilter = mbtiles ? L"MBTiles (*.mbtiles)\0*.mbtiles\0所有文件\0*.*\0\0"
-                          : L"GeoPackage (*.gpkg)\0*.gpkg\0所有文件\0*.*\0\0";
+  c.lpstrFilter = mbtiles ? AgisPickUiLang(kConvOfnOpenMbtilesZh, kConvOfnOpenMbtilesEn)
+                          : AgisPickUiLang(kConvOfnOpenGpkgZh, kConvOfnOpenGpkgEn);
   c.nFilterIndex = 1;
   c.lpstrFile = path;
   c.nMaxFile = MAX_PATH;
@@ -1858,7 +2224,7 @@ std::wstring PromptSaveOutputPath(HWND owner) {
   OPENFILENAMEW ofn{};
   ofn.lStructSize = sizeof(ofn);
   ofn.hwndOwner = owner;
-  ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0\0";
+  ofn.lpstrFilter = AgisPickUiLang(kConvOfnAllZh, kConvOfnAllEn);
   ofn.nFilterIndex = 1;
   ofn.lpstrFile = path;
   ofn.nMaxFile = MAX_PATH;
@@ -1878,27 +2244,19 @@ static std::wstring PromptSaveConvertOutputPath(HWND owner, int outMajor, const 
   ofn.lpstrDefExt = nullptr;
 
   if (outMajor == 0) {
-    ofn.lpstrFilter = L"AGIS 工程 (*.gis)\0*.gis\0"
-                      L"GeoJSON (*.geojson)\0*.geojson\0"
-                      L"GeoTIFF/FLT (*.tif;*.tiff;*.flt)\0*.tif;*.tiff;*.flt\0"
-                      L"所有文件 (*.*)\0*.*\0\0";
+    ofn.lpstrFilter = AgisPickUiLang(kConvOfnSaveGisZh, kConvOfnSaveGisEn);
     ofn.lpstrDefExt = L"gis";
   } else if (outMajor == 1) {
     const bool pc = (outSubTok == L"pointcloud");
     if (pc) {
-      ofn.lpstrFilter = L"LAS 点云 (*.las)\0*.las\0"
-                        L"LAZ 点云 (*.laz)\0*.laz\0"
-                        L"所有文件 (*.*)\0*.*\0\0";
+      ofn.lpstrFilter = AgisPickUiLang(kConvOfnSavePcZh, kConvOfnSavePcEn);
       ofn.lpstrDefExt = L"las";
     } else {
-      ofn.lpstrFilter = L"Mesh 文件 (*.obj;*.flt)\0*.obj;*.flt\0"
-                        L"Wavefront OBJ (*.obj)\0*.obj\0"
-                        L"FLT 网格 (*.flt)\0*.flt\0"
-                        L"所有文件 (*.*)\0*.*\0\0";
+      ofn.lpstrFilter = AgisPickUiLang(kConvOfnSaveMeshZh, kConvOfnSaveMeshEn);
       ofn.lpstrDefExt = L"obj";
     }
   } else {
-    ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0\0";
+    ofn.lpstrFilter = AgisPickUiLang(kConvOfnAllZh, kConvOfnAllEn);
   }
   return GetSaveFileNameW(&ofn) ? std::wstring(path) : L"";
 }
@@ -1906,7 +2264,7 @@ static std::wstring PromptSaveConvertOutputPath(HWND owner, int outMajor, const 
 std::wstring PromptSelectFolder(HWND owner, const wchar_t* title) {
   BROWSEINFOW bi{};
   bi.hwndOwner = owner;
-  bi.lpszTitle = title ? title : L"选择目录";
+  bi.lpszTitle = title ? title : AgisPickUiLang(L"选择目录", L"Select folder");
   bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
   PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
   if (!pidl) {
@@ -1919,7 +2277,8 @@ std::wstring PromptSelectFolder(HWND owner, const wchar_t* title) {
 }
 
 std::wstring PromptSelectOutputFolder(HWND owner) {
-  return PromptSelectFolder(owner, L"选择输出目录（瓦片根目录）");
+  return PromptSelectFolder(owner,
+                            AgisPickUiLang(L"选择输出目录（瓦片根目录）", L"Select output folder (tile root)"));
 }
 
 static std::wstring PickConvertInputPathByUi(HWND owner) {
@@ -1932,7 +2291,7 @@ static std::wstring PickConvertInputPathByUi(HWND owner) {
     if (inSub == 4) {
       return PromptOpenTileContainerFile(owner, false);
     }
-    return PromptSelectFolder(owner, L"选择瓦片根目录（输入）");
+    return PromptSelectFolder(owner, AgisPickUiLang(L"选择瓦片根目录（输入）", L"Select tile root folder (input)"));
   }
   return PromptOpenConvertInputPath(owner, inMajor < 0 ? 0 : inMajor);
 }
@@ -2142,11 +2501,15 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
 
   std::wstring s = oneLine;
   s += L"\r\n\r\n";
-  s += L"（与「开始转换」一致；「复制命令」仅复制首行。下方为路径与【1】–【4】分项，与 `--help` 及中间列 ①–④ 对照；未写开关由后端默认。）\r\n";
-  s += L"\r\n──────── 分项 ────────\r\n\r\n【路径】\r\n";
+  s += AgisPickUiLang(
+      L"（与「开始转换」一致；「复制命令」仅复制首行。下方为路径与【1】–【4】分项，与 `--help` 及中间列 ①–④ 对照；未写开关由后端默认。）\r\n",
+      L"(Same as Start conversion; Copy command copies the first line only. Below: paths and sections [1]–[4], matching "
+      L"`--help` and the middle column; omitted flags use backend defaults.)\r\n");
+  s += AgisPickUiLang(L"\r\n──────── 分项 ────────\r\n\r\n【路径】\r\n",
+                      L"\r\n──────── Sections ────────\r\n\r\n[Paths]\r\n");
   s += L"  --input " + QuoteArg(inPath) + L"\r\n";
   s += L"  --output " + QuoteArg(outPath) + L"\r\n";
-  s += L"\r\n【1 输入类型】\r\n";
+  s += AgisPickUiLang(L"\r\n【1 输入类型】\r\n", L"\r\n[1 Input type]\r\n");
   s += L"  --input-type " + QuoteArg(inType) + L"\r\n";
   if (v.show_g1_vector) {
     s += L"  --vector-mode " + QuoteArg(vectorMode) + L"\r\n";
@@ -2157,20 +2520,22 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
   if (v.show_coord_g1) {
     s += L"  --coord-system " + QuoteArg(coord) + L"\r\n";
   }
-  s += L"\r\n【2 输入子类型】\r\n";
+  s += AgisPickUiLang(L"\r\n【2 输入子类型】\r\n", L"\r\n[2 Input subtype]\r\n");
   s += L"  --input-subtype " + QuoteArg(inSub) + L"\r\n";
   if (v.show_g2_raster && rmax != 0) {
     s += L"  --raster-max-dim " + QuoteArg(rmaxStr) + L"\r\n";
   } else if (v.show_g2_raster) {
-    s += L"  （--raster-max-dim 0 或未写 → 源图全分辨率）\r\n";
+    s += AgisPickUiLang(L"  （--raster-max-dim 0 或未写 → 源图全分辨率）\r\n",
+                        L"  (--raster-max-dim 0 or omitted → full source resolution)\r\n");
   }
-  s += L"\r\n【3 输出类型】\r\n";
+  s += AgisPickUiLang(L"\r\n【3 输出类型】\r\n", L"\r\n[3 Output type]\r\n");
   s += L"  --output-type " + QuoteArg(outType) + L"\r\n";
   if (v.show_g3_crs) {
     if (!tcr.empty()) {
       s += L"  --target-crs " + QuoteArg(tcr) + L"\r\n";
     } else {
-      s += L"  （--target-crs 未填 → 后端按自动规则选择）\r\n";
+      s += AgisPickUiLang(L"  （--target-crs 未填 → 后端按自动规则选择）\r\n",
+                          L"  (--target-crs empty → backend auto-selects)\r\n");
     }
   }
   if (v.show_g3_coord_out) {
@@ -2188,12 +2553,13 @@ std::wstring BuildConvertCommandLine(HWND hwnd) {
   if (v.show_g3_obj) {
     s += L"  --obj-fp-type " + QuoteArg(objFpType) + L"\r\n";
   }
-  s += L"\r\n【4 输出子类型】\r\n";
+  s += AgisPickUiLang(L"\r\n【4 输出子类型】\r\n", L"\r\n[4 Output subtype]\r\n");
   s += L"  --output-subtype " + QuoteArg(outSub) + L"\r\n";
   if (v.show_g4_tile_levels && tileLevels != L"auto") {
     s += L"  --tile-levels " + QuoteArg(tileLevels) + L"\r\n";
   } else if (v.show_g4_tile_levels) {
-    s += L"  （--tile-levels auto 或省略 → 后端自动层数）\r\n";
+    s += AgisPickUiLang(L"  （--tile-levels auto 或省略 → 后端自动层数）\r\n",
+                        L"  (--tile-levels auto or omitted → backend picks levels)\r\n");
   }
   if (v.show_g4_gis_model_adv) {
     s += L"  --obj-texture-mode " + QuoteArg(objTexMode) + L"\r\n";
@@ -2216,13 +2582,17 @@ bool RunConvertBackendAsync(HWND hwnd) {
   const int inMajor = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_INPUT_TYPE), CB_GETCURSEL, 0, 0));
   const int outMajor = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
   if (inMajor < 0 || outMajor < 0) {
-    MessageBoxW(hwnd, L"请先选择输入与输出类型。", L"数据转换", MB_OK | MB_ICONWARNING);
+    MessageBoxW(hwnd, AgisPickUiLang(L"请先选择输入与输出类型。", L"Select input and output types first."),
+                AgisPickUiLang(L"数据转换", L"Data conversion"), MB_OK | MB_ICONWARNING);
     return false;
   }
   {
     std::wstring why;
     if (!IsConvertPairSupportedBySubtype(hwnd, &why)) {
-      MessageBoxW(hwnd, why.empty() ? L"当前输入/输出组合不支持。" : why.c_str(), L"数据转换", MB_OK | MB_ICONWARNING);
+      MessageBoxW(hwnd,
+                  why.empty() ? AgisPickUiLang(L"当前输入/输出组合不支持。", L"This input/output pair is not supported.")
+                              : why.c_str(),
+                  AgisPickUiLang(L"数据转换", L"Data conversion"), MB_OK | MB_ICONWARNING);
       return false;
     }
   }
@@ -2231,7 +2601,8 @@ bool RunConvertBackendAsync(HWND hwnd) {
   GetWindowTextW(FindConvertCtrl(hwnd, IDC_CONV_INPUT_PATH), inPath, 1024);
   GetWindowTextW(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_PATH), outPath, 1024);
   if (inPath[0] == L'\0' || outPath[0] == L'\0') {
-    MessageBoxW(hwnd, L"请先设置输入和输出路径。", L"数据转换", MB_OK | MB_ICONWARNING);
+    MessageBoxW(hwnd, AgisPickUiLang(L"请先设置输入和输出路径。", L"Set input and output paths first."),
+                AgisPickUiLang(L"数据转换", L"Data conversion"), MB_OK | MB_ICONWARNING);
     return false;
   }
   const wchar_t* exeName = ConvertToolExeName(inMajor, outMajor);
@@ -2240,7 +2611,7 @@ bool RunConvertBackendAsync(HWND hwnd) {
   }
   std::wstring cmd = AssembleConvertProcessCommandLine(hwnd);
   UpdateConvertCmdlinePreview(hwnd);
-  WriteConvertLog(hwnd, (std::wstring(L"[命令] ") + cmd).c_str());
+  WriteConvertLog(hwnd, (std::wstring(AgisPickUiLang(L"[命令] ", L"[Command] ")) + cmd).c_str());
   std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
   cmdBuf.push_back(L'\0');
   STARTUPINFOW si{};
@@ -2258,7 +2629,7 @@ bool RunConvertBackendAsync(HWND hwnd) {
     g_convertPipeWrite = nullptr;
   }
   if (!CreatePipe(&g_convertPipeRead, &g_convertPipeWrite, &sa, 0)) {
-    WriteConvertLog(hwnd, L"[错误] 无法创建输出管道。");
+    WriteConvertLog(hwnd, AgisPickUiLang(L"[错误] 无法创建输出管道。", L"[Error] Failed to create output pipe."));
     return false;
   }
   SetHandleInformation(g_convertPipeRead, HANDLE_FLAG_INHERIT, 0);
@@ -2268,7 +2639,8 @@ bool RunConvertBackendAsync(HWND hwnd) {
   si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
   PROCESS_INFORMATION pi{};
   if (!CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-    WriteConvertLog(hwnd, (std::wstring(L"[错误] 无法启动：") + exeName).c_str());
+    WriteConvertLog(hwnd,
+                    (std::wstring(AgisPickUiLang(L"[错误] 无法启动：", L"[Error] Failed to start: ")) + exeName).c_str());
     CloseHandle(g_convertPipeRead);
     CloseHandle(g_convertPipeWrite);
     g_convertPipeRead = nullptr;
@@ -2289,21 +2661,23 @@ void PreviewPath(HWND hwnd, bool inputSide) {
   wchar_t pathBuf[1024]{};
   GetWindowTextW(FindConvertCtrl(hwnd, ctrl), pathBuf, 1024);
   std::wstring path = pathBuf;
+  const wchar_t* capPreview = AgisPickUiLang(L"预览", L"Preview");
   if (path.empty()) {
-    MessageBoxW(hwnd, L"请先设置路径。", L"预览", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(hwnd, AgisPickUiLang(L"请先设置路径。", L"Set a path first."), capPreview, MB_OK | MB_ICONINFORMATION);
     return;
   }
   DWORD attr = GetFileAttributesW(path.c_str());
   if (attr == INVALID_FILE_ATTRIBUTES) {
-    const std::wstring msg = std::wstring(L"路径不存在：\n") + path;
-    MessageBoxW(hwnd, msg.c_str(), L"预览", MB_OK | MB_ICONWARNING);
+    const std::wstring msg =
+        std::wstring(AgisPickUiLang(L"路径不存在：\n", L"Path does not exist:\n")) + path;
+    MessageBoxW(hwnd, msg.c_str(), capPreview, MB_OK | MB_ICONWARNING);
     return;
   }
   const int major = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, majorCtrl), CB_GETCURSEL, 0, 0));
   HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, 1, L"内置预览（默认）");
-  AppendMenuW(menu, MF_STRING, 2, L"系统默认打开");
-  AppendMenuW(menu, MF_STRING, 3, L"选择其他应用...");
+  AppendMenuW(menu, MF_STRING, 1, AgisPickUiLang(L"内置预览（默认）", L"Built-in preview (default)"));
+  AppendMenuW(menu, MF_STRING, 2, AgisPickUiLang(L"系统默认打开", L"Open with system default"));
+  AppendMenuW(menu, MF_STRING, 3, AgisPickUiLang(L"选择其他应用...", L"Choose another app..."));
   SetMenuDefaultItem(menu, 1, FALSE);
   POINT pt{};
   GetCursorPos(&pt);
@@ -2317,11 +2691,18 @@ void PreviewPath(HWND hwnd, bool inputSide) {
       // GIS 内置预览 = 打开 AGIS workbench（优先带路径参数，失败则仅启动主程序）。
       if (!LaunchPreviewExe(hwnd, L"AGIS.exe", path)) {
         if (!LaunchPreviewExe(hwnd, L"AGIS.exe", L"")) {
-          MessageBoxW(hwnd, L"无法启动 AGIS 主程序（AGIS.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          MessageBoxW(hwnd,
+                      AgisPickUiLang(L"无法启动 AGIS 主程序（AGIS.exe）。", L"Could not start AGIS (AGIS.exe)."), capPreview,
+                      MB_OK | MB_ICONWARNING);
           return;
         }
       }
-      WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(GIS→AGIS工作台)：" : L"[预览] 输出(GIS→AGIS工作台)：") + path).c_str());
+      WriteConvertLog(hwnd,
+                      (std::wstring(inputSide ? AgisPickUiLang(L"[预览] 输入(GIS→AGIS工作台)：", L"[Preview] Input (GIS→AGIS workbench): ")
+                                              : AgisPickUiLang(L"[预览] 输出(GIS→AGIS工作台)：",
+                                                               L"[Preview] Output (GIS→AGIS workbench): ")) +
+                       path)
+                          .c_str());
       return;
     }
     if (major == 1) {
@@ -2332,116 +2713,193 @@ void PreviewPath(HWND hwnd, bool inputSide) {
         const bool isLaz = _wcsicmp(ext.c_str(), L".laz") == 0;
         if (!isObj && !isLas && !isLaz) {
           WriteConvertLog(hwnd,
-                          (std::wstring(L"[预览] 内置 3D 预览不支持模型路径扩展名：") + ext +
-                           L"。当前支持：*.obj、*.las、*.laz（LAZ：优先 bundled LASzip，见 3rdparty/README-LASZIP.md；否则需 GDAL "
-                           L"可读）。")
+                          (std::wstring(AgisPickUiLang(L"[预览] 内置 3D 预览不支持模型路径扩展名：",
+                                                       L"[Preview] Built-in 3D preview does not support extension: ")) +
+                           ext +
+                           AgisPickUiLang(L"。当前支持：*.obj、*.las、*.laz（LAZ：优先 bundled LASzip，见 3rdparty/README-LASZIP.md；否则需 GDAL "
+                                          L"可读）。",
+                                          L". Supported: *.obj, *.las, *.laz (LAZ: bundled LASzip first, see "
+                                          L"3rdparty/README-LASZIP.md; otherwise GDAL must read it)."))
                               .c_str());
           MessageBoxW(hwnd,
-                      L"内置模型预览仅支持：*.obj、*.las、*.laz。\n其它格式请使用「系统默认打开」。",
-                      L"预览", MB_OK | MB_ICONINFORMATION);
+                      AgisPickUiLang(L"内置模型预览仅支持：*.obj、*.las、*.laz。\n其它格式请使用「系统默认打开」。",
+                                     L"Built-in model preview supports only *.obj, *.las, *.laz.\nUse Open with system "
+                                     L"default for other formats."),
+                      capPreview, MB_OK | MB_ICONINFORMATION);
           return;
         }
 #if !GIS_DESKTOP_HAVE_GDAL
         if (isLaz) {
 #  if !(defined(AGIS_HAVE_LASZIP) && AGIS_HAVE_LASZIP)
           WriteConvertLog(hwnd,
-                          L"[预览] 当前构建无 GDAL 且无 bundled LASzip，无法解压 LAZ。请在 3rdparty/LASzip 放置源码（README-LASZIP.md）"
-                          L"或启用 AGIS_USE_GDAL=on 后重编。");
+                          AgisPickUiLang(L"[预览] 当前构建无 GDAL 且无 bundled LASzip，无法解压 LAZ。请在 3rdparty/LASzip 放置源码（README-LASZIP.md）"
+                                         L"或启用 AGIS_USE_GDAL=on 后重编。",
+                                         L"[Preview] No GDAL and no bundled LASzip; cannot decompress LAZ. Put LASzip sources "
+                                         L"under 3rdparty/LASzip (README-LASZIP.md) or rebuild with AGIS_USE_GDAL=on."));
           MessageBoxW(hwnd,
-                      L"当前无法内置预览 LAZ：请放置 LASzip 源码到 3rdparty/LASzip 并重新编译，或启用 GDAL 构建，或转为 LAS / "
-                      L"系统打开。",
-                      L"预览", MB_OK | MB_ICONINFORMATION);
+                      AgisPickUiLang(L"当前无法内置预览 LAZ：请放置 LASzip 源码到 3rdparty/LASzip 并重新编译，或启用 GDAL 构建，或转为 LAS / "
+                                     L"系统打开。",
+                                     L"Cannot preview LAZ in-app: add LASzip under 3rdparty/LASzip and rebuild, use a GDAL "
+                                     L"build, convert to LAS, or open with the system default."),
+                      capPreview, MB_OK | MB_ICONINFORMATION);
           return;
 #  endif
         }
 #endif
         if (!LaunchPreviewExe(hwnd, L"AGIS-ModelPreview.exe", path)) {
-          MessageBoxW(hwnd, L"无法启动内置模型预览程序（AGIS-ModelPreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          MessageBoxW(hwnd,
+                      AgisPickUiLang(L"无法启动内置模型预览程序（AGIS-ModelPreview.exe）。",
+                                     L"Could not start built-in model preview (AGIS-ModelPreview.exe)."),
+                      capPreview, MB_OK | MB_ICONWARNING);
           return;
         }
-        WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(内置3D)：" : L"[预览] 输出(内置3D)：") + path).c_str());
+        WriteConvertLog(hwnd,
+                        (std::wstring(inputSide ? AgisPickUiLang(L"[预览] 输入(内置3D)：", L"[Preview] Input (built-in 3D): ")
+                                                : AgisPickUiLang(L"[预览] 输出(内置3D)：", L"[Preview] Output (built-in 3D): ")) +
+                         path)
+                            .c_str());
         return;
       }
       const std::wstring previewPath = FindFirstModelPreviewFileInDirectory(path);
       if (!previewPath.empty()) {
         if (!LaunchPreviewExe(hwnd, L"AGIS-ModelPreview.exe", previewPath)) {
-          MessageBoxW(hwnd, L"无法启动内置模型预览程序（AGIS-ModelPreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          MessageBoxW(hwnd,
+                      AgisPickUiLang(L"无法启动内置模型预览程序（AGIS-ModelPreview.exe）。",
+                                     L"Could not start built-in model preview (AGIS-ModelPreview.exe)."),
+                      capPreview, MB_OK | MB_ICONWARNING);
           return;
         }
         WriteConvertLog(hwnd,
-                        (std::wstring(inputSide ? L"[预览] 输入(内置3D，目录内模型/点云)：" : L"[预览] 输出(内置3D，目录内模型/点云)：") +
+                        (std::wstring(inputSide ? AgisPickUiLang(L"[预览] 输入(内置3D，目录内模型/点云)：",
+                                                                 L"[Preview] Input (built-in 3D, model/pc in folder): ")
+                                                : AgisPickUiLang(L"[预览] 输出(内置3D，目录内模型/点云)：",
+                                                                 L"[Preview] Output (built-in 3D, model/pc in folder): ")) +
                          previewPath)
                             .c_str());
         return;
       }
-      WriteConvertLog(hwnd, L"[预览] 目录内未找到 .obj / .las / .laz，无法使用内置模型/点云预览。");
-      MessageBoxW(hwnd, L"目录内未找到 .obj、.las 或 .laz，无法使用内置 3D 预览。\n请指定文件路径或改用系统打开。", L"预览",
-                  MB_OK | MB_ICONINFORMATION);
+      WriteConvertLog(hwnd,
+                      AgisPickUiLang(L"[预览] 目录内未找到 .obj / .las / .laz，无法使用内置模型/点云预览。",
+                                     L"[Preview] No .obj / .las / .laz in folder; built-in model/point-cloud preview unavailable."));
+      MessageBoxW(hwnd,
+                  AgisPickUiLang(L"目录内未找到 .obj、.las 或 .laz，无法使用内置 3D 预览。\n请指定文件路径或改用系统打开。",
+                                 L"No .obj, .las, or .laz in the folder; built-in 3D preview unavailable.\nPick a file path "
+                                 L"or use Open with system default."),
+                  capPreview, MB_OK | MB_ICONINFORMATION);
       return;
     }
     if (major == 2) {
       const std::wstring sub = GetConvertSubtypeArg(hwnd, inputSide);
       if (sub == L"3dtiles") {
         WriteConvertLog(hwnd,
-                        L"[预览] 3D Tiles：内置 bgfx 三维预览（tinygltf + nlohmann/json，无 vcpkg）。解析本地 b3dm/i3dm(glb)/glb/cmpt；"
-                        L"KHR_draco_mesh_compression、仅 http(s) 外链、pnts 等跳过。另可选用「系统默认打开」。");
+                        AgisPickUiLang(
+                            L"[预览] 3D Tiles：内置 bgfx 三维预览（tinygltf + nlohmann/json，无 vcpkg）。解析本地 b3dm/i3dm(glb)/glb/cmpt；"
+                            L"KHR_draco_mesh_compression、仅 http(s) 外链、pnts 等跳过。另可选用「系统默认打开」。",
+                            L"[Preview] 3D Tiles: built-in bgfx viewer (tinygltf + nlohmann/json, no vcpkg). Parses local "
+                            L"b3dm/i3dm(glb)/glb/cmpt; skips KHR_draco_mesh_compression, http(s)-only external URIs, pnts, "
+                            L"etc. You can also use Open with system default."));
         if (!LaunchPreviewExe(hwnd, L"AGIS-ModelPreview.exe", path, L"--3dtiles")) {
-          MessageBoxW(hwnd, L"无法启动内置 3D Tiles 预览程序（AGIS-ModelPreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+          MessageBoxW(hwnd,
+                      AgisPickUiLang(L"无法启动内置 3D Tiles 预览程序（AGIS-ModelPreview.exe）。",
+                                     L"Could not start built-in 3D Tiles preview (AGIS-ModelPreview.exe)."),
+                      capPreview, MB_OK | MB_ICONWARNING);
           return;
         }
-        WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(内置 3D Tiles)：" : L"[预览] 输出(内置 3D Tiles)：") + path).c_str());
+        WriteConvertLog(hwnd,
+                        (std::wstring(inputSide ? AgisPickUiLang(L"[预览] 输入(内置 3D Tiles)：",
+                                                                 L"[Preview] Input (built-in 3D Tiles): ")
+                                                : AgisPickUiLang(L"[预览] 输出(内置 3D Tiles)：",
+                                                                 L"[Preview] Output (built-in 3D Tiles): ")) +
+                         path)
+                            .c_str());
         return;
       }
       if (sub == L"wmts") {
         WriteConvertLog(
             hwnd,
-            L"[预览] WMTS：多为服务端能力描述或模板；若无含 PNG/JPG 的本地缓存目录，内置仅能尝试路径采样。完整分页与四叉树索引为后续项。");
+            AgisPickUiLang(L"[预览] WMTS：多为服务端能力描述或模板；若无含 PNG/JPG 的本地缓存目录，内置仅能尝试路径采样。完整分页与四叉树索引为后续项。",
+                           L"[Preview] WMTS: often a capability doc/template; without a local PNG/JPG cache folder the "
+                           L"built-in view can only sample paths. Full paging and quadtree indexing are future work."));
       } else if (sub == L"xyz" || sub == L"tms") {
         WriteConvertLog(
             hwnd,
-            L"[预览] XYZ/TMS：四叉索引与拼图；滚轮按 Z 换级(光标中心)、Shift+中心换级、Ctrl+滚轮调片元尺度；拖拽平移。TMS 行号映射见 tms.xml/README。");
+            AgisPickUiLang(
+                L"[预览] XYZ/TMS：四叉索引与拼图；滚轮按 Z 换级(光标中心)、Shift+中心换级、Ctrl+滚轮调片元尺度；拖拽平移。TMS 行号映射见 tms.xml/README。",
+                L"[Preview] XYZ/TMS: quadtree index and mosaic; wheel changes Z (cursor center), Shift+wheel centers, "
+                L"Ctrl+wheel tile pixel size; drag to pan. TMS row mapping: tms.xml/README."));
       } else if (sub == L"mbtiles" || sub == L"gpkg") {
         WriteConvertLog(hwnd,
-                        L"[预览] MBTiles / GeoPackage：启用 GDAL 时内置窗体会做栅格缩略预览；失败则见窗内说明或用系统打开 / 导出 XYZ。");
+                        AgisPickUiLang(L"[预览] MBTiles / GeoPackage：启用 GDAL 时内置窗体会做栅格缩略预览；失败则见窗内说明或用系统打开 / 导出 XYZ。",
+                                       L"[Preview] MBTiles/GeoPackage: with GDAL the tile window shows a raster thumbnail; "
+                                       L"on failure see in-window text or open with system default / export XYZ."));
       }
       if (!LaunchPreviewExe(hwnd, L"AGIS-TilePreview.exe", path)) {
-        MessageBoxW(hwnd, L"无法启动内置瓦片预览程序（AGIS-TilePreview.exe）。", L"预览", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hwnd,
+                    AgisPickUiLang(L"无法启动内置瓦片预览程序（AGIS-TilePreview.exe）。",
+                                   L"Could not start built-in tile preview (AGIS-TilePreview.exe)."),
+                    capPreview, MB_OK | MB_ICONWARNING);
         return;
       }
-      WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入(内置瓦片采样)：" : L"[预览] 输出(内置瓦片采样)：") + path).c_str());
+      WriteConvertLog(hwnd,
+                      (std::wstring(inputSide ? AgisPickUiLang(L"[预览] 输入(内置瓦片采样)：",
+                                                               L"[Preview] Input (built-in tile sampling): ")
+                                              : AgisPickUiLang(L"[预览] 输出(内置瓦片采样)：",
+                                                               L"[Preview] Output (built-in tile sampling): ")) +
+                       path)
+                          .c_str());
       return;
     }
     HINSTANCE h = ShellExecuteW(hwnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(h) <= 32) {
-      MessageBoxW(hwnd, L"无法打开预览目标。", L"预览", MB_OK | MB_ICONWARNING);
+      MessageBoxW(hwnd, AgisPickUiLang(L"无法打开预览目标。", L"Could not open preview target."), capPreview,
+                  MB_OK | MB_ICONWARNING);
       return;
     }
   } else if (chosen == 2) {
     HINSTANCE h = ShellExecuteW(hwnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(h) <= 32) {
-      MessageBoxW(hwnd, L"无法用系统默认方式打开。", L"预览", MB_OK | MB_ICONWARNING);
+      MessageBoxW(hwnd, AgisPickUiLang(L"无法用系统默认方式打开。", L"Could not open with the system default app."),
+                  capPreview, MB_OK | MB_ICONWARNING);
       return;
     }
   } else {
     const std::wstring params = L"shell32.dll,OpenAs_RunDLL " + QuoteArg(path);
     HINSTANCE h = ShellExecuteW(hwnd, L"open", L"rundll32.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(h) <= 32) {
-      MessageBoxW(hwnd, L"无法打开“选择其他应用”。", L"预览", MB_OK | MB_ICONWARNING);
+      MessageBoxW(hwnd,
+                  AgisPickUiLang(L"无法打开“选择其他应用”。", L"Could not open \"Choose another app\"."), capPreview,
+                  MB_OK | MB_ICONWARNING);
       return;
     }
   }
-  WriteConvertLog(hwnd, (std::wstring(inputSide ? L"[预览] 输入：" : L"[预览] 输出：") + path).c_str());
+  WriteConvertLog(hwnd,
+                  (std::wstring(inputSide ? AgisPickUiLang(L"[预览] 输入：", L"[Preview] Input: ")
+                                          : AgisPickUiLang(L"[预览] 输出：", L"[Preview] Output: ")) +
+                   path)
+                      .c_str());
+}
+
+void RefreshConvertWindowL10nIfOpen() {
+  if (!g_hwndConvertDlg || !IsWindow(g_hwndConvertDlg)) {
+    return;
+  }
+  ApplyConvertWindowChromeAndCombosL10n(g_hwndConvertDlg);
+  RefreshConvertSettingPanels(g_hwndConvertDlg);
+  UpdateConvertCmdlinePreview(g_hwndConvertDlg);
+  LayoutConvertWindow(g_hwndConvertDlg);
 }
 
 void ShowDataConvertWindow(HWND owner) {
   if (g_hwndConvertDlg && IsWindow(g_hwndConvertDlg)) {
+    RefreshConvertWindowL10nIfOpen();
     ShowWindow(g_hwndConvertDlg, SW_SHOW);
     SetForegroundWindow(g_hwndConvertDlg);
     return;
   }
-  g_hwndConvertDlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kConvertClass, L"数据转换",
-                                     WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, CW_USEDEFAULT, CW_USEDEFAULT, 920, 620, owner, nullptr,
-                                     GetModuleHandleW(nullptr), nullptr);
+  g_hwndConvertDlg =
+      CreateWindowExW(WS_EX_DLGMODALFRAME, kConvertClass, AgisPickUiLang(L"数据转换", L"Data conversion"),
+                      WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, CW_USEDEFAULT, CW_USEDEFAULT, 920, 620,
+                      owner, nullptr, GetModuleHandleW(nullptr), nullptr);
   if (g_hwndConvertDlg) {
     AgisCenterWindowInMonitorWorkArea(g_hwndConvertDlg, owner ? owner : g_hwndMain);
     ShowWindow(g_hwndConvertDlg, SW_SHOW);
@@ -2765,10 +3223,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
       }
 
-      FillConvertTypeCombo(inType);
-      FillConvertTypeCombo(outType);
-      RebuildConvertSubtypeComboForSide(hwnd, true);
-      RebuildConvertSubtypeComboForSide(hwnd, false);
+      ApplyConvertWindowChromeAndCombosL10n(hwnd);
       SyncConvertInfoByType(hwnd, true);
       SyncConvertInfoByType(hwnd, false);
       for (int cid : {IDC_CONV_GRP_INPUT_PANEL, IDC_CONV_INPUT_TITLE, IDC_CONV_INPUT_TYPE, IDC_CONV_INPUT_TYPE_HELP,
@@ -2818,11 +3273,16 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         AttachConvertTooltip(hwnd, s_tip, IDC_CONV_OUTPUT_TYPE);
         AttachConvertTooltip(hwnd, s_tip, IDC_CONV_OUTPUT_SUBTYPE);
       }
-      WriteConvertLog(hwnd, L"[转换] 窗口已打开。");
-      WriteConvertLog(hwnd, L"[转换] 支持：GIS数据 / 模型数据 / 瓦片数据（含子类型）。");
+      WriteConvertLog(hwnd, AgisPickUiLang(L"[转换] 窗口已打开。", L"[Convert] Window opened."));
+      WriteConvertLog(hwnd, AgisPickUiLang(L"[转换] 支持：GIS数据 / 模型数据 / 瓦片数据（含子类型）。",
+                                           L"[Convert] Supports GIS / model / tile data (with subtypes)."));
       WriteConvertLog(hwnd,
-                      L"[提示] GIS→模型：Mesh 输出 OBJ+MTL+贴图；TIN/DEM 差异由 DEM 插值与网格拓扑参数控制；输出子类型为「点云」或路径为 .las/.laz 时输出点云（与模型→点云相同采样）。"
-                      L" 瓦片→模型仍为 OBJ。纯 OBJ↔LAS 互转请用「模型↔模型」。");
+                      AgisPickUiLang(
+                          L"[提示] GIS→模型：Mesh 输出 OBJ+MTL+贴图；TIN/DEM 差异由 DEM 插值与网格拓扑参数控制；输出子类型为「点云」或路径为 .las/.laz 时输出点云（与模型→点云相同采样）。"
+                          L" 瓦片→模型仍为 OBJ。纯 OBJ↔LAS 互转请用「模型↔模型」。",
+                          L"[Tip] GIS→model: mesh writes OBJ+MTL+textures; TIN/DEM via DEM interp & mesh topology; point cloud "
+                          L"when subtype is point cloud or path is .las/.laz. Tile→model stays OBJ. For pure OBJ↔LAS use "
+                          L"model↔model."));
       RefreshConvertSettingPanels(hwnd);
       g_convertLogCollapsed = false;
       g_convertMidScrollY = 0;
@@ -3062,7 +3522,8 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         const std::wstring p = PickConvertInputPathByUi(hwnd);
         if (!p.empty()) {
           SetWindowTextW(FindConvertCtrl(hwnd, IDC_CONV_INPUT_PATH), p.c_str());
-          WriteConvertLog(hwnd, (std::wstring(L"[路径] 输入：") + p).c_str());
+          WriteConvertLog(hwnd,
+                          (std::wstring(AgisPickUiLang(L"[路径] 输入：", L"[Path] Input: ")) + p).c_str());
           SyncConvertInfoByType(hwnd, true);
           RefreshConvertSettingPanels(hwnd);
           UpdateConvertCmdlinePreview(hwnd);
@@ -3077,7 +3538,8 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         const std::wstring p = PickConvertOutputPathByUi(hwnd);
         if (!p.empty()) {
           SetWindowTextW(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_PATH), p.c_str());
-          WriteConvertLog(hwnd, (std::wstring(L"[路径] 输出：") + p).c_str());
+          WriteConvertLog(hwnd,
+                          (std::wstring(AgisPickUiLang(L"[路径] 输出：", L"[Path] Output: ")) + p).c_str());
           SyncConvertInfoByType(hwnd, false);
           RefreshConvertSettingPanels(hwnd);
           UpdateConvertCmdlinePreview(hwnd);
@@ -3107,11 +3569,13 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       if (LOWORD(wParam) == IDC_CONV_COPY_CMD) {
         const std::wstring line = AssembleConvertProcessCommandLine(hwnd);
         CopyTextToClipboard(hwnd, line);
-        WriteConvertLog(hwnd, L"[命令] 已复制单行可执行命令到剪贴板。");
+        WriteConvertLog(hwnd, AgisPickUiLang(L"[命令] 已复制单行可执行命令到剪贴板。",
+                                             L"[Cmd] Copied single-line command to clipboard."));
         return 0;
       }
       if (LOWORD(wParam) == IDC_CONV_COPY_LOG) {
-        CopyControlTextToClipboard(hwnd, IDC_CONV_LOG, L"[输出] 日志已复制到剪贴板。");
+        CopyControlTextToClipboard(
+            hwnd, IDC_CONV_LOG, AgisPickUiLang(L"[输出] 日志已复制到剪贴板。", L"[Output] Log copied to clipboard."));
         return 0;
       }
       if (LOWORD(wParam) == IDC_CONV_TOGGLE_LOG) {
@@ -3121,27 +3585,32 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       }
       if (LOWORD(wParam) == IDC_CONV_RUN) {
         if (g_convertRunning) {
-          MessageBoxW(hwnd, L"已有转换任务在运行，请等待完成。", L"数据转换", MB_OK | MB_ICONINFORMATION);
+          MessageBoxW(hwnd, AgisPickUiLang(L"已有转换任务在运行，请等待完成。", L"A conversion is already running."),
+                      AgisPickUiLang(L"数据转换", L"Data conversion"), MB_OK | MB_ICONINFORMATION);
           return 0;
         }
         const std::wstring inType = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_INPUT_TYPE));
         const std::wstring inSub = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_INPUT_SUBTYPE));
         const std::wstring outType = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TYPE));
         const std::wstring outSub = GetComboSelectedText(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_SUBTYPE));
-        const std::wstring inLine = std::wstring(L"[任务] 输入：") + inType + L" / " + inSub;
-        const std::wstring outLine = std::wstring(L"[任务] 输出：") + outType + L" / " + outSub;
+        const std::wstring inLine =
+            std::wstring(AgisPickUiLang(L"[任务] 输入：", L"[Task] Input: ")) + inType + L" / " + inSub;
+        const std::wstring outLine =
+            std::wstring(AgisPickUiLang(L"[任务] 输出：", L"[Task] Output: ")) + outType + L" / " + outSub;
         WriteConvertLog(hwnd, inLine.c_str());
         WriteConvertLog(hwnd, outLine.c_str());
         g_convertProgressFloor = 0;
         g_convertRuntimeInfo = {};
         g_convertRuntimeInfo.startTick = GetTickCount64();
         g_convertRuntimeInfo.startEpoch = std::time(nullptr);
-        g_convertRuntimeInfo.stage = L"启动";
-        SetConvertProgress(hwnd, 15, L"处理中：正在启动后端命令行程序");
+        g_convertRuntimeInfo.stage = AgisPickUiLang(L"启动", L"Starting");
+        SetConvertProgress(hwnd, 15, std::wstring(AgisPickUiLang(L"处理中：正在启动后端命令行程序",
+                                                                  L"Running: starting backend CLI")));
         if (!RunConvertBackendAsync(hwnd)) {
-          SetConvertProgress(hwnd, 0, L"失败：后端未能启动");
+          SetConvertProgress(hwnd, 0, std::wstring(AgisPickUiLang(L"失败：后端未能启动", L"Failed: backend did not start")));
         } else {
-          SetConvertProgress(hwnd, 35, L"处理中：转换任务后台运行中");
+          SetConvertProgress(hwnd, 35, std::wstring(AgisPickUiLang(L"处理中：转换任务后台运行中",
+                                                                    L"Running: conversion in background")));
         }
         return 0;
       }
@@ -3152,7 +3621,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         const DWORD wait = WaitForSingleObject(g_convertPi.hProcess, 0);
         if (wait == WAIT_TIMEOUT) {
           const int next = (std::min)(95, g_convertProgressFloor + 1);
-          SetConvertProgress(hwnd, next, L"处理中：后端执行中");
+          SetConvertProgress(hwnd, next, std::wstring(AgisPickUiLang(L"处理中：后端执行中", L"Running: backend working")));
           return 0;
         }
         KillTimer(hwnd, kConvertPollTimerId);
@@ -3167,11 +3636,15 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         ZeroMemory(&g_convertPi, sizeof(g_convertPi));
         g_convertRunning = false;
-        WriteConvertLog(hwnd, (std::wstring(L"[后端] 退出码：") + std::to_wstring(code)).c_str());
+        WriteConvertLog(hwnd,
+                        (std::wstring(AgisPickUiLang(L"[后端] 退出码：", L"[Backend] exit code: ")) + std::to_wstring(code))
+                            .c_str());
         const bool ok = (code == 0);
-        SetConvertProgress(hwnd, ok ? 100 : 0, ok ? L"完成：转换成功" : L"失败：后端执行出错");
+        SetConvertProgress(hwnd, ok ? 100 : 0,
+                           std::wstring(ok ? AgisPickUiLang(L"完成：转换成功", L"Done: success")
+                                           : AgisPickUiLang(L"失败：后端执行出错", L"Failed: backend error")));
         if (ok) {
-          g_convertRuntimeInfo.stage = L"完成";
+          g_convertRuntimeInfo.stage = AgisPickUiLang(L"完成", L"Done");
           g_convertRuntimeInfo.io = L"-";
         }
         return 0;

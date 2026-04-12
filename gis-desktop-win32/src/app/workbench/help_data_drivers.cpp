@@ -1,5 +1,6 @@
 #include "workbench/help_data_drivers.h"
 
+#include "utils/agis_ui_l10n.h"
 #include "utils/ui_font.h"
 #include "utils/ui_theme.h"
 #include "core/main_globals.h"
@@ -26,6 +27,74 @@ constexpr int kIdHelpEdit = 70001;
 constexpr int kIdHelpOk = 70002;
 const wchar_t kHelpDlgClass[] = L"AGISHelpDataDriversDlg";
 
+#if GIS_DESKTOP_HAVE_GDAL
+static void AppendRegisteredGdalDrivers(std::wstring* s) {
+  if (!s) {
+    return;
+  }
+  const bool en = AgisGetUiLanguage() == AgisUiLanguage::kEn;
+  *s += en ? L"4) GDAL drivers registered in this build (runtime enum, sorted by short name)\r\n"
+           : L"四、本构建已注册的 GDAL 驱动（运行时枚举，按短名排序）\r\n";
+  AgisEnsureGdalDataPath();
+  GDALAllRegister();
+  GDALDriverManager* dm = GetGDALDriverManager();
+  const int n = dm ? dm->GetDriverCount() : 0;
+  if (n <= 0) {
+    *s += AgisPickUiLang(L"  （未能枚举驱动。）\r\n", L"  (Could not enumerate drivers.)\r\n");
+    return;
+  }
+  struct Row {
+    std::wstring sortKey;
+    std::wstring line;
+  };
+  std::vector<Row> rows;
+  rows.reserve(static_cast<size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    GDALDriver* drv = dm->GetDriver(i);
+    if (!drv) {
+      continue;
+    }
+    const char* shortName = drv->GetDescription();
+    const char* longName = drv->GetMetadataItem(GDAL_DMD_LONGNAME);
+    const bool hasVector = drv->GetMetadataItem(GDAL_DCAP_VECTOR) != nullptr;
+    const bool hasRaster = drv->GetMetadataItem(GDAL_DCAP_RASTER) != nullptr;
+    const bool hasMultidim = drv->GetMetadataItem(GDAL_DCAP_MULTIDIM_RASTER) != nullptr;
+    std::wstring wShort = WideFromUtf8(shortName ? shortName : "");
+    std::wstring wLong = WideFromUtf8(longName ? longName : "");
+    std::wstring tags;
+    if (hasRaster) {
+      tags += AgisPickUiLang(L"栅格 ", L"Raster ");
+    }
+    if (hasVector) {
+      tags += AgisPickUiLang(L"矢量 ", L"Vector ");
+    }
+    if (hasMultidim) {
+      tags += AgisPickUiLang(L"多维栅格 ", L"Multidim ");
+    }
+    if (tags.empty()) {
+      tags = AgisPickUiLang(L"其它 ", L"Other ");
+    }
+    std::wstring line = L"  ";
+    line += wShort;
+    line += L" — ";
+    line += wLong.empty() ? wShort : wLong;
+    line += L"  [";
+    line += tags;
+    line += L"]\r\n";
+    std::wstring key = wShort;
+    std::transform(key.begin(), key.end(), key.begin(), [](wchar_t c) { return std::towlower(c); });
+    rows.push_back({std::move(key), std::move(line)});
+  }
+  std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.sortKey < b.sortKey; });
+  wchar_t head[64]{};
+  _snwprintf_s(head, _TRUNCATE, en ? L"  (%d drivers)\r\n" : L"  （共 %d 个驱动）\r\n", n);
+  *s += head;
+  for (const auto& r : rows) {
+    *s += r.line;
+  }
+}
+#endif
+
 static HBRUSH g_helpDlgBgLight = nullptr;
 static HBRUSH g_helpDlgBgDark = nullptr;
 static HBRUSH g_helpEditBgLight = nullptr;
@@ -34,6 +103,55 @@ static HBRUSH g_helpBtnBgLight = nullptr;
 static HBRUSH g_helpBtnBgDark = nullptr;
 
 std::wstring BuildDataDriversHelpText() {
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    std::wstring s;
+    s +=
+        L"[Data drivers]\r\n"
+        L"\r\n"
+        L"1) AGIS layer types (application)\r\n"
+        L"  Name (as in Add Layer)     Description\r\n"
+        L"  ─────────────────────────────────────────────────────────\r\n"
+        L"  GDAL (local file)   Open a local path or GDAL VSI virtual path.\r\n"
+        L"  TMS / XYZ          Standard tile URL with {z}, {x}, {y} (GDAL XYZ mini-driver).\r\n"
+        L"  WMTS               OGC WMTS — paste GetCapabilities or service URL (GDAL WMTS).\r\n"
+        L"  ArcGIS REST JSON   Esri MapServer / ImageServer REST endpoint (GDAL JSON tiles).\r\n"
+        L"  SOAP (placeholder) Not implemented.\r\n"
+        L"  WMS (placeholder)  Classic KVP WMS not implemented.\r\n"
+        L"\r\n"
+        L"2) How to supply a data source\r\n"
+        L"  1) Layers → Add Data Layer… or the toolbar Add Layer button.\r\n"
+        L"  2) Pick a type in the dialog, then OK.\r\n"
+        L"  3) Local file (GDAL): file picker; examples: .tif .tiff .png .jpg .jp2 .img .shp .geojson .json "
+        L".gpkg .kml .vrt .osm .pbf …\r\n"
+        L"     Put sidecar files (e.g. .shp + .dbf) in the same folder when required.\r\n"
+        L"  4) Network URL (TMS / WMTS / ArcGIS REST): paste into the URL box, e.g.\r\n"
+        L"     TMS:  https://tile.openstreetmap.org/{z}/{x}/{y}.png\r\n"
+        L"     WMTS: (service GetCapabilities or base URL)\r\n"
+        L"     ArcGIS: https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer\r\n"
+        L"  5) Replace source: use the layer list or properties panel (same rules as add).\r\n"
+        L"\r\n"
+        L"3) GDAL and format support\r\n"
+        L"  Upstream GDAL supports many raster, vector, and network drivers; what you get depends on CMake "
+        L"options\r\n"
+        L"  and dependencies (SQLite, curl, PROJ, …). Drivers not built in will not appear in the list below.\r\n"
+        L"  Common: raster (GeoTIFF, JPEG2000, VRT…), vector (Shapefile, GeoPackage, KML, OSM…), network "
+        L"(XYZ, WMTS…).\r\n"
+        L"  If a format is not recognized: verify the file and whether this build includes the driver.\r\n"
+        L"  OpenStreetMap: .osm.pbf needs OGR OSM + SQLite3 (see table). .osm XML may need Expat; if Expat is "
+        L"disabled,\r\n"
+        L"  use .pbf or convert with ogr2ogr.\r\n"
+        L"\r\n";
+#if GIS_DESKTOP_HAVE_GDAL
+    AppendRegisteredGdalDrivers(&s);
+#else
+    s += L"4) GDAL\r\n"
+         L"  This build has GIS_DESKTOP_HAVE_GDAL disabled; drivers cannot be enumerated. Rebuild with GDAL "
+         L"enabled.\r\n";
+#endif
+    s += L"\r\n— End —\r\n";
+    return s;
+  }
+
   std::wstring s;
   s +=
       L"【数据驱动说明】\r\n"
@@ -70,65 +188,7 @@ std::wstring BuildDataDriversHelpText() {
       L"\r\n";
 
 #if GIS_DESKTOP_HAVE_GDAL
-  s += L"四、本构建已注册的 GDAL 驱动（运行时枚举，按短名排序）\r\n";
-  AgisEnsureGdalDataPath();
-  GDALAllRegister();
-  GDALDriverManager* dm = GetGDALDriverManager();
-  const int n = dm ? dm->GetDriverCount() : 0;
-  if (n <= 0) {
-    s += L"  （未能枚举驱动。）\r\n";
-  } else {
-    struct Row {
-      std::wstring sortKey;
-      std::wstring line;
-    };
-    std::vector<Row> rows;
-    rows.reserve(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-      GDALDriver* drv = dm->GetDriver(i);
-      if (!drv) {
-        continue;
-      }
-      const char* shortName = drv->GetDescription();
-      const char* longName = drv->GetMetadataItem(GDAL_DMD_LONGNAME);
-      const bool hasVector = drv->GetMetadataItem(GDAL_DCAP_VECTOR) != nullptr;
-      const bool hasRaster = drv->GetMetadataItem(GDAL_DCAP_RASTER) != nullptr;
-      const bool hasMultidim = drv->GetMetadataItem(GDAL_DCAP_MULTIDIM_RASTER) != nullptr;
-      std::wstring wShort = WideFromUtf8(shortName ? shortName : "");
-      std::wstring wLong = WideFromUtf8(longName ? longName : "");
-      std::wstring tags;
-      if (hasRaster) {
-        tags += L"栅格 ";
-      }
-      if (hasVector) {
-        tags += L"矢量 ";
-      }
-      if (hasMultidim) {
-        tags += L"多维栅格 ";
-      }
-      if (tags.empty()) {
-        tags = L"其它 ";
-      }
-      std::wstring line = L"  ";
-      line += wShort;
-      line += L" — ";
-      line += wLong.empty() ? wShort : wLong;
-      line += L"  [";
-      line += tags;
-      line += L"]\r\n";
-      std::wstring key = wShort;
-      std::transform(key.begin(), key.end(), key.begin(), [](wchar_t c) { return std::towlower(c); });
-      rows.push_back({std::move(key), std::move(line)});
-    }
-    std::sort(rows.begin(), rows.end(),
-              [](const Row& a, const Row& b) { return a.sortKey < b.sortKey; });
-    wchar_t head[64]{};
-    _snwprintf_s(head, _TRUNCATE, L"  （共 %d 个驱动）\r\n", n);
-    s += head;
-    for (const auto& r : rows) {
-      s += r.line;
-    }
-  }
+  AppendRegisteredGdalDrivers(&s);
 #else
   s +=
       L"四、GDAL\r\n"
@@ -155,8 +215,8 @@ LRESULT CALLBACK HelpDataDriversDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                               WS_TABSTOP | WS_HSCROLL | ES_AUTOHSCROLL,
                           12, 12, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHelpEdit)), inst,
                           nullptr);
-      CreateWindowW(L"BUTTON", L"关闭", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP, 12, 12, 100, 28, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHelpOk)), inst, nullptr);
+      CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::HelpBtnClose), WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
+                    12, 12, 100, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHelpOk)), inst, nullptr);
       if (hEdit) {
         SendMessageW(hEdit, EM_SETLIMITTEXT, 0, 0);
       }
@@ -318,7 +378,7 @@ void ShowDataDriversHelp(HWND owner) {
   const int dw = wr.right - wr.left;
   const int dh = wr.bottom - wr.top;
 
-  HWND dlg = CreateWindowExW(ex, kHelpDlgClass, L"数据驱动说明", style, x, y, dw, dh, owner, nullptr,
+  HWND dlg = CreateWindowExW(ex, kHelpDlgClass, AgisTr(AgisUiStr::HelpDlgTitle), style, x, y, dw, dh, owner, nullptr,
                              GetModuleHandleW(nullptr), body);
   if (!dlg) {
     delete body;

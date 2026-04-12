@@ -6,6 +6,7 @@
 #include "map_engine/map_gpu.h"
 #include "map_engine/map_projection.h"
 #include "utils/ui_theme.h"
+#include "utils/agis_ui_l10n.h"
 
 #include <array>
 #include <cstdio>
@@ -236,7 +237,9 @@ void AgisCopyWorkbenchUiStateJsonToClipboard(HWND mainHwnd) {
   j += "    \"layerCount\": " + std::to_string(eng.GetLayerCount()) + ",\n";
   j += "    \"showLatLonGrid\": " + std::string(doc.GetShowLatLonGrid() ? "true" : "false") + ",\n";
   j += "    \"displayProjection\": ";
-  AppendEscapedJsonUtf8(&j, WideToUtf8(MapProj_MenuLabel(doc.GetDisplayProjection())));
+  AppendEscapedJsonUtf8(
+      &j, WideToUtf8(AgisGetUiLanguage() == AgisUiLanguage::kEn ? MapProj_MenuLabelEn(doc.GetDisplayProjection())
+                                                                 : MapProj_MenuLabel(doc.GetDisplayProjection())));
   j += ",\n";
   j += "    \"displayProjectionIndex\": " + std::to_string(static_cast<int>(doc.GetDisplayProjection())) + ",\n";
   j += "    \"scalePercentUi\": " + std::to_string(doc.ScalePercentForUi()) + ",\n";
@@ -297,9 +300,9 @@ void AgisCopyWorkbenchUiStateJsonToClipboard(HWND mainHwnd) {
   }();
 
   if (wjson.empty()) {
-    AppLogLine(L"[调试] 界面信息 JSON 生成失败（编码）。");
+    AppLogLine(AgisTr(AgisUiStr::DebugJsonEncodeFail));
     return;
   }
   CopyTextToClipboard(mainHwnd, wjson);
-  AppLogLine(L"[调试] 已复制界面状态 JSON 到剪贴板（UTF-16 文本）。");
+  AppLogLine(AgisTr(AgisUiStr::DebugJsonCopied));
 }

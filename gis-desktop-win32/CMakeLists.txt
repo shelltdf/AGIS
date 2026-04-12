@@ -15,6 +15,15 @@ project(agis_desktop LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# IDE（clangd / Cursor C++）：生成 compile_commands.json；不需要时在 CMake GUI 关掉 CMAKE_EXPORT_COMPILE_COMMANDS。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Export compile_commands.json for IDE/LSP")
+
+if(MSVC)
+  # 单次 cl 调用内并行编译多个翻译单元，缩短大目标的纯编译阶段（与 cmake --build -j 互补；机器吃紧可去掉 /MP）
+  add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/MP>)
+  add_compile_options($<$<COMPILE_LANG_AND_ID:C,MSVC>:/MP>)
+endif()
+
 if(APPLE)
   enable_language(OBJCXX)
 endif()

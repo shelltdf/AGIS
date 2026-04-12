@@ -1,5 +1,7 @@
 #include "map_engine/map_layer_driver.h"
 
+#include "utils/agis_ui_l10n.h"
+
 #include <string>
 
 void PlaceholderMapLayerDriver::appendDriverProperties(GDALDataset* ds, const std::wstring& sourcePath,
@@ -9,7 +11,7 @@ void PlaceholderMapLayerDriver::appendDriverProperties(GDALDataset* ds, const st
   if (!out) {
     return;
   }
-  *out += L"【占位驱动】此协议尚未接入真实数据源。\r\n";
+  *out += AgisTr(AgisUiStr::PlaceholderDriverBody);
 }
 
 void PlaceholderMapLayerDriver::appendSourceProperties(GDALDataset* ds, const std::wstring& sourcePath,
@@ -18,18 +20,18 @@ void PlaceholderMapLayerDriver::appendSourceProperties(GDALDataset* ds, const st
   if (!out) {
     return;
   }
-  *out += L"【数据源】\r\n";
-  *out += sourcePath.empty() ? L"（未填写）\r\n" : sourcePath + L"\r\n";
+  *out += AgisPickUiLang(L"【数据源】\r\n", L"[Data source]\r\n");
+  *out += sourcePath.empty() ? AgisPickUiLang(L"（未填写）\r\n", L"(not set)\r\n") : sourcePath + L"\r\n";
 }
 
 bool PlaceholderMapLayerDriver::buildOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
-  err = L"占位驱动不支持金字塔。";
+  err = AgisTr(AgisUiStr::PlaceholderNoPyramid);
   return false;
 }
 
 bool PlaceholderMapLayerDriver::clearOverviews(GDALDataset* ds, std::wstring& err) {
   (void)ds;
-  err = L"占位驱动不支持金字塔。";
+  err = AgisTr(AgisUiStr::PlaceholderNoPyramid);
   return false;
 }

@@ -31,6 +31,7 @@ bool MapProj_IsEngineAvailable();
 bool MapProj_IsProjectionSelectable(MapDisplayProjection p);
 
 const wchar_t* MapProj_MenuLabel(MapDisplayProjection p);
+const wchar_t* MapProj_MenuLabelEn(MapDisplayProjection p);
 
 void MapProj_GeoLonLatToScreen(MapDisplayProjection proj, const ViewExtent& geoView, int cw, int ch, double lon,
                                double lat, double* sx, double* sy);

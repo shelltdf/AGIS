@@ -1,5 +1,7 @@
 #include "map_engine/map_layer.h"
 
+#include "utils/agis_ui_l10n.h"
+
 #include <string>
 #include <utility>
 
@@ -34,37 +36,37 @@ std::wstring MapLayer::sourcePathForDriver() const {
 const wchar_t* MapLayerKindLabel(MapLayerKind k) {
   switch (k) {
     case MapLayerKind::kRasterGdal:
-      return L"栅格（GDAL）";
+      return AgisTr(AgisUiStr::LayerKindRasterGdal);
     case MapLayerKind::kVectorGdal:
-      return L"矢量（GDAL）";
+      return AgisTr(AgisUiStr::LayerKindVectorGdal);
     case MapLayerKind::kOther:
     default:
-      return L"其他";
+      return AgisTr(AgisUiStr::LayerKindOther);
   }
 }
 
 const wchar_t* MapLayerDriverKindLabel(MapLayerDriverKind k) {
   switch (k) {
     case MapLayerDriverKind::kGdalFile:
-      return L"GDAL 本地/虚拟文件";
+      return AgisTr(AgisUiStr::LayerDriverGdalFile);
     case MapLayerDriverKind::kTmsXyz:
-      return L"TMS / XYZ";
+      return AgisTr(AgisUiStr::LayerDriverTmsXyz);
     case MapLayerDriverKind::kWmts:
-      return L"WMTS（OGC Web Map Tile Service）";
+      return AgisTr(AgisUiStr::LayerDriverWmts);
     case MapLayerDriverKind::kArcGisRestJson:
-      return L"ArcGIS REST JSON（Services Directory，GDAL WMS）";
+      return AgisTr(AgisUiStr::LayerDriverArcGisJson);
     case MapLayerDriverKind::kSoapPlaceholder:
-      return L"OGC SOAP（占位）";
+      return AgisTr(AgisUiStr::LayerDriverSoapPh);
     case MapLayerDriverKind::kWmsPlaceholder:
-      return L"WMS KVP（占位）";
+      return AgisTr(AgisUiStr::LayerDriverWmsPh);
     default:
-      return L"未知";
+      return AgisTr(AgisUiStr::LayerUnknown);
   }
 }
 
 bool MapLayer::BuildOverviews(std::wstring& err) {
   if (!driver_) {
-    err = L"此图层类型不支持金字塔。";
+    err = AgisTr(AgisUiStr::LayerErrOvrUnsupported);
     return false;
   }
   return driver_->buildOverviews(gdalDatasetForDriver(), err);
@@ -72,7 +74,7 @@ bool MapLayer::BuildOverviews(std::wstring& err) {
 
 bool MapLayer::ClearOverviews(std::wstring& err) {
   if (!driver_) {
-    err = L"此图层类型不支持金字塔。";
+    err = AgisTr(AgisUiStr::LayerErrOvrUnsupported);
     return false;
   }
   return driver_->clearOverviews(gdalDatasetForDriver(), err);

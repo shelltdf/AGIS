@@ -13,14 +13,28 @@ AGIS_UI_API void UiGdiplusShutdown();
 AGIS_UI_API void UiSetPanelThemeDark(bool dark);
 AGIS_UI_API bool UiGetPanelThemeDark();
 
+/** 由宿主传入本地化 Dock 顶栏/卡片标题（避免 ui_engine 反向依赖 common）。 */
+struct UiDockChromeText {
+  const wchar_t* layerPanelTitle;
+  const wchar_t* layerPanelSubtitle;
+  const wchar_t* propsDockTitle;
+  const wchar_t* propsDockSubtitleDefault;
+  const wchar_t* dockSideChipRight;
+  const wchar_t* driverCardTitle;
+  const wchar_t* driverCardSubtitle;
+  const wchar_t* sourceCardTitle;
+  const wchar_t* sourceCardSubtitle;
+};
+
 /** 左侧「图层」Dock 顶区渐变、标题与副标题（GDI+）。 */
-AGIS_UI_API void UiPaintLayerPanel(HDC hdc, const RECT& rc);
+AGIS_UI_API void UiPaintLayerPanel(HDC hdc, const RECT& rc, const UiDockChromeText* chrome);
 
 /** 右侧「图层属性」Dock：卡片式信息区（GDI+）。 */
-AGIS_UI_API void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, const wchar_t* body);
-/** 仅绘制 Dock 装饰与双卡片区；详细文本由子控件 EDIT 承载。layerSubtitleLine 为空则用默认副标题。 */
+AGIS_UI_API void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const UiDockChromeText* chrome, const wchar_t* nameLine,
+                                        const wchar_t* body);
+/** 仅绘制 Dock 装饰与双卡片区；详细文本由子控件 EDIT 承载。layerSubtitleLine 为空则用 chrome 内默认副标题。 */
 AGIS_UI_API void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard, const RECT* sourceCard,
-                                            const wchar_t* layerSubtitleLine);
+                                            const wchar_t* layerSubtitleLine, const UiDockChromeText* chrome);
 
 /** 地图区右下角半透明提示条（GDI+，在 GDI BitBlt 之后绘制到同一 DC）。 */
 AGIS_UI_API void UiPaintMapHintOverlay(HDC hdc, const RECT& client, const wchar_t* hint);

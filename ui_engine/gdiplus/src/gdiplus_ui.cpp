@@ -38,7 +38,7 @@ void UiGdiplusShutdown() {
   }
 }
 
-void UiPaintLayerPanel(HDC hdc, const RECT& rc) {
+void UiPaintLayerPanel(HDC hdc, const RECT& rc, const UiDockChromeText* chrome) {
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
   g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
@@ -75,11 +75,15 @@ void UiPaintLayerPanel(HDC hdc, const RECT& rc) {
   fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
 
   const float textW = std::max(40.0f, static_cast<float>(w) - 24.0f - 12.0f);
-  g.DrawString(L"图层", -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBrush);
-  g.DrawString(L"Dock · 数据列表", -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 18.0f), &fmt, &subBrush);
+  const wchar_t* t1 = (chrome && chrome->layerPanelTitle && chrome->layerPanelTitle[0]) ? chrome->layerPanelTitle : L"";
+  const wchar_t* t2 =
+      (chrome && chrome->layerPanelSubtitle && chrome->layerPanelSubtitle[0]) ? chrome->layerPanelSubtitle : L"";
+  g.DrawString(t1, -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBrush);
+  g.DrawString(t2, -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 18.0f), &fmt, &subBrush);
 }
 
-void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, const wchar_t* body) {
+void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const UiDockChromeText* chrome, const wchar_t* nameLine,
+                            const wchar_t* body) {
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
   g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
@@ -122,30 +126,37 @@ void UiPaintLayerPropsPanel(HDC hdc, const RECT& rc, const wchar_t* nameLine, co
   const bool showChip = static_cast<float>(w) >= chipW + 100.0f;
   const float reserveRight = showChip ? (chipW + 16.0f) : 12.0f;
   const float textW = std::max(40.0f, static_cast<float>(w) - 24.0f - reserveRight);
-  g.DrawString(L"图层属性", -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBr);
-  g.DrawString(L"Dock · 选中项", -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 18.0f), &fmt, &subBr);
+  const wchar_t* ht =
+      (chrome && chrome->propsDockTitle && chrome->propsDockTitle[0]) ? chrome->propsDockTitle : L"";
+  const wchar_t* hs = (chrome && chrome->propsDockSubtitleDefault && chrome->propsDockSubtitleDefault[0])
+                          ? chrome->propsDockSubtitleDefault
+                          : L"";
+  g.DrawString(ht, -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBr);
+  g.DrawString(hs, -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 18.0f), &fmt, &subBr);
 
   if (showChip) {
     const float chipX = x0 + static_cast<float>(w) - chipW - 12.0f;
     const float chipY = y0 + 10.0f;
-    Gdiplus::GraphicsPath chip;
+    Gdiplus::GraphicsPath chipPath;
     const float rr = 4.0f;
-    chip.AddArc(chipX + chipW - 2.0f * rr, chipY, 2.0f * rr, 2.0f * rr, 270, 90);
-    chip.AddLine(chipX + chipW, chipY + rr, chipX + chipW, chipY + chipH - rr);
-    chip.AddArc(chipX + chipW - 2.0f * rr, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 0, 90);
-    chip.AddLine(chipX + chipW - rr, chipY + chipH, chipX + rr, chipY + chipH);
-    chip.AddArc(chipX, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 90, 90);
-    chip.AddLine(chipX, chipY + chipH - rr, chipX, chipY + rr);
-    chip.AddArc(chipX, chipY, 2.0f * rr, 2.0f * rr, 180, 90);
-    chip.CloseFigure();
+    chipPath.AddArc(chipX + chipW - 2.0f * rr, chipY, 2.0f * rr, 2.0f * rr, 270, 90);
+    chipPath.AddLine(chipX + chipW, chipY + rr, chipX + chipW, chipY + chipH - rr);
+    chipPath.AddArc(chipX + chipW - 2.0f * rr, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 0, 90);
+    chipPath.AddLine(chipX + chipW - rr, chipY + chipH, chipX + rr, chipY + chipH);
+    chipPath.AddArc(chipX, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 90, 90);
+    chipPath.AddLine(chipX, chipY + chipH - rr, chipX, chipY + rr);
+    chipPath.AddArc(chipX, chipY, 2.0f * rr, 2.0f * rr, 180, 90);
+    chipPath.CloseFigure();
     Gdiplus::SolidBrush chipBg(g_panelThemeDark ? Gdiplus::Color(200, 70, 78, 92) : Gdiplus::Color(200, 255, 245, 250));
     Gdiplus::SolidBrush chipFg(
         g_panelThemeDark ? Gdiplus::Color(255, 120, 220, 255) : Gdiplus::Color(255, 0, 120, 110));
-    g.FillPath(&chipBg, &chip);
+    g.FillPath(&chipBg, &chipPath);
     Gdiplus::StringFormat cfmt{};
     cfmt.SetAlignment(Gdiplus::StringAlignmentCenter);
     cfmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    g.DrawString(L"右", -1, &subFont, Gdiplus::RectF(chipX, chipY, chipW, chipH), &cfmt, &chipFg);
+    const wchar_t* chipText =
+        (chrome && chrome->dockSideChipRight && chrome->dockSideChipRight[0]) ? chrome->dockSideChipRight : L"";
+    g.DrawString(chipText, -1, &subFont, Gdiplus::RectF(chipX, chipY, chipW, chipH), &cfmt, &chipFg);
   }
 
   const float cardX = x0 + 12.0f;
@@ -254,7 +265,7 @@ void DrawPropsCardHeader(Gdiplus::Graphics& g, const RECT& cardRc, const wchar_t
 }  // namespace
 
 void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard, const RECT* sourceCard,
-                                const wchar_t* layerSubtitleLine) {
+                                const wchar_t* layerSubtitleLine, const UiDockChromeText* chrome) {
   Gdiplus::Graphics g(hdc);
   g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
   g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
@@ -295,51 +306,58 @@ void UiPaintLayerPropsDockFrame(HDC hdc, const RECT& rc, const RECT* driverCard,
   const bool showChip = static_cast<float>(w) >= chipW + 100.0f;
   const float reserveRight = showChip ? (chipW + 16.0f) : 12.0f;
   const float textW = std::max(40.0f, static_cast<float>(w) - 24.0f - reserveRight);
-  g.DrawString(L"图层属性", -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBr);
-  const wchar_t* sub =
-      (layerSubtitleLine && layerSubtitleLine[0]) ? layerSubtitleLine : L"Dock · 选中项";
+  const wchar_t* ht =
+      (chrome && chrome->propsDockTitle && chrome->propsDockTitle[0]) ? chrome->propsDockTitle : L"";
+  const wchar_t* subdef =
+      (chrome && chrome->propsDockSubtitleDefault && chrome->propsDockSubtitleDefault[0])
+          ? chrome->propsDockSubtitleDefault
+          : L"";
+  g.DrawString(ht, -1, &titleFont, Gdiplus::RectF(x0 + 12.0f, y0 + 10.0f, textW, 22.0f), &fmt, &titleBr);
+  const wchar_t* sub = (layerSubtitleLine && layerSubtitleLine[0]) ? layerSubtitleLine : subdef;
   g.DrawString(sub, -1, &subFont, Gdiplus::RectF(x0 + 12.0f, y0 + 30.0f, textW, 36.0f), &fmt, &subBr);
 
   if (showChip) {
     const float chipX = x0 + static_cast<float>(w) - chipW - 12.0f;
     const float chipY = y0 + 10.0f;
-    Gdiplus::GraphicsPath chip;
+    Gdiplus::GraphicsPath chipPath;
     const float rr = 4.0f;
-    chip.AddArc(chipX + chipW - 2.0f * rr, chipY, 2.0f * rr, 2.0f * rr, 270, 90);
-    chip.AddLine(chipX + chipW, chipY + rr, chipX + chipW, chipY + chipH - rr);
-    chip.AddArc(chipX + chipW - 2.0f * rr, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 0, 90);
-    chip.AddLine(chipX + chipW - rr, chipY + chipH, chipX + rr, chipY + chipH);
-    chip.AddArc(chipX, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 90, 90);
-    chip.AddLine(chipX, chipY + chipH - rr, chipX, chipY + rr);
-    chip.AddArc(chipX, chipY, 2.0f * rr, 2.0f * rr, 180, 90);
-    chip.CloseFigure();
+    chipPath.AddArc(chipX + chipW - 2.0f * rr, chipY, 2.0f * rr, 2.0f * rr, 270, 90);
+    chipPath.AddLine(chipX + chipW, chipY + rr, chipX + chipW, chipY + chipH - rr);
+    chipPath.AddArc(chipX + chipW - 2.0f * rr, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 0, 90);
+    chipPath.AddLine(chipX + chipW - rr, chipY + chipH, chipX + rr, chipY + chipH);
+    chipPath.AddArc(chipX, chipY + chipH - 2.0f * rr, 2.0f * rr, 2.0f * rr, 90, 90);
+    chipPath.AddLine(chipX, chipY + chipH - rr, chipX, chipY + rr);
+    chipPath.AddArc(chipX, chipY, 2.0f * rr, 2.0f * rr, 180, 90);
+    chipPath.CloseFigure();
     Gdiplus::SolidBrush chipBg(g_panelThemeDark ? Gdiplus::Color(200, 70, 78, 92) : Gdiplus::Color(200, 255, 245, 250));
     Gdiplus::SolidBrush chipFg(
         g_panelThemeDark ? Gdiplus::Color(255, 120, 220, 255) : Gdiplus::Color(255, 0, 120, 110));
-    g.FillPath(&chipBg, &chip);
+    g.FillPath(&chipBg, &chipPath);
     Gdiplus::StringFormat cfmt{};
     cfmt.SetAlignment(Gdiplus::StringAlignmentCenter);
     cfmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    g.DrawString(L"右", -1, &subFont, Gdiplus::RectF(chipX, chipY, chipW, chipH), &cfmt, &chipFg);
+    const wchar_t* chipText =
+        (chrome && chrome->dockSideChipRight && chrome->dockSideChipRight[0]) ? chrome->dockSideChipRight : L"";
+    g.DrawString(chipText, -1, &subFont, Gdiplus::RectF(chipX, chipY, chipW, chipH), &cfmt, &chipFg);
   }
 
   const bool dual = driverCard && sourceCard && driverCard->right > driverCard->left + 8 &&
                     sourceCard->right > sourceCard->left + 8;
+  const wchar_t* dct = (chrome && chrome->driverCardTitle) ? chrome->driverCardTitle : L"";
+  const wchar_t* dcs = (chrome && chrome->driverCardSubtitle) ? chrome->driverCardSubtitle : L"";
+  const wchar_t* sct = (chrome && chrome->sourceCardTitle) ? chrome->sourceCardTitle : L"";
+  const wchar_t* scs = (chrome && chrome->sourceCardSubtitle) ? chrome->sourceCardSubtitle : L"";
   if (dual) {
     if (g_panelThemeDark) {
       PaintPropsSectionCard(g, *driverCard, Gdiplus::Color(255, 44, 48, 56), Gdiplus::Color(110, 100, 150, 190));
-      DrawPropsCardHeader(g, *driverCard, L"驱动属性", L"驱动类型、金字塔与数据集访问",
-                          Gdiplus::Color(255, 80, 200, 255));
+      DrawPropsCardHeader(g, *driverCard, dct, dcs, Gdiplus::Color(255, 80, 200, 255));
       PaintPropsSectionCard(g, *sourceCard, Gdiplus::Color(255, 46, 50, 58), Gdiplus::Color(110, 110, 160, 185));
-      DrawPropsCardHeader(g, *sourceCard, L"数据源属性", L"路径、连接串与 GDAL 元数据",
-                          Gdiplus::Color(255, 100, 220, 200));
+      DrawPropsCardHeader(g, *sourceCard, sct, scs, Gdiplus::Color(255, 100, 220, 200));
     } else {
       PaintPropsSectionCard(g, *driverCard, Gdiplus::Color(255, 252, 254, 255), Gdiplus::Color(100, 175, 205, 235));
-      DrawPropsCardHeader(g, *driverCard, L"驱动属性", L"驱动类型、金字塔与数据集访问",
-                          Gdiplus::Color(255, 0, 130, 175));
+      DrawPropsCardHeader(g, *driverCard, dct, dcs, Gdiplus::Color(255, 0, 130, 175));
       PaintPropsSectionCard(g, *sourceCard, Gdiplus::Color(255, 254, 255, 252), Gdiplus::Color(100, 195, 210, 220));
-      DrawPropsCardHeader(g, *sourceCard, L"数据源属性", L"路径、连接串与 GDAL 元数据",
-                          Gdiplus::Color(255, 0, 150, 130));
+      DrawPropsCardHeader(g, *sourceCard, sct, scs, Gdiplus::Color(255, 0, 150, 130));
     }
   } else {
     const float cardX = x0 + 12.0f;

@@ -6,10 +6,10 @@
 
 #include "core/resource.h"
 #include "utils/ui_font.h"
+#include "utils/agis_ui_l10n.h"
 #include "common/app_core/main_app.h"
 #include "core/main_globals.h"
 #include "map_engine/map_engine.h"
-#include "map_engine/map_gpu.h"
 #include "map_engine/map_projection.h"
 
 #include <cstring>
@@ -60,7 +60,9 @@ void SyncViewMenu(HWND hwnd) {
   } else if (rb == MapRenderBackend::kBgfxAuto) {
     rid = ID_VIEW_RENDER_BGFX_AUTO;
   }
-  CheckMenuRadioItem(view, ID_VIEW_RENDER_FIRST, ID_VIEW_RENDER_LAST, rid, MF_BYCOMMAND);
+  if (g_hmenuRenderSub) {
+    CheckMenuRadioItem(g_hmenuRenderSub, ID_VIEW_RENDER_FIRST, ID_VIEW_RENDER_LAST, rid, MF_BYCOMMAND);
+  }
   if (g_hmenuProjSub) {
     const int pi = static_cast<int>(MapEngine::Instance().Document().GetDisplayProjection());
     if (pi >= 0 && pi < static_cast<int>(MapDisplayProjection::kCount)) {
@@ -110,8 +112,7 @@ void UpdateStatusParts() {
   const int parts[] = {static_cast<int>(rc.right * 0.55), -1};
   SendMessageW(g_hwndStatus, SB_SETPARTS, 2, reinterpret_cast<LPARAM>(parts));
   const std::wstring mode = g_view3d ? L"3D" : L"2D";
-  SendMessageW(g_hwndStatus, SB_SETTEXT, 0,
-               reinterpret_cast<LPARAM>(L"就绪 — 双击此处打开日志"));
+  SendMessageW(g_hwndStatus, SB_SETTEXT, 0, reinterpret_cast<LPARAM>(AgisTr(AgisUiStr::StatusReady)));
   SendMessageW(g_hwndStatus, SB_SETTEXT, 1, reinterpret_cast<LPARAM>(mode.c_str()));
 }
 
@@ -222,26 +223,9 @@ void LayoutChildren() {
     if (mapW <= 0 || innerH <= 0) {
       ShowWindow(g_hwndMapShell, SW_HIDE);
     } else {
-      auto menuBarH = [](HWND ref) -> int {
-        using GetSmfw = int(WINAPI*)(HWND, int);
-        static GetSmfw pfn = reinterpret_cast<GetSmfw>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForWindow"));
-        if (pfn && ref) {
-          return pfn(ref, SM_CYMENU);
-        }
-        return GetSystemMetrics(SM_CYMENU);
-      };
-      const int mb = menuBarH(g_hwndMain);
-      const int mapClientH = (std::max)(1, innerH - mb);
-      RECT rc{0, 0, mapW, mapClientH};
-      const DWORD popStyle = WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-      AdjustWindowRectEx(&rc, popStyle, TRUE, WS_EX_TOOLWINDOW);
-      const int ow = rc.right - rc.left;
-      const int oh = rc.bottom - rc.top;
-      POINT pt{mapLeft, top};
-      ClientToScreen(g_hwndMain, &pt);
-      SetWindowPos(g_hwndMapShell, nullptr, pt.x, pt.y, ow, oh, SWP_NOZORDER | SWP_NOACTIVATE);
+      MoveWindow(g_hwndMapShell, mapLeft, top, mapW, innerH, FALSE);
       ShowWindow(g_hwndMapShell, SW_SHOW);
-      DrawMenuBar(g_hwndMapShell);
+      InvalidateRect(g_hwndMapShell, nullptr, FALSE);
     }
   }
   if (g_hwndPropsStrip) {
@@ -287,12 +271,16 @@ bool HitRightSplitter(int x, int y, int innerTop, int innerBottom) {
 }
 
 HIMAGELIST BuildToolbarImageList() {
-  HIMAGELIST himl = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 8, 4);
+  HIMAGELIST himl = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 16, 8);
   if (!himl) {
     return nullptr;
   }
   // SHSTOCKICONID 数值（与 SDK 枚举一致，避免旧头文件缺少部分符号）
-  static const int kStockIds[6] = {
+  static const int kStockIds[] = {
+      0,    // SIID_DOCNOASSOC — 新建
+      4,    // SIID_FOLDEROPEN — 打开
+      6,    // SIID_DRIVE35 — 保存（软盘）
+      1,    // SIID_DOCASSOC — 另存为
       3,    // SIID_FOLDER — 添加图层
       45,   // SIID_PRINT — 截图
       79,   // SIID_INFO — 日志
@@ -332,7 +320,7 @@ HWND CreateMainToolbar(HWND parent, HINSTANCE inst) {
   }
   SendMessageW(tb, TB_SETBUTTONSIZE, 0, MAKELPARAM(30, 28));
 
-  TBBUTTON bt[8]{};
+  TBBUTTON bt[13]{};
   auto setBtn = [](TBBUTTON* b, int image, int cmd) {
     b->iBitmap = image;
     b->idCommand = cmd;
@@ -347,91 +335,42 @@ HWND CreateMainToolbar(HWND parent, HINSTANCE inst) {
     b->fsStyle = BTNS_SEP;
     b->iString = 0;
   };
-  setBtn(&bt[0], 0, ID_LAYER_ADD);
+  setBtn(&bt[0], 0, ID_FILE_NEW_GIS);
+  setBtn(&bt[1], 1, ID_FILE_OPEN_GIS);
+  setBtn(&bt[2], 2, ID_FILE_SAVE_GIS);
+  setBtn(&bt[3], 3, ID_FILE_SAVE_AS_GIS);
+  setSep(&bt[4]);
+  setBtn(&bt[5], 4, ID_LAYER_ADD);
 #if !GIS_DESKTOP_HAVE_GDAL
-  bt[0].fsState = 0;
+  bt[5].fsState = 0;
 #endif
-  setSep(&bt[1]);
-  setBtn(&bt[2], 1, ID_FILE_SCREENSHOT);
-  setSep(&bt[3]);
-  setBtn(&bt[4], 2, ID_VIEW_LOG);
-  setBtn(&bt[5], 3, ID_VIEW_MODE_2D);
-  setBtn(&bt[6], 4, ID_VIEW_MODE_3D);
-  setBtn(&bt[7], 5, ID_HELP_ABOUT);
-  SendMessageW(tb, TB_ADDBUTTONS, 8, reinterpret_cast<LPARAM>(bt));
+  setSep(&bt[6]);
+  setBtn(&bt[7], 5, ID_FILE_SCREENSHOT);
+  setSep(&bt[8]);
+  setBtn(&bt[9], 6, ID_VIEW_LOG);
+  setBtn(&bt[10], 7, ID_VIEW_MODE_2D);
+  setBtn(&bt[11], 8, ID_VIEW_MODE_3D);
+  setBtn(&bt[12], 9, ID_HELP_ABOUT);
+  SendMessageW(tb, TB_ADDBUTTONS, 13, reinterpret_cast<LPARAM>(bt));
   SendMessageW(tb, TB_AUTOSIZE, 0, 0);
   return tb;
 }
 
-HMENU BuildMapHostMenu() {
-  HMENU bar = CreateMenu();
-  if (!bar) {
-    return nullptr;
-  }
-  HMENU render = CreateMenu();
-  if (!render) {
-    DestroyMenu(bar);
-    return nullptr;
-  }
-  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_GDI, L"GDI");
-  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_GDIPLUS, L"GDI+");
-  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_D2D, L"Direct2D");
-  AppendMenuW(render, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_BGFX_D3D11, L"Bgfx + D3D11");
-  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_BGFX_OPENGL, L"Bgfx + OpenGL");
-  AppendMenuW(render, MF_STRING, ID_VIEW_RENDER_BGFX_AUTO, L"Bgfx 自动");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(render), L"渲染(&R)");
-
-  HMENU view = CreateMenu();
-  if (!view) {
-    DestroyMenu(bar);
-    return nullptr;
-  }
-  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_SHORTCUT, L"快捷键区");
-  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_VIS, L"可见性与经纬网");
-  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_BOTTOM, L"底部缩放与适应栏");
-  AppendMenuW(view, MF_STRING, IDC_MAP_UI_SHOW_HINT, L"操作提示文字");
-  AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(view, MF_STRING, IDC_MAP_UI_GRID, L"绘制经纬网");
-  AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"界面(&V)");
-  return bar;
-}
-
-void SyncMapHostMenuPopup(HWND mapShell, HMENU popup) {
-  HMENU bar = GetMenu(mapShell);
-  if (!bar || !popup) {
+void SyncMainFrameMapUiMenu(HMENU mapUiPopup) {
+  if (!mapUiPopup) {
     return;
   }
-  HMENU sm0 = GetSubMenu(bar, 0);
-  HMENU sm1 = GetSubMenu(bar, 1);
   MapEngine& eg = MapEngine::Instance();
-  if (popup == sm0) {
-    const MapRenderBackend cur = MapGpu_GetActiveBackend();
-    UINT rid = ID_VIEW_RENDER_GDI;
-    if (cur == MapRenderBackend::kGdiPlus) {
-      rid = ID_VIEW_RENDER_GDIPLUS;
-    } else if (cur == MapRenderBackend::kD2d) {
-      rid = ID_VIEW_RENDER_D2D;
-    } else if (cur == MapRenderBackend::kBgfxD3d11) {
-      rid = ID_VIEW_RENDER_BGFX_D3D11;
-    } else if (cur == MapRenderBackend::kBgfxOpenGL) {
-      rid = ID_VIEW_RENDER_BGFX_OPENGL;
-    } else if (cur == MapRenderBackend::kBgfxAuto) {
-      rid = ID_VIEW_RENDER_BGFX_AUTO;
-    }
-    CheckMenuRadioItem(popup, ID_VIEW_RENDER_FIRST, ID_VIEW_RENDER_LAST, rid, MF_BYCOMMAND);
-  } else if (popup == sm1) {
-    CheckMenuItem(popup, IDC_MAP_UI_SHOW_SHORTCUT,
-                  MF_BYCOMMAND | (eg.IsMapUiShowShortcutChrome() ? MF_CHECKED : MF_UNCHECKED));
-    CheckMenuItem(popup, IDC_MAP_UI_SHOW_VIS,
-                  MF_BYCOMMAND | (eg.IsMapUiShowVisChrome() ? MF_CHECKED : MF_UNCHECKED));
-    CheckMenuItem(popup, IDC_MAP_UI_SHOW_BOTTOM,
-                  MF_BYCOMMAND | (eg.IsMapUiShowBottomChrome() ? MF_CHECKED : MF_UNCHECKED));
-    CheckMenuItem(popup, IDC_MAP_UI_SHOW_HINT,
-                  MF_BYCOMMAND | (eg.IsMapUiShowHintOverlay() ? MF_CHECKED : MF_UNCHECKED));
-    CheckMenuItem(popup, IDC_MAP_UI_GRID,
-                  MF_BYCOMMAND | (eg.Document().GetShowLatLonGrid() ? MF_CHECKED : MF_UNCHECKED));
-  }
+  CheckMenuItem(mapUiPopup, IDC_MAP_UI_SHOW_SHORTCUT,
+                MF_BYCOMMAND | (eg.IsMapUiShowShortcutChrome() ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(mapUiPopup, IDC_MAP_UI_SHOW_VIS,
+                MF_BYCOMMAND | (eg.IsMapUiShowVisChrome() ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(mapUiPopup, IDC_MAP_UI_SHOW_BOTTOM,
+                MF_BYCOMMAND | (eg.IsMapUiShowBottomChrome() ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(mapUiPopup, IDC_MAP_UI_SHOW_HINT,
+                MF_BYCOMMAND | (eg.IsMapUiShowHintOverlay() ? MF_CHECKED : MF_UNCHECKED));
+  CheckMenuItem(mapUiPopup, IDC_MAP_UI_GRID,
+                MF_BYCOMMAND | (eg.Document().GetShowLatLonGrid() ? MF_CHECKED : MF_UNCHECKED));
 }
 
 void LayoutMapShellClient(HWND mapShell) {
@@ -442,7 +381,8 @@ void LayoutMapShellClient(HWND mapShell) {
   GetClientRect(mapShell, &cr);
   const int cw = std::max(0, static_cast<int>(cr.right));
   const int ch = std::max(0, static_cast<int>(cr.bottom));
-  MoveWindow(g_hwndMap, 0, 0, cw, ch, TRUE);
+  MoveWindow(g_hwndMap, 0, 0, cw, ch, FALSE);
+  InvalidateRect(g_hwndMap, nullptr, FALSE);
 }
 
 LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -450,11 +390,8 @@ LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CREATE: {
       auto* cs = reinterpret_cast<LPCREATESTRUCT>(lParam);
       HINSTANCE inst = cs->hInstance;
-      HMENU menu = BuildMapHostMenu();
-      if (menu) {
-        SetMenu(hwnd, menu);
-      }
-      g_hwndMap = CreateWindowExW(WS_EX_CLIENTEDGE | WS_EX_COMPOSITED, kMapClass, L"",
+      // 勿加 WS_EX_COMPOSITED：与 D2D / bgfx 直接呈现到 HWND 时 DWM 双组合易闪烁。
+      g_hwndMap = CreateWindowExW(WS_EX_CLIENTEDGE, kMapClass, L"",
                                   WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 200, 200, hwnd, nullptr, inst,
                                   nullptr);
       if (!g_hwndMap) {
@@ -464,11 +401,6 @@ LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       return 0;
     }
     case WM_DESTROY: {
-      HMENU m = GetMenu(hwnd);
-      SetMenu(hwnd, nullptr);
-      if (m) {
-        DestroyMenu(m);
-      }
       g_hwndMap = nullptr;
       g_hwndMapShell = nullptr;
       return 0;
@@ -476,15 +408,6 @@ LRESULT CALLBACK MapShellProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_SIZE:
       LayoutMapShellClient(hwnd);
       return 0;
-    case WM_INITMENUPOPUP:
-      SyncMapHostMenuPopup(hwnd, reinterpret_cast<HMENU>(wParam));
-      break;
-    case WM_COMMAND:
-      if (HIWORD(wParam) == 0 && lParam == 0 && g_hwndMap && IsWindow(g_hwndMap)) {
-        SendMessageW(g_hwndMap, WM_COMMAND, wParam, 0);
-        return 0;
-      }
-      break;
     default:
       break;
   }

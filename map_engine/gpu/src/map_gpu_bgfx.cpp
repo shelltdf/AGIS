@@ -41,7 +41,8 @@ bgfx::UniformHandle g_s_texColor = BGFX_INVALID_HANDLE;
 bgfx::RendererType::Enum g_renderer = bgfx::RendererType::Count;
 
 uint32_t g_resetFlags = BGFX_RESET_VSYNC;
-RECT g_imguiMapToolbarClient{};
+/** 上一帧 ImGui 是否希望独占鼠标（与 io.MousePos / DisplaySize 同一套坐标，避免 GL 下 GetWindowPos 与 Win32 客户区不一致导致整块图被误判为工具栏）。 */
+bool g_imguiWantsCaptureMouse = false;
 
 struct PosTexColorVertex {
   float x = 0.f;
@@ -94,7 +95,7 @@ void ReleaseGpuResources() {
 }
 
 void DestroyAll() {
-  SetRectEmpty(&g_imguiMapToolbarClient);
+  g_imguiWantsCaptureMouse = false;
   if (g_inited) {
     imguiDestroy();
   }
@@ -171,7 +172,6 @@ void RenderImGuiToolbar(HWND mapHwnd) {
   ImGui::SetNextWindowBgAlpha(0.92f);
   ImGuiWindowFlags wflags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
   if (!ImGui::Begin("Map##agis_bgfx_map", nullptr, wflags)) {
-    SetRectEmpty(&g_imguiMapToolbarClient);
     ImGui::End();
     return;
   }
@@ -213,12 +213,6 @@ void RenderImGuiToolbar(HWND mapHwnd) {
     if (ImGui::Button(" + ")) {
       PostMessageW(mapHwnd, WM_COMMAND, MAKEWPARAM(IDC_MAP_ZOOM_IN, BN_CLICKED), 0);
     }
-    const ImVec2 wp = ImGui::GetWindowPos();
-    const ImVec2 ws = ImGui::GetWindowSize();
-    g_imguiMapToolbarClient.left = static_cast<LONG>(std::floor(wp.x));
-    g_imguiMapToolbarClient.top = static_cast<LONG>(std::floor(wp.y));
-    g_imguiMapToolbarClient.right = static_cast<LONG>(std::ceil(wp.x + ws.x));
-    g_imguiMapToolbarClient.bottom = static_cast<LONG>(std::ceil(wp.y + ws.y));
   ImGui::End();
 }
 
@@ -387,7 +381,14 @@ bool Present(HWND hwnd, const uint8_t* bgraTopDown, int w, int h) {
   ScreenToClient(hwnd, &pt);
   const int mx = static_cast<int>(pt.x);
   const int my = static_cast<int>(pt.y);
-  imguiBeginFrame(mx, my, PackMouseButtons(), 0, vw, vh, -1, 254);
+  // 与 ScreenToClient 一致：用当前客户区尺寸喂给 ImGui。仅用 g_resetW/H 在部分 GL + DPI 组合下会与鼠标坐标系错位，导致 WantCaptureMouse / 命中异常。
+  RECT crCli{};
+  GetClientRect(hwnd, &crCli);
+  const uint16_t cliW = static_cast<uint16_t>((std::max)(1, static_cast<int>(crCli.right - crCli.left)));
+  const uint16_t cliH = static_cast<uint16_t>((std::max)(1, static_cast<int>(crCli.bottom - crCli.top)));
+  imguiBeginFrame(mx, my, PackMouseButtons(), 0, cliW, cliH, -1, 254);
+  // NewFrame 已根据上一帧几何 + 本帧鼠标位置设置 WantCaptureMouse；比手写 GetWindowPos 矩形更稳（OpenGL 下曾出现整块客户区误判为工具栏，滚轮/中键全被吞）。
+  g_imguiWantsCaptureMouse = ImGui::GetIO().WantCaptureMouse != 0;
   RenderImGuiToolbar(hwnd);
   imguiEndFrame();
 
@@ -396,11 +397,12 @@ bool Present(HWND hwnd, const uint8_t* bgraTopDown, int w, int h) {
 }
 
 bool ImGuiMapToolbarHitClient(int clientX, int clientY) {
+  (void)clientX;
+  (void)clientY;
   if (!g_inited) {
     return false;
   }
-  const POINT pt{clientX, clientY};
-  return PtInRect(&g_imguiMapToolbarClient, pt) != FALSE;
+  return g_imguiWantsCaptureMouse;
 }
 
 }  // namespace map_gpu_bgfx

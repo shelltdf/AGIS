@@ -1,5 +1,7 @@
 #include "app/preview/tile_preview/tile_preview_protocol_picker.h"
 
+#include "utils/agis_ui_l10n.h"
+
 #include <commdlg.h>
 #include <objbase.h>
 #include <shlobj.h>
@@ -13,8 +15,20 @@
 namespace {
 
 constexpr wchar_t kPickerClassName[] = L"AgisTilePreviewProtocolPickerDlg";
-/// 标题栏文案（与窗口类名无关；须对用户可见）。
-constexpr wchar_t kPickerWindowTitle[] = L"本地瓦片预览 — 选择数据源类型";
+
+static const wchar_t* PickerWindowTitleW() {
+  return AgisPickUiLang(L"本地瓦片预览 — 选择数据源类型", L"Local tile preview — choose data source");
+}
+
+// OPENFILENAME / 内嵌 \0，按语言整段选用（勿用 wstring 拼接）。
+static const wchar_t kFilterTilesetZh[] =
+    L"tileset.json\0tileset.json\0JSON\0*.json\0所有文件\0*.*\0\0";
+static const wchar_t kFilterTilesetEn[] =
+    L"tileset.json\0tileset.json\0JSON\0*.json\0All files\0*.*\0\0";
+static const wchar_t kFilterMbtilesZh[] = L"MBTiles\0*.mbtiles\0所有文件\0*.*\0\0";
+static const wchar_t kFilterMbtilesEn[] = L"MBTiles\0*.mbtiles\0All files\0*.*\0\0";
+static const wchar_t kFilterGpkgZh[] = L"GeoPackage\0*.gpkg\0所有文件\0*.*\0\0";
+static const wchar_t kFilterGpkgEn[] = L"GeoPackage\0*.gpkg\0All files\0*.*\0\0";
 constexpr int kIdList = 1001;
 constexpr int kIdOk = 1002;
 constexpr int kIdCancel = 1003;
@@ -54,7 +68,7 @@ static bool PickFolderWithIFileOrBrowse(HWND owner, std::wstring* out, std::wstr
     if (SUCCEEDED(pfd->GetOptions(&opts))) {
       pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
     }
-    pfd->SetTitle(L"选择本地 XYZ / TMS 瓦片根目录");
+    pfd->SetTitle(AgisPickUiLang(L"选择本地 XYZ / TMS 瓦片根目录", L"Choose local XYZ / TMS tile root folder"));
     hr = pfd->Show(owner);
     if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
       pfd->Release();
@@ -88,7 +102,8 @@ static bool PickFolderWithIFileOrBrowse(HWND owner, std::wstring* out, std::wstr
   wchar_t display[MAX_PATH * 2]{};
   BROWSEINFOW bi{};
   bi.hwndOwner = owner;
-  bi.lpszTitle = L"选择本地 XYZ / TMS 瓦片根目录（备用文件夹浏览器）";
+  bi.lpszTitle = AgisPickUiLang(L"选择本地 XYZ / TMS 瓦片根目录（备用文件夹浏览器）",
+                                L"Choose local XYZ / TMS tile root (fallback folder browser)");
   bi.pszDisplayName = display;
   bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
   PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
@@ -100,7 +115,8 @@ static bool PickFolderWithIFileOrBrowse(HWND owner, std::wstring* out, std::wstr
   CoTaskMemFree(pidl);
   if (!gp) {
     if (err) {
-      *err = L"无法解析所选文件夹路径（SHGetPathFromIDList）。";
+      *err = AgisPickUiLang(L"无法解析所选文件夹路径（SHGetPathFromIDList）。",
+                            L"Could not resolve the selected folder path (SHGetPathFromIDList).");
     }
     return false;
   }
@@ -134,15 +150,18 @@ static bool PickPathForProtocol(HWND owner, AgisTilePreviewProtocol proto, std::
   case AgisTilePreviewProtocol::kXyzTmsFolder:
     return PickFolderWithIFileOrBrowse(owner, pathOut, err);
   case AgisTilePreviewProtocol::kThreeDTilesJson:
-    return PickOpenFile(owner, L"选择 3D Tiles 的 tileset.json",
-                        L"tileset.json\0tileset.json\0JSON\0*.json\0所有文件\0*.*\0\0", pathOut);
+    return PickOpenFile(owner,
+                        AgisPickUiLang(L"选择 3D Tiles 的 tileset.json", L"Choose 3D Tiles tileset.json"),
+                        AgisGetUiLanguage() == AgisUiLanguage::kEn ? kFilterTilesetEn : kFilterTilesetZh, pathOut);
   case AgisTilePreviewProtocol::kMBTilesFile:
-    return PickOpenFile(owner, L"选择 MBTiles 文件", L"MBTiles\0*.mbtiles\0所有文件\0*.*\0\0", pathOut);
+    return PickOpenFile(owner, AgisPickUiLang(L"选择 MBTiles 文件", L"Choose MBTiles file"),
+                        AgisGetUiLanguage() == AgisUiLanguage::kEn ? kFilterMbtilesEn : kFilterMbtilesZh, pathOut);
   case AgisTilePreviewProtocol::kGeoPackageFile:
-    return PickOpenFile(owner, L"选择 GeoPackage 文件", L"GeoPackage\0*.gpkg\0所有文件\0*.*\0\0", pathOut);
+    return PickOpenFile(owner, AgisPickUiLang(L"选择 GeoPackage 文件", L"Choose GeoPackage file"),
+                        AgisGetUiLanguage() == AgisUiLanguage::kEn ? kFilterGpkgEn : kFilterGpkgZh, pathOut);
   default:
     if (err) {
-      *err = L"内部错误：未知瓦片协议。";
+      *err = AgisPickUiLang(L"内部错误：未知瓦片协议。", L"Internal error: unknown tile protocol.");
     }
     return false;
   }
@@ -150,10 +169,11 @@ static bool PickPathForProtocol(HWND owner, AgisTilePreviewProtocol proto, std::
 
 static void FillProtocolList(HWND lb) {
   SendMessageW(lb, LB_RESETCONTENT, 0, 0);
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"XYZ / TMS"));
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"3D Tiles"));
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"MBTiles"));
-  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GeoPackage"));
+  SendMessageW(lb, LB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(AgisPickUiLang(L"XYZ / TMS 瓦片目录", L"XYZ / TMS tile folder")));
+  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"3D Tiles", L"3D Tiles")));
+  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"MBTiles", L"MBTiles")));
+  SendMessageW(lb, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(AgisPickUiLang(L"GeoPackage", L"GeoPackage")));
   SendMessageW(lb, LB_SETCURSEL, 0, 0);
 }
 
@@ -161,22 +181,42 @@ static void FillProtocolList(HWND lb) {
 static const wchar_t* ProtocolLongDescription(AgisTilePreviewProtocol p) {
   switch (p) {
   case AgisTilePreviewProtocol::kXyzTmsFolder:
-    return L"【打开方式】\r\n点「确定」后弹出文件夹选择框，请选择「瓦片根目录」文件夹（不要选单个瓦片文件）。\r\n\r\n"
-           L"【目录与格式】\r\n根目录下应为按缩放级组织的子目录与栅格瓦片（常见结构类似 z/x/y 与 .png/.jpg 等）。若磁盘上为 "
-           L"TMS 行号文件名，且存在 tms.xml 或 README 标明 protocol=tms（与 AGIS 瓦片导出约定一致），预览会映射为北向上的 XYZ 方式拼图。\r\n\r\n"
-           L"【范围】\r\n仅本机路径；不支持 http(s)、WMTS、网络 URL。";
+    return AgisPickUiLang(
+        L"【打开方式】\r\n点「确定」后弹出文件夹选择框，请选择「瓦片根目录」文件夹（不要选单个瓦片文件）。\r\n\r\n"
+        L"【目录与格式】\r\n根目录下应为按缩放级组织的子目录与栅格瓦片（常见结构类似 z/x/y 与 .png/.jpg 等）。若磁盘上为 "
+        L"TMS 行号文件名，且存在 tms.xml 或 README 标明 protocol=tms（与 AGIS 瓦片导出约定一致），预览会映射为北向上的 XYZ 方式拼图。\r\n\r\n"
+        L"【范围】\r\n仅本机路径；不支持 http(s)、WMTS、网络 URL。",
+        L"[How to open]\r\nClick OK, then pick the tile root folder (not a single tile file).\r\n\r\n"
+        L"[Layout]\r\nExpect zoom subfolders and raster tiles (often z/x/y with .png/.jpg). If filenames use TMS row order "
+        L"and tms.xml/README says protocol=tms (same as AGIS tile export), the preview maps to north-up XYZ.\r\n\r\n"
+        L"[Scope]\r\nLocal paths only; no http(s), WMTS, or network URLs.");
   case AgisTilePreviewProtocol::kThreeDTilesJson:
-    return L"【打开方式】\r\n点「确定」后弹出文件选择框，请选择本地「tileset.json」。\r\n\r\n"
-           L"【文件说明】\r\n3D Tiles 切片集的入口描述文件。本预览窗主要展示元数据、包围体与统计信息（非「数据转换里子类型 3dtiles」时的三维网格绘制，三维网格在模型预览窗）。\r\n\r\n"
-           L"【范围】\r\n仅解析磁盘上的相对路径资源；纯 http(s) 外链内容无法在此加载。";
+    return AgisPickUiLang(
+        L"【打开方式】\r\n点「确定」后弹出文件选择框，请选择本地「tileset.json」。\r\n\r\n"
+        L"【文件说明】\r\n3D Tiles 切片集的入口描述文件。本预览窗主要展示元数据、包围体与统计信息（非「数据转换里子类型 3dtiles」时的三维网格绘制，三维网格在模型预览窗）。\r\n\r\n"
+        L"【范围】\r\n仅解析磁盘上的相对路径资源；纯 http(s) 外链内容无法在此加载。",
+        L"[How to open]\r\nClick OK, then choose local tileset.json.\r\n\r\n"
+        L"[About]\r\nEntry JSON for a 3D Tiles tileset. This window shows metadata, bounds, and stats (not the meshed 3D "
+        L"view used when subtype 3dtiles in Data conversion—that is Model preview).\r\n\r\n"
+        L"[Scope]\r\nResolves relative paths on disk only; pure http(s) externals cannot load here.");
   case AgisTilePreviewProtocol::kMBTilesFile:
-    return L"【打开方式】\r\n点「确定」后选择本地「.mbtiles」单文件。\r\n\r\n"
-           L"【文件说明】\r\nSQLite 封装的瓦片库。本预览依赖 GDAL：将栅格层读出并下采样为一张全球墨卡托缩略拼图（约不超过 2048px），用于快速浏览内容概况。\r\n\r\n"
-           L"【限制】\r\n当前不按 zoom 在容器内逐瓦交互；若构建未启用 GDAL，此项不可用。";
+    return AgisPickUiLang(
+        L"【打开方式】\r\n点「确定」后选择本地「.mbtiles」单文件。\r\n\r\n"
+        L"【文件说明】\r\nSQLite 封装的瓦片库。本预览依赖 GDAL：将栅格层读出并下采样为一张全球墨卡托缩略拼图（约不超过 2048px），用于快速浏览内容概况。\r\n\r\n"
+        L"【限制】\r\n当前不按 zoom 在容器内逐瓦交互；若构建未启用 GDAL，此项不可用。",
+        L"[How to open]\r\nClick OK, then pick a local .mbtiles file.\r\n\r\n"
+        L"[About]\r\nSQLite tile archive. Preview uses GDAL to read the raster layer and downsample to one global Mercator "
+        L"thumbnail (≤~2048 px).\r\n\r\n"
+        L"[Limits]\r\nNo per-zoom interactive tiles inside the container; unavailable without GDAL in the build.");
   case AgisTilePreviewProtocol::kGeoPackageFile:
-    return L"【打开方式】\r\n点「确定」后选择本地「.gpkg」单文件。\r\n\r\n"
-           L"【文件说明】\r\nOGC GeoPackage。本预览依赖 GDAL 打开其中的栅格瓦片表并下采样为缩略拼图（与 MBTiles 类似，用于概况浏览）。纯矢量 GPKG 或无栅格层时可能无法预览。\r\n\r\n"
-           L"【限制】\r\n当前不按 zoom 在容器内逐瓦交互；若构建未启用 GDAL，此项不可用。";
+    return AgisPickUiLang(
+        L"【打开方式】\r\n点「确定」后选择本地「.gpkg」单文件。\r\n\r\n"
+        L"【文件说明】\r\nOGC GeoPackage。本预览依赖 GDAL 打开其中的栅格瓦片表并下采样为缩略拼图（与 MBTiles 类似，用于概况浏览）。纯矢量 GPKG 或无栅格层时可能无法预览。\r\n\r\n"
+        L"【限制】\r\n当前不按 zoom 在容器内逐瓦交互；若构建未启用 GDAL，此项不可用。",
+        L"[How to open]\r\nClick OK, then pick a local .gpkg file.\r\n\r\n"
+        L"[About]\r\nOGC GeoPackage. GDAL opens raster tile tables and builds a thumbnail mosaic like MBTiles. Vector-only "
+        L"or raster-less GPKG may not preview.\r\n\r\n"
+        L"[Limits]\r\nNo per-zoom interactive tiles; unavailable without GDAL in the build.");
   default:
     return L"";
   }
@@ -230,8 +270,10 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
 
       HWND hint = CreateWindowExW(
           0, L"STATIC",
-          L"左侧选择数据源类型；右侧为打开方式与格式说明。\r\n"
-          L"仅本机路径，不支持网络地址。点「确定」后选择文件夹或文件。",
+          AgisPickUiLang(L"左侧选择数据源类型；右侧为打开方式与格式说明。\r\n"
+                         L"仅本机路径，不支持网络地址。点「确定」后选择文件夹或文件。",
+                         L"Pick a source type on the left; the right shows how to open and format notes.\r\n"
+                         L"Local paths only—no network. Click OK to choose a folder or file."),
           WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, m, m, innerW, hintH, hwnd, nullptr, hi, nullptr);
       SendMessageW(hint, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
 
@@ -268,9 +310,11 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
 
       const int cancelX = static_cast<int>(cr.right) - m - kBtnW;
       const int okX = cancelX - kBtnGap - kBtnW;
-      CreateWindowExW(0, L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, okX, btnRowTop,
-                      kBtnW, kBtnH, hwnd, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdOk)), hi, nullptr);
-      CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP, cancelX, btnRowTop, kBtnW, kBtnH, hwnd,
+      CreateWindowExW(0, L"BUTTON", AgisPickUiLang(L"确定", L"OK"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                      okX, btnRowTop, kBtnW, kBtnH, hwnd, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdOk)), hi,
+                      nullptr);
+      CreateWindowExW(0, L"BUTTON", AgisPickUiLang(L"取消", L"Cancel"), WS_CHILD | WS_VISIBLE | WS_TABSTOP, cancelX,
+                      btnRowTop, kBtnW, kBtnH, hwnd,
                       reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdCancel)), hi, nullptr);
       return 0;
     }
@@ -294,7 +338,9 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
       if (id == kIdOk || (id == kIdList && cmd == LBN_DBLCLK)) {
         const LRESULT sel = SendMessageW(ctx->list, LB_GETCURSEL, 0, 0);
         if (sel == LB_ERR) {
-          MessageBoxW(hwnd, L"请先在列表中选择一种瓦片协议。", L"瓦片预览", MB_OK | MB_ICONINFORMATION);
+          MessageBoxW(hwnd,
+                      AgisPickUiLang(L"请先在列表中选择一种瓦片协议。", L"Select a tile protocol in the list first."),
+                      AgisPickUiLang(L"瓦片预览", L"Tile preview"), MB_OK | MB_ICONINFORMATION);
           return 0;
         }
         const auto proto = static_cast<AgisTilePreviewProtocol>(static_cast<int>(sel));
@@ -306,7 +352,7 @@ static LRESULT CALLBACK ProtocolPickerWndProc(HWND hwnd, UINT msg, WPARAM wParam
         SetForegroundWindow(hwnd);
         if (!ok) {
           if (!pe.empty()) {
-            MessageBoxW(hwnd, pe.c_str(), L"浏览失败", MB_OK | MB_ICONWARNING);
+            MessageBoxW(hwnd, pe.c_str(), AgisPickUiLang(L"浏览失败", L"Browse failed"), MB_OK | MB_ICONWARNING);
           }
           return 0;
         }
@@ -349,7 +395,8 @@ static bool RegisterPickerClassOnce(HINSTANCE inst) {
 static bool RunProtocolPickerModal(HWND owner, PickerUiCtx* ctx) {
   HINSTANCE inst = PickerModuleInstance(owner);
   if (!RegisterPickerClassOnce(inst)) {
-    ctx->error = L"无法注册协议选择窗口（RegisterClass 失败）。";
+    ctx->error = AgisPickUiLang(L"无法注册协议选择窗口（RegisterClass 失败）。",
+                                L"Could not register protocol picker window class (RegisterClass failed).");
     return false;
   }
   RECT r{};
@@ -379,13 +426,14 @@ static bool RunProtocolPickerModal(HWND owner, PickerUiCtx* ctx) {
   ctx->error.clear();
   ctx->owner = owner;
 
-  HWND dlg = CreateWindowExW(kFrameExStyle, kPickerClassName, kPickerWindowTitle, kFrameStyle, x, y, kW, kH, owner,
+  HWND dlg = CreateWindowExW(kFrameExStyle, kPickerClassName, PickerWindowTitleW(), kFrameStyle, x, y, kW, kH, owner,
                              nullptr, inst, ctx);
   if (!dlg) {
-    ctx->error = L"无法创建协议选择窗口（CreateWindow 失败）。";
+    ctx->error = AgisPickUiLang(L"无法创建协议选择窗口（CreateWindow 失败）。",
+                                L"Could not create protocol picker window (CreateWindow failed).");
     return false;
   }
-  SetWindowTextW(dlg, kPickerWindowTitle);
+  SetWindowTextW(dlg, PickerWindowTitleW());
 
   if (owner) {
     EnableWindow(owner, FALSE);
@@ -464,40 +512,44 @@ bool TilePreviewValidatePathMatchesProtocol(AgisTilePreviewProtocol protocol, co
   const bool isDir = std::filesystem::is_directory(fp, ec);
   const bool isFile = std::filesystem::is_regular_file(fp, ec);
   if (!isDir && !isFile) {
-    return fail(L"路径不存在，或无法访问（不是有效的文件/目录）。");
+    return fail(AgisPickUiLang(L"路径不存在，或无法访问（不是有效的文件/目录）。",
+                               L"Path does not exist or is inaccessible (not a valid file or folder)."));
   }
 
   switch (protocol) {
   case AgisTilePreviewProtocol::kXyzTmsFolder:
     if (!isDir) {
-      return fail(L"该协议需要选择「文件夹」（瓦片根目录）。当前路径不是目录。");
+      return fail(AgisPickUiLang(L"该协议需要选择「文件夹」（瓦片根目录）。当前路径不是目录。",
+                                 L"This protocol needs a folder (tile root). The path is not a directory."));
     }
     return true;
   case AgisTilePreviewProtocol::kThreeDTilesJson:
     if (!isFile) {
-      return fail(L"3D Tiles 需要选择 tileset.json「文件」，不能选择文件夹。");
+      return fail(AgisPickUiLang(L"3D Tiles 需要选择 tileset.json「文件」，不能选择文件夹。",
+                                 L"3D Tiles needs a tileset.json file, not a folder."));
     }
     if (_wcsicmp(fp.extension().c_str(), L".json") != 0) {
-      return fail(L"请选择扩展名为 .json 的文件（通常为 tileset.json）。");
+      return fail(AgisPickUiLang(L"请选择扩展名为 .json 的文件（通常为 tileset.json）。",
+                                 L"Choose a .json file (usually tileset.json)."));
     }
     return true;
   case AgisTilePreviewProtocol::kMBTilesFile:
     if (!isFile) {
-      return fail(L"MBTiles 需要选择单个 .mbtiles 文件。");
+      return fail(AgisPickUiLang(L"MBTiles 需要选择单个 .mbtiles 文件。", L"MBTiles needs a single .mbtiles file."));
     }
     if (_wcsicmp(fp.extension().c_str(), L".mbtiles") != 0) {
-      return fail(L"扩展名应为 .mbtiles。");
+      return fail(AgisPickUiLang(L"扩展名应为 .mbtiles。", L"Extension should be .mbtiles."));
     }
     return true;
   case AgisTilePreviewProtocol::kGeoPackageFile:
     if (!isFile) {
-      return fail(L"GeoPackage 需要选择单个 .gpkg 文件。");
+      return fail(AgisPickUiLang(L"GeoPackage 需要选择单个 .gpkg 文件。", L"GeoPackage needs a single .gpkg file."));
     }
     if (_wcsicmp(fp.extension().c_str(), L".gpkg") != 0) {
-      return fail(L"扩展名应为 .gpkg。");
+      return fail(AgisPickUiLang(L"扩展名应为 .gpkg。", L"Extension should be .gpkg."));
     }
     return true;
   default:
-    return fail(L"内部错误：未知协议。");
+    return fail(AgisPickUiLang(L"内部错误：未知协议。", L"Internal error: unknown protocol."));
   }
 }

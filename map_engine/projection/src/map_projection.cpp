@@ -315,6 +315,29 @@ const wchar_t* MapProj_MenuLabel(MapDisplayProjection p) {
   }
 }
 
+const wchar_t* MapProj_MenuLabelEn(MapDisplayProjection p) {
+  switch (p) {
+    case MapDisplayProjection::kGeographicWgs84:
+      return L"WGS 84 geographic (lon/lat)";
+    case MapDisplayProjection::kWebMercator3857:
+      return L"Web Mercator (EPSG:3857)";
+    case MapDisplayProjection::kWorldMercator3395:
+      return L"World Mercator (EPSG:3395)";
+    case MapDisplayProjection::kPlateCarréeEqc4087:
+      return L"Plate Carrée / Equirectangular (4087)";
+    case MapDisplayProjection::kMollweide:
+      return L"Mollweide";
+    case MapDisplayProjection::kRobinson:
+      return L"Robinson";
+    case MapDisplayProjection::kLambertAzimuthalEqualArea:
+      return L"Lambert azimuthal equal-area (global)";
+    case MapDisplayProjection::kEqualEarth8857:
+      return L"Equal Earth (EPSG:8857)";
+    default:
+      return L"(unknown)";
+  }
+}
+
 void MapProj_GeoLonLatToScreen(MapDisplayProjection proj, const ViewExtent& geoView, int cw, int ch, double lon,
                                double lat, double* sx, double* sy) {
   if (!sx || !sy) {

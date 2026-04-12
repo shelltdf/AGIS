@@ -28,7 +28,8 @@ bool RegisterDemoMapClass(HINSTANCE inst) {
   wc.lpszClassName = kMapEngineDemoClass;
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-  wc.style = CS_OWNDC;
+  // 与主程序 AGISMapHost 一致：不用 CS_OWNDC，利于 D2D/bgfx 与 GDI 双缓冲共存。
+  wc.style = 0;
   return RegisterClassW(&wc) != 0;
 }
 

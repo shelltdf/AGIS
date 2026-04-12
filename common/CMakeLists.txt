@@ -23,6 +23,7 @@ set(_agis_common_sources
   ${_AGIS_COMMON_ROOT}/debug/src/ui_debug_pick.cpp
   ${_AGIS_COMMON_ROOT}/utils/src/ui_font.cpp
   ${_AGIS_COMMON_ROOT}/utils/src/ui_theme.cpp
+  ${_AGIS_COMMON_ROOT}/utils/src/agis_ui_l10n.cpp
   ${_AGIS_COMMON_ROOT}/core/src/main_globals.cpp
   ${_AGIS_COMMON_ROOT}/core/src/app_log.cpp
 )

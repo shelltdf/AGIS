@@ -9,6 +9,7 @@
 #endif
 
 #include "core/resource.h"
+#include "utils/agis_ui_l10n.h"
 #include "utils/ui_font.h"
 #include "utils/ui_theme.h"
 #include "core/app_log.h"
@@ -20,6 +21,18 @@
 static std::wstring g_propsLayerSubtitleForPaint;
 static RECT g_propsDriverCardRc{};
 static RECT g_propsSourceCardRc{};
+
+static UiDockChromeText MakeWorkbenchDockChrome() {
+  return {AgisTr(AgisUiStr::DockLayerTitle),
+          AgisTr(AgisUiStr::DockLayerSubtitle),
+          AgisTr(AgisUiStr::DockPropsTitle),
+          AgisTr(AgisUiStr::DockPropsSubtitleDefault),
+          AgisTr(AgisUiStr::DockChipRight),
+          AgisTr(AgisUiStr::CardDriverTitle),
+          AgisTr(AgisUiStr::CardDriverSubtitle),
+          AgisTr(AgisUiStr::CardSourceTitle),
+          AgisTr(AgisUiStr::CardSourceSubtitle)};
+}
 
 void CopyTextToClipboard(HWND owner, const std::wstring& text) {
   if (!OpenClipboard(owner)) {
@@ -97,13 +110,12 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     const bool canDown = onLayer && hit < n - 1;
 
     HMENU pop = CreatePopupMenu();
-    AppendMenuW(pop,
-                MF_STRING | (GIS_DESKTOP_HAVE_GDAL ? MF_ENABLED : MF_GRAYED),
-                ID_LAYER_CTX_ADD, L"添加图层…");
+    AppendMenuW(pop, MF_STRING | (GIS_DESKTOP_HAVE_GDAL ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_ADD,
+                AgisTr(AgisUiStr::CtxAddLayer));
     AppendMenuW(pop, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(pop, MF_STRING | (onLayer ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_DELETE, L"删除");
-    AppendMenuW(pop, MF_STRING | (canUp ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_UP, L"上移");
-    AppendMenuW(pop, MF_STRING | (canDown ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_DOWN, L"下移");
+    AppendMenuW(pop, MF_STRING | (onLayer ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_DELETE, AgisTr(AgisUiStr::CtxDelete));
+    AppendMenuW(pop, MF_STRING | (canUp ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_UP, AgisTr(AgisUiStr::CtxUp));
+    AppendMenuW(pop, MF_STRING | (canDown ? MF_ENABLED : MF_GRAYED), ID_LAYER_CTX_DOWN, AgisTr(AgisUiStr::CtxDown));
 
     SetForegroundWindow(mainFr);
     const UINT cmd =
@@ -129,7 +141,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         if (g_hwndMap) {
           InvalidateRect(g_hwndMap, nullptr, FALSE);
         }
-        AppLogLine(L"[图层] 已通过右键菜单发起添加。");
+        AppLogLine(AgisTr(AgisUiStr::LogLayerCtxAdd));
         return 0;
 #endif
       case ID_LAYER_CTX_DELETE: {
@@ -143,7 +155,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           }
           return 0;
         }
-        AppLogLine(L"[图层] 已删除所选图层。");
+        AppLogLine(AgisTr(AgisUiStr::LogLayerDeleted));
         {
           const int nn = MapEngine::Instance().GetLayerCount();
           const int newSel = (nn > 0) ? std::min(hit, nn - 1) : -1;
@@ -156,7 +168,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           return 0;
         }
         MapEngine::Instance().Document().MoveLayerUp(static_cast<size_t>(hit));
-        AppLogLine(L"[图层] 已上移。");
+        AppLogLine(AgisTr(AgisUiStr::LogLayerMovedUp));
         LayerListSyncUiAfterOp(hwnd, mainFr, hit - 1);
         return 0;
       }
@@ -165,7 +177,7 @@ LRESULT CALLBACK LayerListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           return 0;
         }
         MapEngine::Instance().Document().MoveLayerDown(static_cast<size_t>(hit));
-        AppLogLine(L"[图层] 已下移。");
+        AppLogLine(AgisTr(AgisUiStr::LogLayerMovedDown));
         LayerListSyncUiAfterOp(hwnd, mainFr, hit + 1);
         return 0;
       }
@@ -241,7 +253,8 @@ LRESULT CALLBACK LayerPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       HDC hdc = BeginPaint(hwnd, &ps);
       RECT r{};
       GetClientRect(hwnd, &r);
-      UiPaintLayerPanel(hdc, r);
+      UiDockChromeText chrome = MakeWorkbenchDockChrome();
+      UiPaintLayerPanel(hdc, r, &chrome);
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -362,24 +375,27 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       break;
     case WM_CREATE: {
       HINSTANCE inst = GetModuleHandleW(nullptr);
-      CreateWindowW(L"STATIC", L"驱动属性", WS_CHILD | SS_LEFT, 12, 56, 100, 18, hwnd,
+      CreateWindowW(L"STATIC", AgisTr(AgisUiStr::CardDriverTitle), WS_CHILD | SS_LEFT, 12, 56, 100, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_LBL_DRIVER)), inst, nullptr);
       CreateWindowExW(
           WS_EX_CLIENTEDGE, L"EDIT", L"",
           WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP, 12, 78, 100,
           80, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_DRIVER_EDIT)), inst, nullptr);
-      CreateWindowW(L"STATIC", L"数据源属性", WS_CHILD | SS_LEFT, 12, 164, 100, 18, hwnd,
+      CreateWindowW(L"STATIC", AgisTr(AgisUiStr::CardSourceTitle), WS_CHILD | SS_LEFT, 12, 164, 100, 18, hwnd,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_LBL_SOURCE)), inst, nullptr);
       CreateWindowExW(
           WS_EX_CLIENTEDGE, L"EDIT", L"",
           WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP, 12, 186, 100,
           80, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_SOURCE_EDIT)), inst, nullptr);
-      CreateWindowW(L"BUTTON", L"生成金字塔", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 12, 0, 90, 28,
-                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_BUILD_OV)), inst, nullptr);
-      CreateWindowW(L"BUTTON", L"删除金字塔", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 108, 0, 90, 28,
-                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_CLEAR_OV)), inst, nullptr);
-      CreateWindowW(L"BUTTON", L"更换数据源…", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 204, 0, 120, 28,
-                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_CHANGE_SRC)), inst, nullptr);
+      CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::BtnBuildPyramid), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                    12, 0, 90, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_BUILD_OV)), inst,
+                    nullptr);
+      CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::BtnClearPyramid), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                    108, 0, 90, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_CLEAR_OV)), inst,
+                    nullptr);
+      CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::BtnChangeSource), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                    204, 0, 120, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROPS_CHANGE_SRC)), inst,
+                    nullptr);
       for (int cid :
            {IDC_PROPS_LBL_DRIVER, IDC_PROPS_LBL_SOURCE, IDC_PROPS_DRIVER_EDIT, IDC_PROPS_SOURCE_EDIT}) {
         if (HWND c = GetDlgItem(hwnd, cid)) {
@@ -417,13 +433,13 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       if (id == IDC_PROPS_BUILD_OV) {
         std::wstring err;
         if (MapEngine::Instance().BuildOverviewsForLayer(g_layerSelIndex, err)) {
-          AppLogLine(L"[图层] 已生成金字塔。");
+          AppLogLine(AgisTr(AgisUiStr::LogOvrBuilt));
           if (g_hwndMap) {
             InvalidateRect(g_hwndMap, nullptr, FALSE);
           }
           RefreshPropsPanel(hwnd);
         } else {
-          AppLogLine(std::wstring(L"[错误] 生成金字塔：") + err);
+          AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrOvrBuildPrefix)) + err);
           MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
         }
         return 0;
@@ -431,13 +447,13 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       if (id == IDC_PROPS_CLEAR_OV) {
         std::wstring err;
         if (MapEngine::Instance().ClearOverviewsForLayer(g_layerSelIndex, err)) {
-          AppLogLine(L"[图层] 已删除金字塔。");
+          AppLogLine(AgisTr(AgisUiStr::LogOvrCleared));
           if (g_hwndMap) {
             InvalidateRect(g_hwndMap, nullptr, FALSE);
           }
           RefreshPropsPanel(hwnd);
         } else {
-          AppLogLine(std::wstring(L"[错误] 删除金字塔：") + err);
+          AppLogLine(std::wstring(AgisTr(AgisUiStr::LogErrOvrClearPrefix)) + err);
           MessageBoxW(owner, err.c_str(), L"AGIS", MB_OK | MB_ICONERROR);
         }
         return 0;
@@ -516,8 +532,9 @@ LRESULT CALLBACK PropsPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       HDC hdc = BeginPaint(hwnd, &ps);
       RECT r{};
       GetClientRect(hwnd, &r);
+      UiDockChromeText chrome = MakeWorkbenchDockChrome();
       UiPaintLayerPropsDockFrame(hdc, r, &g_propsDriverCardRc, &g_propsSourceCardRc,
-                                 g_propsLayerSubtitleForPaint.c_str());
+                                 g_propsLayerSubtitleForPaint.c_str(), &chrome);
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -552,8 +569,8 @@ LRESULT CALLBACK LogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
           WS_EX_CLIENTEDGE, L"EDIT", AppLogGetText().c_str(),
           WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 12, 12, ew, eh, hwnd,
           reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LOG_EDIT)), GetModuleHandleW(nullptr), nullptr);
-      CreateWindowW(L"BUTTON", L"复制全部", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, bx, by, 120, 28, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LOG_COPY)), GetModuleHandleW(nullptr),
+      CreateWindowW(L"BUTTON", AgisTr(AgisUiStr::BtnCopyAll), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, bx, by, 120, 28,
+                    hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LOG_COPY)), GetModuleHandleW(nullptr),
                     nullptr);
       AppLogSetEdit(ed);
       AppLogFlushToEdit();
@@ -640,7 +657,7 @@ LRESULT CALLBACK LogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         GetWindowTextW(edit, buf.data(), n + 1);
         buf.resize(static_cast<size_t>(n));
         CopyTextToClipboard(hwnd, buf);
-        AppLogLine(L"[日志] 已复制到剪贴板。");
+        AppLogLine(AgisTr(AgisUiStr::LogClipboardOk));
         return 0;
       }
       break;
@@ -657,6 +674,10 @@ LRESULT CALLBACK LogWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 void ShowLogDialog(HWND owner) {
   if (g_hwndLogDlg && IsWindow(g_hwndLogDlg)) {
     SetForegroundWindow(g_hwndLogDlg);
+    SetWindowTextW(g_hwndLogDlg, AgisTr(AgisUiStr::WinLogTitle));
+    if (HWND bt = GetDlgItem(g_hwndLogDlg, IDC_LOG_COPY)) {
+      SetWindowTextW(bt, AgisTr(AgisUiStr::BtnCopyAll));
+    }
     HWND ed = GetDlgItem(g_hwndLogDlg, IDC_LOG_EDIT);
     if (ed) {
       SetWindowTextW(ed, AppLogGetText().c_str());
@@ -664,7 +685,7 @@ void ShowLogDialog(HWND owner) {
     return;
   }
   g_hwndLogDlg =
-      CreateWindowExW(WS_EX_DLGMODALFRAME, kLogClass, L"日志",
+      CreateWindowExW(WS_EX_DLGMODALFRAME, kLogClass, AgisTr(AgisUiStr::WinLogTitle),
                       WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX | WS_MINIMIZEBOX, CW_USEDEFAULT,
                       CW_USEDEFAULT, 640, 420, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
   if (g_hwndLogDlg) {
@@ -675,8 +696,38 @@ void ShowLogDialog(HWND owner) {
 
 void ShowAbout(HWND owner) {
   (void)owner;
-  AppLogLine(L"[关于] AGIS — GIS 数据编辑与处理（开发版）");
-  AppLogLine(L"[关于] 版本 0.1.0-dev · Windows 本地 SDI · GDAL/GDI+ 集成中");
-  AppLogLine(L"[提示] 关于信息见上文；可通过菜单「帮助 → 关于」再次写入日志。");
-  (void)owner;
+  AppLogLine(AgisTr(AgisUiStr::AboutLine1));
+  AppLogLine(AgisTr(AgisUiStr::AboutLine2));
+  AppLogLine(AgisTr(AgisUiStr::AboutLine3));
+}
+
+void ApplyWorkbenchPanelsL10n() {
+  if (g_hwndProps && IsWindow(g_hwndProps)) {
+    if (HWND b = GetDlgItem(g_hwndProps, IDC_PROPS_BUILD_OV)) {
+      SetWindowTextW(b, AgisTr(AgisUiStr::BtnBuildPyramid));
+    }
+    if (HWND b = GetDlgItem(g_hwndProps, IDC_PROPS_CLEAR_OV)) {
+      SetWindowTextW(b, AgisTr(AgisUiStr::BtnClearPyramid));
+    }
+    if (HWND b = GetDlgItem(g_hwndProps, IDC_PROPS_CHANGE_SRC)) {
+      SetWindowTextW(b, AgisTr(AgisUiStr::BtnChangeSource));
+    }
+    if (HWND s = GetDlgItem(g_hwndProps, IDC_PROPS_LBL_DRIVER)) {
+      SetWindowTextW(s, AgisTr(AgisUiStr::CardDriverTitle));
+    }
+    if (HWND s = GetDlgItem(g_hwndProps, IDC_PROPS_LBL_SOURCE)) {
+      SetWindowTextW(s, AgisTr(AgisUiStr::CardSourceTitle));
+    }
+    // 驱动/数据源说明在 EDIT 与 GDI+ 副标题中；须按当前语言从 MapEngine 重取（否则切换语言后仍显示旧文案）。
+    RefreshPropsPanel(g_hwndProps);
+  }
+  if (g_hwndLogDlg && IsWindow(g_hwndLogDlg)) {
+    SetWindowTextW(g_hwndLogDlg, AgisTr(AgisUiStr::WinLogTitle));
+    if (HWND b = GetDlgItem(g_hwndLogDlg, IDC_LOG_COPY)) {
+      SetWindowTextW(b, AgisTr(AgisUiStr::BtnCopyAll));
+    }
+  }
+  if (g_hwndLayer && IsWindow(g_hwndLayer)) {
+    InvalidateRect(g_hwndLayer, nullptr, FALSE);
+  }
 }

@@ -48,6 +48,8 @@ AGIS_COMMON_API bool g_propsDockExpanded = true;
 AGIS_COMMON_API int g_toolbarHeight = 0;
 AGIS_COMMON_API HIMAGELIST g_toolbarImageList = nullptr;
 AGIS_COMMON_API HMENU g_hmenuProjSub = nullptr;
+AGIS_COMMON_API HMENU g_hmenuRenderSub = nullptr;
+AGIS_COMMON_API HMENU g_hmenuMapUiSub = nullptr;
 AGIS_COMMON_API std::wstring g_pendingPreviewModelPath;
 AGIS_COMMON_API bool g_pendingPreviewLoadAs3DTiles = false;
 

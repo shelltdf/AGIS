@@ -19,6 +19,15 @@
         "AGIS_MAP_ENGINE_SHARED": "OFF",
         "AGIS_COMMON_APP_SHARED": "OFF"
       }
+    },
+    {
+      "name": "win-ninja",
+      "displayName": "Windows Ninja（单配置，增量编译通常快于 VS 多工程；需安装 ninja）",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -31,6 +40,10 @@
       "name": "win-vs2022-release",
       "configurePreset": "win-vs2022",
       "configuration": "Release"
+    },
+    {
+      "name": "win-ninja-release",
+      "configurePreset": "win-ninja"
     }
   ]
 }

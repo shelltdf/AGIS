@@ -42,12 +42,35 @@
 #include "app/preview/model_preview/tiles_gltf_loader.h"
 #include <gdiplus.h>
 #include "utils/ui_font.h"
+#include "utils/agis_ui_l10n.h"
 #include "common/app_core/main_app.h"
 #include "core/main_globals.h"
 
 #ifndef GIS_DESKTOP_HAVE_GDAL
 #define GIS_DESKTOP_HAVE_GDAL 0
 #endif
+
+static const wchar_t* ModelPreviewDialogTitleW() {
+  return AgisPickUiLang(L"模型预览", L"Model preview");
+}
+
+static std::wstring ModelPreviewInfoPanelLoadingOrEmpty(bool pathEmpty) {
+  return pathEmpty ? std::wstring(AgisPickUiLang(L"空场景（未传入模型路径）", L"Empty scene (no model path passed in)"))
+                   : std::wstring(AgisPickUiLang(L"模型正在后台加载，请稍候...", L"Loading model in the background…"));
+}
+
+static const wchar_t kOpenModelFilterZh[] =
+    L"模型/点云/3D Tiles\0*.obj;*.las;*.laz;*.json\0"
+    L"OBJ 模型 (*.obj)\0*.obj\0"
+    L"LAS/LAZ 点云 (*.las;*.laz)\0*.las;*.laz\0"
+    L"3D Tiles JSON (*.json)\0*.json\0"
+    L"所有文件 (*.*)\0*.*\0\0";
+static const wchar_t kOpenModelFilterEn[] =
+    L"Model / point cloud / 3D Tiles\0*.obj;*.las;*.laz;*.json\0"
+    L"OBJ (*.obj)\0*.obj\0"
+    L"LAS/LAZ (*.las;*.laz)\0*.las;*.laz\0"
+    L"3D Tiles JSON (*.json)\0*.json\0"
+    L"All files (*.*)\0*.*\0\0";
 #if GIS_DESKTOP_HAVE_GDAL
 #include "utils/agis_gdal_runtime_env.h"
 #include <cpl_error.h>
@@ -325,11 +348,19 @@ static void AppendLazGdalDriverHint(std::wstring* d) {
     return;
   }
   *d += L"\n\n";
-  *d += L"【依赖】LAZ 为 LASzip 压缩。若 bundled LASzip 未随工程编入，可放置源码到 ../3rdparty/LASzip（见 README-LASZIP.md）；"
-        L"否则仅能通过 GDAL 矢量路径打开 LAZ，依赖 GDAL 对 LAS/LAZ 的驱动与解压配置。\n";
-  *d += L"【可选】将 LAZ 转为 .las；并确认 CMake 已对 bundled LASzip / GDAL 正确检测。\n";
-  *d += L"【排查】若上方 bundled LASzip 已报 “wrong file_signature” / “not a LAS/LAZ file”，说明文件头不是 LASF，多为文件本体或扩展名问题，"
-        L"与「未装 LASzip」无关；此时 GDAL 回退通常同样失败，请先用外部工具或十六进制查看器核对文件格式。";
+  *d += AgisPickUiLang(
+      L"【依赖】LAZ 为 LASzip 压缩。若 bundled LASzip 未随工程编入，可放置源码到 ../3rdparty/LASzip（见 README-LASZIP.md）；"
+      L"否则仅能通过 GDAL 矢量路径打开 LAZ，依赖 GDAL 对 LAS/LAZ 的驱动与解压配置。\n",
+      L"[Deps] LAZ is LASzip-compressed. If bundled LASzip was not linked, place sources under ../3rdparty/LASzip (see "
+      L"README-LASZIP.md); otherwise open LAZ via GDAL vector path, which needs LAS/LAZ driver support.\n");
+  *d += AgisPickUiLang(L"【可选】将 LAZ 转为 .las；并确认 CMake 已对 bundled LASzip / GDAL 正确检测。\n",
+                       L"[Optional] Convert LAZ to .las; verify CMake detected bundled LASzip / GDAL.\n");
+  *d += AgisPickUiLang(
+      L"【排查】若上方 bundled LASzip 已报 “wrong file_signature” / “not a LAS/LAZ file”，说明文件头不是 LASF，多为文件本体或扩展名问题，"
+      L"与「未装 LASzip」无关；此时 GDAL 回退通常同样失败，请先用外部工具或十六进制查看器核对文件格式。",
+      L"[Triage] If bundled LASzip reported wrong file_signature / not a LAS/LAZ file, the header is not LASF—often wrong "
+      L"file, corruption, or misnamed extension—not “missing LASzip”; GDAL fallback usually fails too—verify the header in a "
+      L"hex editor.");
 }
 
 static bool ReadLazPointsPreviewGdal(const std::wstring& pathW, std::vector<LasPointFltRaw>* outPts, int* progressPct,
@@ -357,7 +388,8 @@ static bool ReadLazPointsPreviewGdal(const std::wstring& pathW, std::vector<LasP
   {
     const int n = WideCharToMultiByte(CP_UTF8, 0, pathW.c_str(), static_cast<int>(pathW.size()), nullptr, 0, nullptr, nullptr);
     if (n <= 0) {
-      setDiag(L"内部错误：无法将路径转为 UTF-8 供 GDALOpenEx 使用。");
+      setDiag(AgisPickUiLang(L"内部错误：无法将路径转为 UTF-8 供 GDALOpenEx 使用。",
+                             L"Internal error: path could not be converted to UTF-8 for GDALOpenEx."));
       return false;
     }
     utf8.assign(static_cast<size_t>(n), '\0');
@@ -367,12 +399,15 @@ static bool ReadLazPointsPreviewGdal(const std::wstring& pathW, std::vector<LasP
   GDALDataset* ds = static_cast<GDALDataset*>(
       GDALOpenEx(utf8.c_str(), GDAL_OF_VECTOR | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
   if (!ds) {
-    setDiag(L"GDAL（矢量 Open）未能打开该 LAZ：驱动/格式未识别、缺少 LASzip 支持，或 CPL 详情如下。");
+    setDiag(AgisPickUiLang(L"GDAL（矢量 Open）未能打开该 LAZ：驱动/格式未识别、缺少 LASzip 支持，或 CPL 详情如下。",
+                           L"GDAL (vector open) could not open this LAZ: unknown driver/format, missing LASzip, or see CPL "
+                           L"below."));
     return false;
   }
   OGRLayer* layer = ds->GetLayer(0);
   if (!layer) {
-    setDiag(L"GDAL 已打开数据集，但不存在第 0 个矢量图层。");
+    setDiag(AgisPickUiLang(L"GDAL 已打开数据集，但不存在第 0 个矢量图层。",
+                           L"GDAL opened the dataset but layer 0 is missing."));
     GDALClose(ds);
     return false;
   }
@@ -451,7 +486,8 @@ static bool ReadLazPointsPreviewGdal(const std::wstring& pathW, std::vector<LasP
     *progressPct = 95;
   }
   if (outPts->empty()) {
-    setDiag(L"图层可读但未得到任何 Point 要素（几何过滤后为空）。");
+    setDiag(AgisPickUiLang(L"图层可读但未得到任何 Point 要素（几何过滤后为空）。",
+                           L"Layer read OK but no Point features after geometry filter."));
     return false;
   }
   if (diagOut) {
@@ -516,10 +552,13 @@ static void AppendLazWrongSignatureHintIfMatching(std::wstring* d) {
     return false;
   };
   if (lowerContains(L"file_signature") || lowerContains(L"not a las")) {
-    d->append(
+    d->append(AgisPickUiLang(
         L"\n\n【文件头】正规 LAS/（LAZ 外层亦为）LAS 1.x 应以 ASCII “LASF” 开头（十六进制 4C 41 53 "
         L"46）。出现本错误多表示：文件并非 LAS/LAZ、下载/拷贝损坏、扩展名与内容不符，或其它点云格式被误命名为 .laz。请先在外部工具或用十六进制查看器核对文件头，"
-        L"而非仅重装 GDAL/LASzip。");
+        L"而非仅重装 GDAL/LASzip。",
+        L"\n\n[Header] Valid LAS 1.x (LAZ wraps LAS) should start with ASCII “LASF” (hex 4C 41 53 46). This error usually "
+        L"means the file is not LAS/LAZ, is corrupt, extension mismatches content, or another format was renamed .laz—"
+        L"verify the header in a hex editor, not only reinstall GDAL/LASzip."));
   }
 }
 
@@ -543,14 +582,15 @@ static int PeekLazPointCountLaszip(const std::wstring& pathW, std::uint64_t* nOu
   laszip_POINTER laszip = nullptr;
   if (laszip_create(&laszip) != 0 || !laszip) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：laszip_create 失败。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：laszip_create 失败。", L"LASzip: laszip_create failed."));
     }
     return 3;
   }
   const std::string utf8 = PreviewWideToUtf8(pathW);
   if (utf8.empty() && !pathW.empty()) {
     if (diagOut) {
-      diagOut->assign(L"内部错误：无法将路径转为 UTF-8。");
+      diagOut->assign(AgisPickUiLang(L"内部错误：无法将路径转为 UTF-8。",
+                                     L"Internal error: path could not be converted to UTF-8."));
     }
     laszip_destroy(laszip);
     return 3;
@@ -558,7 +598,8 @@ static int PeekLazPointCountLaszip(const std::wstring& pathW, std::uint64_t* nOu
   laszip_BOOL compressed = 0;
   if (laszip_open_reader(laszip, utf8.c_str(), &compressed) != 0) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：无法打开读端（可能不是 LAZ/LAS 或文件损坏）。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：无法打开读端（可能不是 LAZ/LAS 或文件损坏）。",
+                                     L"LASzip: could not open reader (not LAZ/LAS or file corrupt)."));
       AppendLaszipLastError(diagOut, laszip);
       AppendLazWrongSignatureHintIfMatching(diagOut);
     }
@@ -568,7 +609,7 @@ static int PeekLazPointCountLaszip(const std::wstring& pathW, std::uint64_t* nOu
   laszip_header_struct* header = nullptr;
   if (laszip_get_header_pointer(laszip, &header) != 0 || !header) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：无法取得文件头指针。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：无法取得文件头指针。", L"LASzip: could not get header pointer."));
       AppendLaszipLastError(diagOut, laszip);
     }
     laszip_close_reader(laszip);
@@ -578,7 +619,7 @@ static int PeekLazPointCountLaszip(const std::wstring& pathW, std::uint64_t* nOu
   const laszip_I64 cnt = LazFileTotalPointCount(header);
   if (cnt <= 0) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：无法读取有效点数。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：无法读取有效点数。", L"LASzip: could not read valid point count."));
       AppendLaszipLastError(diagOut, laszip);
     }
     laszip_close_reader(laszip);
@@ -600,14 +641,15 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
   laszip_POINTER laszip = nullptr;
   if (laszip_create(&laszip) != 0 || !laszip) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：laszip_create 失败。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：laszip_create 失败。", L"LASzip: laszip_create failed."));
     }
     return false;
   }
   const std::string utf8 = PreviewWideToUtf8(pathW);
   if (utf8.empty() && !pathW.empty()) {
     if (diagOut) {
-      diagOut->assign(L"内部错误：无法将路径转为 UTF-8。");
+      diagOut->assign(AgisPickUiLang(L"内部错误：无法将路径转为 UTF-8。",
+                                     L"Internal error: path could not be converted to UTF-8."));
     }
     laszip_destroy(laszip);
     return false;
@@ -615,7 +657,7 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
   laszip_BOOL compressed = 0;
   if (laszip_open_reader(laszip, utf8.c_str(), &compressed) != 0) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：无法打开读端。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：无法打开读端。", L"LASzip: could not open reader."));
       AppendLaszipLastError(diagOut, laszip);
       AppendLazWrongSignatureHintIfMatching(diagOut);
     }
@@ -625,7 +667,7 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
   laszip_header_struct* header = nullptr;
   if (laszip_get_header_pointer(laszip, &header) != 0 || !header) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：无法读取文件头。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：无法读取文件头。", L"LASzip: could not read header."));
       AppendLaszipLastError(diagOut, laszip);
     }
     laszip_close_reader(laszip);
@@ -635,7 +677,7 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
   const laszip_I64 npoints = LazFileTotalPointCount(header);
   if (npoints <= 0) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：点数无效。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：点数无效。", L"LASzip: invalid point count."));
       AppendLaszipLastError(diagOut, laszip);
     }
     laszip_close_reader(laszip);
@@ -645,7 +687,7 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
   laszip_point_struct* point = nullptr;
   if (laszip_get_point_pointer(laszip, &point) != 0 || !point) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：无法取得点缓冲指针。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：无法取得点缓冲指针。", L"LASzip: could not get point buffer pointer."));
       AppendLaszipLastError(diagOut, laszip);
     }
     laszip_close_reader(laszip);
@@ -662,9 +704,15 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
   for (laszip_I64 i = 0; i < npoints && outPts->size() < kLasPreviewMaxSourcePoints; ++i) {
     if (laszip_read_point(laszip) != 0) {
       if (diagOut) {
-        diagOut->assign(L"LASzip：读取第 ")
-            .append(std::to_wstring(static_cast<unsigned long long>(i)))
-            .append(L" 个点失败。");
+        {
+          wchar_t buf[160]{};
+          if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+            swprintf_s(buf, L"LASzip: failed reading point %llu.", static_cast<unsigned long long>(i));
+          } else {
+            swprintf_s(buf, L"LASzip：读取第 %llu 个点失败。", static_cast<unsigned long long>(i));
+          }
+          diagOut->assign(buf);
+        }
         AppendLaszipLastError(diagOut, laszip);
       }
       laszip_close_reader(laszip);
@@ -675,7 +723,7 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
     laszip_F64 coords[3]{};
     if (laszip_get_coordinates(laszip, coords) != 0) {
       if (diagOut) {
-        diagOut->assign(L"LASzip：坐标解码失败。");
+        diagOut->assign(AgisPickUiLang(L"LASzip：坐标解码失败。", L"LASzip: coordinate decode failed."));
         AppendLaszipLastError(diagOut, laszip);
       }
       laszip_close_reader(laszip);
@@ -706,7 +754,7 @@ static bool ReadLazPointsLaszip(const std::wstring& pathW, std::vector<LasPointF
   }
   if (outPts->empty()) {
     if (diagOut) {
-      diagOut->assign(L"LASzip：未得到任何点。");
+      diagOut->assign(AgisPickUiLang(L"LASzip：未得到任何点。", L"LASzip: no points read."));
     }
     return false;
   }
@@ -1310,21 +1358,27 @@ static void FillFrameMsHistoryChronological(const ModelPreviewState& st, float* 
 std::wstring EvaluatePreviewBottleneck(const ModelPreviewState& st, float cpuFrameMs, float gpuFrameMs, uint32_t drawCalls,
                                        float waitSubmitMs, float waitRenderMs) {
   if (gpuFrameMs > cpuFrameMs + 2.0f && gpuFrameMs > 12.0f) {
-    if (drawCalls > 50000) return L"GPU: DrawCall偏高";
-    if (st.stats.faces > 1000000) return L"GPU: 三角面过多";
-    return L"GPU负载偏高";
+    if (drawCalls > 50000) {
+      return AgisPickUiLang(L"GPU: DrawCall偏高", L"GPU: high draw-call count");
+    }
+    if (st.stats.faces > 1000000) {
+      return AgisPickUiLang(L"GPU: 三角面过多", L"GPU: too many triangles");
+    }
+    return AgisPickUiLang(L"GPU负载偏高", L"GPU load high");
   }
   if (cpuFrameMs > gpuFrameMs + 2.0f && cpuFrameMs > 12.0f) {
-    if (st.stats.faces > 1000000) return L"CPU: 几何准备压力大";
-    return L"CPU负载偏高";
+    if (st.stats.faces > 1000000) {
+      return AgisPickUiLang(L"CPU: 几何准备压力大", L"CPU: heavy geometry prep");
+    }
+    return AgisPickUiLang(L"CPU负载偏高", L"CPU load high");
   }
   if (waitSubmitMs > 1.5f || waitRenderMs > 1.5f) {
-    return L"同步等待/VSync";
+    return AgisPickUiLang(L"同步等待/VSync", L"Sync wait / VSync");
   }
   if (st.lastFrameMs > 20.0f) {
-    return L"渲染负载偏高";
+    return AgisPickUiLang(L"渲染负载偏高", L"Render load high");
   }
-  return L"稳定";
+  return AgisPickUiLang(L"稳定", L"Steady");
 }
 
 ObjPreviewStats ScanObjStats(const std::wstring& path) {
@@ -1935,51 +1989,93 @@ std::wstring BuildObjInfoText(const std::wstring& path, const ObjPreviewStats* c
   const uint64_t estMem = st.vertices * 32 + st.texcoords * 8 + st.normals * 12 + st.faces * 16;
   const uint64_t estVram = estMem * 3 / 2;
   std::wstringstream ss;
-  ss << L"文件: " << path << L"\r\n";
-  ss << L"文件体积: " << ToHumanBytes(st.fileBytes) << L"\r\n\r\n";
-  ss << L"[Mesh 信息]\r\n";
-  ss << L"顶点数: " << st.vertices << L"\r\n";
-  ss << L"纹理坐标数: " << st.texcoords << L"\r\n";
-  ss << L"法线数: " << st.normals << L"\r\n";
-  ss << L"面片数: " << st.faces << L"\r\n\r\n";
-  ss << L"[材质/贴图信息]\r\n";
-  ss << L"材质数量(usemtl): " << st.materials << L"\r\n";
-  ss << L"贴图数量(map_Kd): " << st.textures << L"\r\n\r\n";
-  ss << L"[资源占用估算]\r\n";
-  ss << L"内存占用(估算): " << ToHumanBytes(estMem) << L"\r\n";
-  ss << L"显存占用(估算): " << ToHumanBytes(estVram) << L"\r\n";
+  if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+    ss << L"File: " << path << L"\r\n";
+    ss << L"Size: " << ToHumanBytes(st.fileBytes) << L"\r\n\r\n";
+    ss << L"[Mesh]\r\n";
+    ss << L"Vertices: " << st.vertices << L"\r\n";
+    ss << L"Texcoords: " << st.texcoords << L"\r\n";
+    ss << L"Normals: " << st.normals << L"\r\n";
+    ss << L"Faces: " << st.faces << L"\r\n\r\n";
+    ss << L"[Materials / textures]\r\n";
+    ss << L"Materials (usemtl): " << st.materials << L"\r\n";
+    ss << L"Textures (map_Kd): " << st.textures << L"\r\n\r\n";
+    ss << L"[Rough footprint]\r\n";
+    ss << L"RAM (est.): " << ToHumanBytes(estMem) << L"\r\n";
+    ss << L"VRAM (est.): " << ToHumanBytes(estVram) << L"\r\n";
+  } else {
+    ss << L"文件: " << path << L"\r\n";
+    ss << L"文件体积: " << ToHumanBytes(st.fileBytes) << L"\r\n\r\n";
+    ss << L"[Mesh 信息]\r\n";
+    ss << L"顶点数: " << st.vertices << L"\r\n";
+    ss << L"纹理坐标数: " << st.texcoords << L"\r\n";
+    ss << L"法线数: " << st.normals << L"\r\n";
+    ss << L"面片数: " << st.faces << L"\r\n\r\n";
+    ss << L"[材质/贴图信息]\r\n";
+    ss << L"材质数量(usemtl): " << st.materials << L"\r\n";
+    ss << L"贴图数量(map_Kd): " << st.textures << L"\r\n\r\n";
+    ss << L"[资源占用估算]\r\n";
+    ss << L"内存占用(估算): " << ToHumanBytes(estMem) << L"\r\n";
+    ss << L"显存占用(估算): " << ToHumanBytes(estVram) << L"\r\n";
+  }
   return ss.str();
 }
 
 static std::wstring BuildModelPreviewInfoText(const ModelPreviewState& st) {
   if (st.sourceIs3DTiles) {
     std::wstringstream ss;
-    ss << L"3D Tiles（内建 glTF 解析，无 vcpkg）\r\n";
-    ss << L"路径: " << st.path << L"\r\n\r\n";
-    ss << L"顶点: " << st.stats.vertices << L"\r\n面片: " << st.stats.faces << L"\r\n";
-    ss << L"材质槽: " << st.stats.materials << L"\r\n";
-    ss << L"\r\n说明: 合并遍历 tileset 中本地 b3dm/i3dm/glb/cmpt；Draco、仅 http 外链、pnts 等跳过。\r\n";
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      ss << L"3D Tiles (built-in glTF parse, no vcpkg)\r\n";
+      ss << L"Path: " << st.path << L"\r\n\r\n";
+      ss << L"Vertices: " << st.stats.vertices << L"\r\nFaces: " << st.stats.faces << L"\r\n";
+      ss << L"Material slots: " << st.stats.materials << L"\r\n";
+      ss << L"\r\nNote: walks local b3dm/i3dm/glb/cmpt in the tileset; skips Draco, http-only externals, pnts, etc.\r\n";
+    } else {
+      ss << L"3D Tiles（内建 glTF 解析，无 vcpkg）\r\n";
+      ss << L"路径: " << st.path << L"\r\n\r\n";
+      ss << L"顶点: " << st.stats.vertices << L"\r\n面片: " << st.stats.faces << L"\r\n";
+      ss << L"材质槽: " << st.stats.materials << L"\r\n";
+      ss << L"\r\n说明: 合并遍历 tileset 中本地 b3dm/i3dm/glb/cmpt；Draco、仅 http 外链、pnts 等跳过。\r\n";
+    }
     return ss.str();
   }
   if (st.lasSourcePointCount > 0) {
     std::wstringstream ss;
-    ss << L"文件: " << st.path << L"\r\n";
-    std::error_code ec;
-    const uint64_t fb = std::filesystem::file_size(st.path, ec);
-    if (!ec) {
-      ss << L"文件体积: " << ToHumanBytes(fb) << L"\r\n\r\n";
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      ss << L"File: " << st.path << L"\r\n";
+      std::error_code ec;
+      const uint64_t fb = std::filesystem::file_size(st.path, ec);
+      if (!ec) {
+        ss << L"Size: " << ToHumanBytes(fb) << L"\r\n\r\n";
+      } else {
+        ss << L"\r\n";
+      }
+      ss << L"[Point cloud LAS/LAZ]\r\n";
+      ss << L"Source points: " << st.lasSourcePointCount << L"\r\n";
+      ss << L"Splat ~px: " << st.lasPointScreenPx
+         << L" px (2 tris/point billboards; not GPU PT_POINTS for stable sizing)\r\n";
+      ss << L"Preview triangles: " << st.model.faces.size()
+         << L" (capped subsample; color: LAS / LAZ via LASzip uses PDRF 2/3/5/7 RGB; GDAL LAZ uses attribute fields)\r\n";
     } else {
-      ss << L"\r\n";
+      ss << L"文件: " << st.path << L"\r\n";
+      std::error_code ec;
+      const uint64_t fb = std::filesystem::file_size(st.path, ec);
+      if (!ec) {
+        ss << L"文件体积: " << ToHumanBytes(fb) << L"\r\n\r\n";
+      } else {
+        ss << L"\r\n";
+      }
+      ss << L"[点云 LAS/LAZ]\r\n";
+      ss << L"源点数: " << st.lasSourcePointCount << L"\r\n";
+      ss << L"点斑近似像素: " << st.lasPointScreenPx << L" px（每点 2 三角/XY 点精灵；非 GPU PT_POINTS，便于稳定控制大小）\r\n";
+      ss << L"预览三角面: " << st.model.faces.size()
+         << L"（已按上限下采样；颜色：LAS/经 LASzip 读的 LAZ 取 PDRF 2/3/5/7 的 RGB；经 GDAL 的 LAZ 依赖属性字段）\r\n";
     }
-    ss << L"[点云 LAS/LAZ]\r\n";
-    ss << L"源点数: " << st.lasSourcePointCount << L"\r\n";
-    ss << L"点斑近似像素: " << st.lasPointScreenPx << L" px（每点 2 三角/XY 点精灵；非 GPU PT_POINTS，便于稳定控制大小）\r\n";
-    ss << L"预览三角面: " << st.model.faces.size()
-       << L"（已按上限下采样；颜色：LAS/经 LASzip 读的 LAZ 取 PDRF 2/3/5/7 的 RGB；经 GDAL 的 LAZ 依赖属性字段）\r\n";
     return ss.str();
   }
   if (st.path.empty()) {
-    return L"空场景\r\n请使用「Open Model...」选择 OBJ / LAS / 3D Tiles JSON。";
+    return AgisPickUiLang(L"空场景\r\n请使用「Open Model...」选择 OBJ / LAS / 3D Tiles JSON。",
+                          L"Empty scene\r\nUse Open Model... to pick OBJ / LAS / 3D Tiles JSON.");
   }
   // 已成功载入时 stats 已由工作线程填好；勿再 ScanObjStats 全表扫盘，否则大 OBJ 主线程会卡数秒～数十秒（表现为加载 100% 后长时间无响应）。
   if (st.stats.vertices > 0 || st.stats.faces > 0) {
@@ -2011,11 +2107,7 @@ static bool PromptOpenModelPreviewPath(HWND owner, std::wstring* pathOut, bool* 
   ofn.lpstrFile = fileBuf;
   ofn.nMaxFile = static_cast<DWORD>(std::size(fileBuf));
   ofn.lpstrFilter =
-      L"模型/点云/3D Tiles\0*.obj;*.las;*.laz;*.json\0"
-      L"OBJ 模型 (*.obj)\0*.obj\0"
-      L"LAS/LAZ 点云 (*.las;*.laz)\0*.las;*.laz\0"
-      L"3D Tiles JSON (*.json)\0*.json\0"
-      L"所有文件 (*.*)\0*.*\0\0";
+      AgisGetUiLanguage() == AgisUiLanguage::kEn ? kOpenModelFilterEn : kOpenModelFilterZh;
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_HIDEREADONLY;
 #if defined(OFN_LONGPATHS)
@@ -2123,19 +2215,22 @@ static bool PreviewLaunchLoadThreadOnly(HWND hwnd, ModelPreviewState* st, const 
   st->workerPackage = {};
   st->hasWorkerPackage = false;
 #endif
-  st->infoPanelText = path.empty() ? L"空场景（未传入模型路径）" : L"模型正在后台加载，请稍候...";
+  st->infoPanelText = ModelPreviewInfoPanelLoadingOrEmpty(path.empty());
 
   auto* loadCtx = new (std::nothrow) PreviewLoadCtx{hwnd, st};
   if (!loadCtx) {
     st->loading = false;
-    ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法启动模型后台加载。");
+    ShowPreviewCopyableMessage(
+        hwnd, ModelPreviewDialogTitleW(),
+        AgisPickUiLang(L"内存不足：无法启动模型后台加载。", L"Out of memory: cannot start background model load."));
     return false;
   }
   st->loadThread = CreateThread(nullptr, 0, PreviewLoadThreadProc, loadCtx, 0, nullptr);
   if (!st->loadThread) {
     delete loadCtx;
     st->loading = false;
-    ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法启动模型加载线程。");
+    ShowPreviewCopyableMessage(hwnd, ModelPreviewDialogTitleW(),
+                               AgisPickUiLang(L"无法启动模型加载线程。", L"Could not start the model load thread."));
     return false;
   }
 #if AGIS_USE_BGFX
@@ -2166,7 +2261,7 @@ static bool StartModelPreviewAsyncLoad(HWND hwnd, ModelPreviewState* st, const s
   st->loadFailed = false;
   st->path = path;
   st->loadAs3DTiles = as3dTiles;
-  st->infoPanelText = path.empty() ? L"空场景（未传入模型路径）" : L"模型正在后台加载，请稍候...";
+  st->infoPanelText = ModelPreviewInfoPanelLoadingOrEmpty(path.empty());
   PreviewSyncPaintLoadingShell(hwnd, st);
 
   PreviewPrepareForAsyncReload(hwnd, st);
@@ -2227,7 +2322,7 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
 #if AGIS_USE_BGFX
     if (!PreviewThreadPreparePackage(st)) {
       st->loadFailed = true;
-      st->tilesLoadDiag = L"预览网格构建失败。";
+      st->tilesLoadDiag = AgisPickUiLang(L"预览网格构建失败。", L"Failed to build preview mesh.");
       st->loadStage = 9;
       st->loadProgress = 100;
       PreviewThreadPostLoadMessage(ctx->hwnd, st, 0);
@@ -2244,7 +2339,9 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
     } catch (const std::bad_alloc&) {
       st->loadedModel = ObjPreviewModel{};
       st->loadFailed = true;
-      st->loadResourceDiag = L"系统内存不足，无法完成 3D Tiles 网格加载。";
+      st->loadResourceDiag =
+          AgisPickUiLang(L"系统内存不足，无法完成 3D Tiles 网格加载。",
+                         L"Out of memory: could not finish loading 3D Tiles mesh.");
       st->loadStage = 9;
       st->loadProgress = 100;
       PreviewThreadPostLoadMessage(ctx->hwnd, st, 0);
@@ -2305,7 +2402,10 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
         st->lazPreviewDiag.clear();
         lazOk = ReadLazPointsPreviewGdal(st->path, &pts, &st->loadProgress, &st->lazPreviewDiag);
         if (!lazOk && !laszipDiagBeforeGdal.empty()) {
-          st->lazPreviewDiag = L"【bundled LASzip】\n" + laszipDiagBeforeGdal + L"\n\n【GDAL 回退】\n" + st->lazPreviewDiag;
+          st->lazPreviewDiag = std::wstring(AgisPickUiLang(L"【bundled LASzip】\n", L"[bundled LASzip]\n")) +
+                               laszipDiagBeforeGdal +
+                               std::wstring(AgisPickUiLang(L"\n\n【GDAL 回退】\n", L"\n\n[GDAL fallback]\n")) +
+                               st->lazPreviewDiag;
         }
       }
 #endif
@@ -2369,7 +2469,9 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   } catch (const std::bad_alloc&) {
     st->loadedModel = ObjPreviewModel{};
     st->loadFailed = true;
-    st->loadResourceDiag = L"系统内存不足，无法载入完整 OBJ 模型数据。请关闭其他程序后重试。";
+    st->loadResourceDiag =
+        AgisPickUiLang(L"系统内存不足，无法载入完整 OBJ 模型数据。请关闭其他程序后重试。",
+                       L"Out of memory: cannot load full OBJ. Close other apps and try again.");
     st->loadStage = 9;
     st->loadProgress = 100;
     PreviewThreadPostLoadMessage(ctx->hwnd, st, 0);
@@ -2409,7 +2511,9 @@ DWORD WINAPI PreviewLoadThreadProc(LPVOID param) {
   } catch (const std::bad_alloc&) {
     st->loadedModel = ObjPreviewModel{};
     st->loadFailed = true;
-    st->loadResourceDiag = L"系统内存不足，无法在工作线程中构建预览网格（含贴图解码）。";
+    st->loadResourceDiag =
+        AgisPickUiLang(L"系统内存不足，无法在工作线程中构建预览网格（含贴图解码）。",
+                       L"Out of memory: cannot build preview mesh (incl. texture decode) on the worker thread.");
     st->loadStage = 9;
     st->loadProgress = 100;
     PreviewThreadPostLoadMessage(ctx->hwnd, st, 0);
@@ -2458,7 +2562,7 @@ static LRESULT CALLBACK AgisCopyableMsgWndProc(HWND w, UINT msg, WPARAM wp, LPAR
         SendMessageW(ed, WM_SETFONT, reinterpret_cast<WPARAM>(f), TRUE);
       }
       HWND ok = CreateWindowExW(
-          0, L"BUTTON", L"确定",
+          0, L"BUTTON", AgisPickUiLang(L"确定", L"OK"),
           WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
           (std::max)(kMargin, static_cast<int>(rc.right) - kMargin - kBtnW),
           static_cast<int>(rc.bottom) - kMargin - kBtnH, kBtnW, kBtnH, w,
@@ -2586,34 +2690,39 @@ void ModelPreviewPumpPriorityLoadMessages(HWND hwnd) {
 
 #if AGIS_USE_BGFX
 static const char* ModelPreviewLoadingStageUtf8(const ModelPreviewState& st) {
+  const bool en = AgisGetUiLanguage() == AgisUiLanguage::kEn;
   if (st.loadAs3DTiles) {
     switch (st.loadStage) {
-      case 1: return "正在解析 tileset 与瓦片网格...";
-      case 4: return "即将完成...";
-      case 9: return "3D Tiles 加载失败";
+      case 1:
+        return en ? "Parsing tileset and tile mesh..." : "正在解析 tileset 与瓦片网格...";
+      case 4: return en ? "Almost done..." : "即将完成...";
+      case 9: return en ? "3D Tiles load failed" : "3D Tiles 加载失败";
       default: break;
     }
   } else if (PreviewPathIsPointCloudFile(st.path)) {
     switch (st.loadStage) {
       case 1:
+        if (en) {
+          return PreviewPathIsLazFile(st.path) ? "Reading LAZ (LASzip preferred)..." : "Reading LAS point cloud...";
+        }
         return PreviewPathIsLazFile(st.path) ? "正在读取 LAZ 点云（优先 LASzip）..." : "正在读取 LAS 点云...";
-      case 2: return "正在生成预览点斑...";
-      case 4: return "即将完成...";
-      case 9: return "点云读取失败";
+      case 2: return en ? "Building preview splats..." : "正在生成预览点斑...";
+      case 4: return en ? "Almost done..." : "即将完成...";
+      case 9: return en ? "Point cloud read failed" : "点云读取失败";
       default: break;
     }
   } else {
     switch (st.loadStage) {
-      case 1: return "正在统计模型信息...";
-      case 2: return "正在解析 OBJ 网格...";
-      case 3: return "正在分析贴图层...";
-      case 4: return "正在上传 GPU 资源...";
-      case 5: return "正在构建预览网格(后台)...";
-      case 9: return "模型解析失败";
+      case 1: return en ? "Gathering model stats..." : "正在统计模型信息...";
+      case 2: return en ? "Parsing OBJ mesh..." : "正在解析 OBJ 网格...";
+      case 3: return en ? "Analyzing texture layers..." : "正在分析贴图层...";
+      case 4: return en ? "Uploading GPU resources..." : "正在上传 GPU 资源...";
+      case 5: return en ? "Building preview mesh (background)..." : "正在构建预览网格(后台)...";
+      case 9: return en ? "Model parse failed" : "模型解析失败";
       default: break;
     }
   }
-  return "准备中...";
+  return en ? "Preparing..." : "准备中...";
 }
 
 static void ModelPreviewDrawLoadingImGui(HWND hwnd, ModelPreviewState* st, const RECT& vrc) {
@@ -2630,13 +2739,14 @@ static void ModelPreviewDrawLoadingImGui(HWND hwnd, ModelPreviewState* st, const
   ImGui::SetNextWindowBgAlpha(0.94f);
   ImGui::Begin("##ModelPreviewLoading", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-  const char* headline = "模型加载中...";
+  const wchar_t* headlineW = AgisPickUiLang(L"模型加载中...", L"Loading model...");
   if (st->loadAs3DTiles) {
-    headline = "3D Tiles 加载中...";
+    headlineW = AgisPickUiLang(L"3D Tiles 加载中...", L"Loading 3D Tiles...");
   } else if (PreviewPathIsPointCloudFile(st->path)) {
-    headline = "点云加载中...";
+    headlineW = AgisPickUiLang(L"点云加载中...", L"Loading point cloud...");
   }
-  ImGui::TextUnformatted(headline);
+  const std::string headlineUtf8 = PreviewWideToUtf8(std::wstring(headlineW));
+  ImGui::TextUnformatted(headlineUtf8.c_str());
   const int pctClamped = (std::clamp)(st->loadProgress, 0, 100);
   ImGui::Text("%d %%", pctClamped);
   ImGui::ProgressBar(static_cast<float>(pctClamped) * 0.01f, ImVec2(380.0f, 18.0f), "");
@@ -2703,7 +2813,9 @@ void ModelPreviewFrameStep(HWND hwnd) {
     st->imguiScroll = 0;
     ImGui::SetNextWindowBgAlpha(0.86f);
     ImGui::SetNextWindowPos(ImVec2(static_cast<float>(vrc.left + 10), static_cast<float>(vrc.top + 10)), ImGuiCond_Always);
-    ImGui::Begin("Preview Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    const std::string previewPanelTitle =
+        PreviewWideToUtf8(std::wstring(AgisPickUiLang(L"预览控制###model_preview_ctrl", L"Preview Controls###model_preview_ctrl")));
+    ImGui::Begin(previewPanelTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
     int rendererSel = (st->bgfxRenderer == AgisBgfxRendererKind::kOpenGL) ? 1 : 0;
     const char* rendererItems[] = {"D3D11", "OpenGL"};
     if (ImGui::Combo("Renderer", &rendererSel, rendererItems, 2)) {
@@ -2742,7 +2854,9 @@ void ModelPreviewFrameStep(HWND hwnd) {
     }
     if (st->lasSourcePointCount > 0 && !st->lasPointCache.empty()) {
       float pxSz = st->lasPointScreenPx;
-      if (ImGui::SliderFloat("点大小(像素)", &pxSz, 1.f, 32.f, "%.0f")) {
+      const std::string ptSizeLabel =
+          PreviewWideToUtf8(std::wstring(AgisPickUiLang(L"点大小(像素)##ptpx", L"Point size (px)##ptpx")));
+      if (ImGui::SliderFloat(ptSizeLabel.c_str(), &pxSz, 1.f, 32.f, "%.0f")) {
         st->lasPointScreenPx = pxSz;
         BuildObjPreviewFromLasPoints(st->lasPointCache, st->lasPointScreenPx, &st->model);
         if (st->bgfxCtx) {
@@ -2753,10 +2867,11 @@ void ModelPreviewFrameStep(HWND hwnd) {
       }
     }
     ImGui::Separator();
-    ImGui::Text("Info");
+    ImGui::TextUnformatted(
+        PreviewWideToUtf8(std::wstring(AgisPickUiLang(L"信息", L"Info"))).c_str());
     std::string infoUtf8 = PreviewWideToUtf8(st->infoPanelText);
     if (infoUtf8.empty()) {
-      infoUtf8 = "No model info.";
+      infoUtf8 = PreviewWideToUtf8(std::wstring(AgisPickUiLang(L"暂无模型信息。", L"No model info.")));
     }
     ImGui::BeginChild("model-info", ImVec2(420.0f, 170.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::TextUnformatted(infoUtf8.c_str());
@@ -2793,7 +2908,9 @@ void ModelPreviewFrameStep(HWND hwnd) {
       st->rotY = 0.0f;
       st->zoom = 2.2f;
     }
-    if (ImGui::Button("Open Model...")) {
+    const std::string openModelBtn =
+        PreviewWideToUtf8(std::wstring(AgisPickUiLang(L"打开模型...", L"Open Model...")));
+    if (ImGui::Button(openModelBtn.c_str())) {
       PostMessageW(hwnd, kPreviewRequestOpenMsg, 0, 0);
     }
     const int vhud = (std::max)(1, vh);
@@ -2817,8 +2934,14 @@ void ModelPreviewFrameStep(HWND hwnd) {
         EvaluatePreviewBottleneck(*st, cpuMsHud, gpuMsHud, drawCallsHud, waitSubmitMsHud, waitRenderMsHud);
     ImGui::Separator();
     ImGui::Text("CPU %.2f ms | GPU %.2f ms | Draw %u", cpuMsHud, gpuMsHud, drawCallsHud);
-    ImGui::Text("瓶颈: %s", PreviewWideToUtf8(bottleneckNow).c_str());
-    ImGui::TextUnformatted("帧时曲线 (ms)");
+    {
+      const std::string bnFmt =
+          PreviewWideToUtf8(std::wstring(AgisPickUiLang(L"瓶颈: %s", L"Bottleneck: %s")));
+      const std::string bottleneckUtf8 = PreviewWideToUtf8(bottleneckNow);
+      ImGui::Text(bnFmt.c_str(), bottleneckUtf8.c_str());
+    }
+    ImGui::TextUnformatted(
+        PreviewWideToUtf8(std::wstring(AgisPickUiLang(L"帧时曲线 (ms)", L"Frame time (ms)"))).c_str());
     {
       std::array<float, 64> plotChrono{};
       int plotN = 0;
@@ -2891,9 +3014,15 @@ void ModelPreviewFrameStep(HWND hwnd) {
       swprintf_s(curveSeg, L"%.2f~%.2f ms", curveMn, curveMx);
     }
     wchar_t line[384]{};
-    swprintf_s(line,
-               L"FPS: %.1f | 帧时: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | 瓶颈: %s | 帧时曲线 %s",
-               st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), curveSeg);
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      swprintf_s(line,
+                 L"FPS: %.1f | frame: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | bottleneck: %s | frame curve %s",
+                 st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), curveSeg);
+    } else {
+      swprintf_s(line,
+                 L"FPS: %.1f | 帧时: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | 瓶颈: %s | 帧时曲线 %s",
+                 st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), curveSeg);
+    }
     st->runtimeHudText = line;
   }
   if (!st->imguiReady) {
@@ -2928,8 +3057,11 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       g_pendingPreviewLoadAs3DTiles = false;
       st->lastFpsTick = GetTickCount();
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
-      st->infoPanelText = L"模型正在后台加载，请稍候...";
-      st->runtimeHudText = L"FPS: -- | 帧时: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | 瓶颈: -- | 帧时曲线 --";
+      st->infoPanelText = ModelPreviewInfoPanelLoadingOrEmpty(false);
+      st->runtimeHudText =
+          AgisGetUiLanguage() == AgisUiLanguage::kEn
+              ? L"FPS: -- | frame: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | bottleneck: -- | frame curve --"
+              : L"FPS: -- | 帧时: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | 瓶颈: -- | 帧时曲线 --";
       FitPreviewCamera(st);
       SetFocus(hwnd);
 #if AGIS_USE_BGFX
@@ -3101,11 +3233,17 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
         st->loading = false;
         ShowPreviewCopyableMessage(
-            hwnd, L"模型预览",
-            L"LAZ 预览需要下列之一：\n"
-            L"（1）在 ../3rdparty/LASzip 放置 LASzip 源码包并重新 CMake 配置编译（推荐，见 3rdparty/README-LASZIP.md）；\n"
-            L"（2）使用 AGIS_USE_GDAL=on 且 GDAL 能读 LAZ 的构建；\n"
-            L"或先将 LAZ 解压/转为 .las。");
+            hwnd, ModelPreviewDialogTitleW(),
+            AgisPickUiLang(
+                L"LAZ 预览需要下列之一：\n"
+                L"（1）在 ../3rdparty/LASzip 放置 LASzip 源码包并重新 CMake 配置编译（推荐，见 3rdparty/README-LASZIP.md）；\n"
+                L"（2）使用 AGIS_USE_GDAL=on 且 GDAL 能读 LAZ 的构建；\n"
+                L"或先将 LAZ 解压/转为 .las。",
+                L"LAZ preview needs one of:\n"
+                L"(1) Put LASzip sources under ../3rdparty/LASzip and reconfigure/rebuild (recommended; see "
+                L"3rdparty/README-LASZIP.md);\n"
+                L"(2) Build with AGIS_USE_GDAL=on where GDAL reads LAZ;\n"
+                L"or decompress/convert LAZ to .las first."));
         DestroyWindow(hwnd);
         return 0;
       }
@@ -3116,8 +3254,10 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
         st->loading = false;
         ShowPreviewCopyableMessage(
-            hwnd, L"模型预览",
-            L"LAS 点数超过内置预览上限（约 2500 万点），为防内存过高已中止。\n请先用外部工具抽稀或切分后再预览。");
+            hwnd, ModelPreviewDialogTitleW(),
+            AgisPickUiLang(L"LAS 点数超过内置预览上限（约 2500 万点），为防内存过高已中止。\n请先用外部工具抽稀或切分后再预览。",
+                           L"LAS point count exceeds the built-in preview cap (~25M); aborted to limit memory.\nThin or split "
+                           L"the file with an external tool, then preview again."));
         DestroyWindow(hwnd);
         return 0;
       }
@@ -3133,13 +3273,17 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         } else {
           const wchar_t* failMsg = nullptr;
           if (!st->tilesLoadDiag.empty()) {
-            failMsg = L"3D Tiles 预览加载失败。";
+            failMsg = AgisPickUiLang(L"3D Tiles 预览加载失败。", L"3D Tiles preview failed to load.");
           } else if (PreviewPathIsLazFile(st->path)) {
-            failMsg = L"LAZ 点云预览失败（详见下方 LASzip/GDAL 说明）。";
+            failMsg = AgisPickUiLang(L"LAZ 点云预览失败（详见下方 LASzip/GDAL 说明）。",
+                                     L"LAZ point cloud preview failed (see LASzip/GDAL details below).");
           } else if (PreviewPathIsLasFile(st->path)) {
-            failMsg = L"LAS 点云预览失败：文件非 LAS、头无效、无点记录或已截断读取出错。";
+            failMsg =
+                AgisPickUiLang(L"LAS 点云预览失败：文件非 LAS、头无效、无点记录或已截断读取出错。",
+                               L"LAS preview failed: not LAS, bad header, no points, or truncated read error.");
           } else {
-            failMsg = L"模型解析失败：OBJ 文件损坏或缺少有效顶点/面。";
+            failMsg = AgisPickUiLang(L"模型解析失败：OBJ 文件损坏或缺少有效顶点/面。",
+                                     L"Model parse failed: corrupt OBJ or no valid vertices/faces.");
           }
           box = failMsg;
           if (!st->tilesLoadDiag.empty()) {
@@ -3147,11 +3291,11 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             box += st->tilesLoadDiag;
           }
           if (PreviewPathIsLazFile(st->path) && !st->lazPreviewDiag.empty()) {
-            box += L"\n\n—— 详情 ——\n";
+            box += std::wstring(L"\n\n") + AgisPickUiLang(L"—— 详情 ——", L"— Details —") + L"\n";
             box += st->lazPreviewDiag;
           }
         }
-        ShowPreviewCopyableMessage(hwnd, L"模型预览", box.c_str());
+        ShowPreviewCopyableMessage(hwnd, ModelPreviewDialogTitleW(), box.c_str());
         DestroyWindow(hwnd);
         return 0;
       }
@@ -3162,7 +3306,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 #if AGIS_USE_BGFX
       // 完整信息面板延后到 GPU/ImGui 就绪后再 Build（避免 stringstream 等与 init 叠在同一消息处理前期）。
       // 加载中进度由 ModelPreviewFrameStep 内 ImGui 绘制；仅无 bgfx 上下文时 WM_PAINT 才走 GDI 后备。
-      st->infoPanelText = L"正在初始化 3D 预览…";
+      st->infoPanelText = AgisPickUiLang(L"正在初始化 3D 预览…", L"Initializing 3D preview…");
       // 大模型 mesh/贴图已在工作线程准备；主线程仅上传 GPU。勿在此 `UpdateWindow`：会同步 WM_PAINT，且 init 前无 bgfx，易与后续卡死叠乘。
       {
         RECT vrcGpu = GetPreviewViewportRect(hwnd);
@@ -3185,8 +3329,10 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         st->workerPackage = {};
         st->hasWorkerPackage = false;
         ShowPreviewCopyableMessage(
-            hwnd, L"模型预览",
-            L"3D 预览初始化失败：无法在 GPU 上创建网格/纹理资源，常见于显存不足、驱动限制或 D3D11 设备异常。请尝试关闭其它占用显存的程序后重试。");
+            hwnd, ModelPreviewDialogTitleW(),
+            AgisPickUiLang(L"3D 预览初始化失败：无法在 GPU 上创建网格/纹理资源，常见于显存不足、驱动限制或 D3D11 设备异常。请尝试关闭其它占用显存的程序后重试。",
+                           L"3D preview init failed: could not create mesh/texture on GPU (often VRAM, driver limits, or "
+                           L"D3D11 device issues). Close other GPU-heavy apps and try again."));
         DestroyWindow(hwnd);
         return 0;
       }
@@ -3246,12 +3392,16 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       if (PromptOpenModelPreviewPath(hwnd, &path, &as3dTiles)) {
         auto* heapPath = new (std::nothrow) std::wstring(std::move(path));
         if (!heapPath) {
-          ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法排队打开模型。");
+          ShowPreviewCopyableMessage(
+              hwnd, ModelPreviewDialogTitleW(),
+              AgisPickUiLang(L"内存不足：无法排队打开模型。", L"Out of memory: cannot queue opening the model."));
           return 0;
         }
         if (!PostMessageW(hwnd, kPreviewDeferredReloadMsg, as3dTiles ? 1u : 0u, reinterpret_cast<LPARAM>(heapPath))) {
           delete heapPath;
-          ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法排队重新加载（PostMessage 失败）。");
+          ShowPreviewCopyableMessage(
+              hwnd, ModelPreviewDialogTitleW(),
+              AgisPickUiLang(L"无法排队重新加载（PostMessage 失败）。", L"Could not queue reload (PostMessage failed)."));
         }
       }
       return 0;
@@ -3270,17 +3420,22 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       st->loadProgress = 0;
       st->loadStage = 0;
       st->loadFailed = false;
-      st->infoPanelText = L"模型正在后台加载，请稍候...";
+      st->infoPanelText = ModelPreviewInfoPanelLoadingOrEmpty(false);
       PreviewSyncPaintLoadingShell(hwnd, st);
       PreviewPrepareForAsyncReload(hwnd, st);
       auto* heapPath = new (std::nothrow) std::wstring(std::move(*pathPtr));
       if (!heapPath) {
-        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"内存不足：无法启动模型加载。");
+        ShowPreviewCopyableMessage(
+            hwnd, ModelPreviewDialogTitleW(),
+            AgisPickUiLang(L"内存不足：无法启动模型加载。", L"Out of memory: cannot start model load."));
         return 0;
       }
       if (!PostMessageW(hwnd, kPreviewStartLoadThreadMsg, as3dTiles ? 1u : 0u, reinterpret_cast<LPARAM>(heapPath))) {
         delete heapPath;
-        ShowPreviewCopyableMessage(hwnd, L"模型预览", L"无法启动加载阶段二（PostMessage 失败）。");
+        ShowPreviewCopyableMessage(
+            hwnd, ModelPreviewDialogTitleW(),
+            AgisPickUiLang(L"无法启动加载阶段二（PostMessage 失败）。",
+                           L"Could not start load phase 2 (PostMessage failed)."));
       }
       return 0;
     }
@@ -3407,37 +3562,69 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
           SetBkMode(hdc, TRANSPARENT);
           SetTextColor(hdc, RGB(28, 40, 56));
           const bool lasWait = PreviewPathIsPointCloudFile(st->path);
+          const bool uiEn = AgisGetUiLanguage() == AgisUiLanguage::kEn;
           const std::wstring line =
-              (st->loadAs3DTiles ? L"3D Tiles 加载中... "
-                                  : lasWait ? L"点云加载中... " : L"模型加载中... ") +
+              (st->loadAs3DTiles
+                   ? (uiEn ? L"Loading 3D Tiles... " : L"3D Tiles 加载中... ")
+                   : lasWait ? (uiEn ? L"Loading point cloud... " : L"点云加载中... ")
+                             : (uiEn ? L"Loading model... " : L"模型加载中... ")) +
               std::to_wstring((std::clamp)(st->loadProgress, 0, 100)) + L"%";
-          const wchar_t* stage = L"准备中...";
+          const wchar_t* stage = uiEn ? L"Preparing..." : L"准备中...";
           if (st->loadAs3DTiles) {
             switch (st->loadStage) {
-              case 1: stage = L"正在解析 tileset 与瓦片网格..."; break;
-              case 4: stage = L"即将完成..."; break;
-              case 9: stage = L"3D Tiles 加载失败"; break;
-              default: break;
+            case 1:
+              stage = uiEn ? L"Parsing tileset and tile meshes..." : L"正在解析 tileset 与瓦片网格...";
+              break;
+            case 4:
+              stage = uiEn ? L"Almost done..." : L"即将完成...";
+              break;
+            case 9:
+              stage = uiEn ? L"3D Tiles load failed" : L"3D Tiles 加载失败";
+              break;
+            default:
+              break;
             }
           } else if (lasWait) {
             switch (st->loadStage) {
-              case 1:
-                stage = PreviewPathIsLazFile(st->path) ? L"正在读取 LAZ 点云（优先 LASzip）..." : L"正在读取 LAS 点云...";
-                break;
-              case 2: stage = L"正在生成预览点斑..."; break;
-              case 4: stage = L"即将完成..."; break;
-              case 9: stage = L"点云读取失败"; break;
-              default: break;
+            case 1:
+              stage = PreviewPathIsLazFile(st->path)
+                          ? (uiEn ? L"Reading LAZ (LASzip first)..." : L"正在读取 LAZ 点云（优先 LASzip）...")
+                          : (uiEn ? L"Reading LAS point cloud..." : L"正在读取 LAS 点云...");
+              break;
+            case 2:
+              stage = uiEn ? L"Building preview splats..." : L"正在生成预览点斑...";
+              break;
+            case 4:
+              stage = uiEn ? L"Almost done..." : L"即将完成...";
+              break;
+            case 9:
+              stage = uiEn ? L"Point cloud read failed" : L"点云读取失败";
+              break;
+            default:
+              break;
             }
           } else {
             switch (st->loadStage) {
-              case 1: stage = L"正在统计模型信息..."; break;
-              case 2: stage = L"正在解析 OBJ 网格..."; break;
-              case 3: stage = L"正在分析贴图层..."; break;
-              case 4: stage = L"正在上传 GPU 资源..."; break;
-              case 5: stage = L"正在构建预览网格(后台)..."; break;
-              case 9: stage = L"模型解析失败"; break;
-              default: break;
+            case 1:
+              stage = uiEn ? L"Gathering model stats..." : L"正在统计模型信息...";
+              break;
+            case 2:
+              stage = uiEn ? L"Parsing OBJ mesh..." : L"正在解析 OBJ 网格...";
+              break;
+            case 3:
+              stage = uiEn ? L"Analyzing texture layers..." : L"正在分析贴图层...";
+              break;
+            case 4:
+              stage = uiEn ? L"Uploading GPU resources..." : L"正在上传 GPU 资源...";
+              break;
+            case 5:
+              stage = uiEn ? L"Building preview mesh (background)..." : L"正在构建预览网格(后台)...";
+              break;
+            case 9:
+              stage = uiEn ? L"Model parse failed" : L"模型解析失败";
+              break;
+            default:
+              break;
             }
           }
           TextOutW(hdc, panel.left + 14, panel.top + 12, line.c_str(), static_cast<int>(line.size()));
@@ -3505,9 +3692,15 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             swprintf_s(curveSeg, L"%.2f~%.2f ms", curveMn, curveMx);
           }
           wchar_t line[384]{};
-          swprintf_s(line,
-                     L"FPS: %.1f | 帧时: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | 瓶颈: %s | 帧时曲线 %s",
-                     st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), curveSeg);
+          if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+            swprintf_s(line,
+                       L"FPS: %.1f | frame: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | bottleneck: %s | frame curve %s",
+                       st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), curveSeg);
+          } else {
+            swprintf_s(line,
+                       L"FPS: %.1f | 帧时: %.2f ms | CPU: %.2f ms | GPU: %.2f ms | Draw: %u | 瓶颈: %s | 帧时曲线 %s",
+                       st->fps, st->lastFrameMs, cpuFrameMs, gpuFrameMs, drawCalls, bottleneck.c_str(), curveSeg);
+          }
           st->runtimeHudText = line;
         }
         DrawAxisOverlay(hdc, vrc, *st);
@@ -3556,7 +3749,8 @@ void OpenModelPreviewWindow(HWND owner, const std::wstring& path) {
   g_pendingPreviewLoadAs3DTiles = false;
   g_pendingPreviewModelPath = path;
   const DWORD exStyle = owner ? WS_EX_TOOLWINDOW : 0;
-  HWND pw = CreateWindowExW(exStyle, kModelPreviewClass, L"模型数据预览",
+  HWND pw = CreateWindowExW(exStyle, kModelPreviewClass,
+                            AgisPickUiLang(L"模型数据预览", L"Model preview"),
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
                             nullptr, GetModuleHandleW(nullptr), nullptr);
   if (pw) {
@@ -3569,7 +3763,8 @@ void OpenModelPreviewWindow3DTiles(HWND owner, const std::wstring& tilesetRootOr
   g_pendingPreviewLoadAs3DTiles = true;
   g_pendingPreviewModelPath = tilesetRootOrFile;
   const DWORD exStyle = owner ? WS_EX_TOOLWINDOW : 0;
-  HWND pw = CreateWindowExW(exStyle, kModelPreviewClass, L"3D Tiles 预览",
+  HWND pw = CreateWindowExW(exStyle, kModelPreviewClass,
+                            AgisPickUiLang(L"3D Tiles 预览", L"3D Tiles preview"),
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 720, owner,
                             nullptr, GetModuleHandleW(nullptr), nullptr);
   if (pw) {

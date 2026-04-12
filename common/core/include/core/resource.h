@@ -153,7 +153,7 @@
 #define IDC_MAP_ORIGIN 50318
 #define IDC_MAP_RESET 50319
 
-/** AGISMapHost 系统菜单栏（地图外壳 `AGISMapShell`）命令 ID；渲染项与主菜单共用 ID_VIEW_RENDER_* */
+/** 主窗「视图 → 地图界面」与 MapHost `WM_COMMAND` 共用；渲染仍用 ID_VIEW_RENDER_* */
 #define IDC_MAP_UI_SHOW_SHORTCUT 50324
 #define IDC_MAP_UI_SHOW_VIS 50325
 #define IDC_MAP_UI_SHOW_BOTTOM 50326
