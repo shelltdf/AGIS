@@ -7,6 +7,9 @@
 #include "map_engine/export.h"
 #include "map_engine/map.h"
 #include "map_engine/map_gpu.h"
+#include "map_host_win32.h"
+#include "map_engine/map_view.h"
+#include "map_engine/scene_graph.h"
 
 /** 地图引擎：文档、图层列表 UI、地图宿主窗口状态与 GDAL 图层工厂（单例）。 */
 class AGIS_MAP_ENGINE_API MapEngine {
@@ -21,6 +24,18 @@ class AGIS_MAP_ENGINE_API MapEngine {
 
   Map& Document() { return doc_; }
   const Map& Document() const { return doc_; }
+
+  /** 默认视口（``MapView``），在 ``InitDefaultMapViewStack`` 中绑定窗口并挂接渲染器与场景根。 */
+  MapView& DefaultMapView() { return defaultMapView_; }
+  const MapView& DefaultMapView() const { return defaultMapView_; }
+
+  SceneGraph& GetSceneGraph() { return sceneGraph_; }
+  const SceneGraph& GetSceneGraph() const { return sceneGraph_; }
+
+  /**
+   * 在已创建的 Win32 宿主 ``HWND`` 就绪后调用：建立默认场景根、``Renderer2D``、``CreateNativeWindow(WinIDFromHwnd(...))``。
+   */
+  void InitDefaultMapViewStack(HWND mapHwnd);
 
   void SetRenderBackend(MapRenderBackend backend);
   MapRenderBackend GetRenderBackend() const;
@@ -62,6 +77,10 @@ class AGIS_MAP_ENGINE_API MapEngine {
   MapEngine() = default;
   friend AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+  SceneGraph sceneGraph_{};
+  MapView defaultMapView_{};
+  SceneNode* defaultSceneRoot_{nullptr};
+
   Map doc_{};
   HWND mapHwnd_{nullptr};
   MapRenderBackend mapRenderBackend_{MapRenderBackend::kGdi};
@@ -77,5 +96,3 @@ class AGIS_MAP_ENGINE_API MapEngine {
   bool mapUiShowBottom_{true};
   bool mapUiShowHint_{true};
 };
-
-AGIS_MAP_ENGINE_API LRESULT CALLBACK MapHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

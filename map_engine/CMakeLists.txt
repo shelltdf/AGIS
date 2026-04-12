@@ -18,21 +18,31 @@ endif()
 set(_ME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_ME_THIRDPARTY "${_ME_ROOT}/../3rdparty")
 
-# 按功能组划分：每组 <组>/include/map_engine/*.h + <组>/src/*.cpp
+# 按功能组划分：每组 <组>/include/map_engine/*.h + <组>/src/*.cpp（另有 platform 组见下）
 # PUBLIC 聚合各组 include，对外仍为 #include "map_engine/map_*.h" 等
+#
+# platform/：与 layer、view 同级；``include/map_engine_demo/platform.h`` 为演示 ``map_engine_demo::Platform``，
+# 不加入本库 PUBLIC（由 ``map_engine_demo`` 目标自行 ``PRIVATE`` 引用）；``win32.cpp`` 仅编入该可执行文件。
 set(_agis_map_engine_sources
   layer/src/map_layer.cpp
   layer/src/map_layer_driver.cpp
   layer/src/map_layer_driver_gdal.cpp
-  document/src/map.cpp
+  map/src/map.cpp
   projection/src/map_projection.cpp
   scene_graph/src/scene_graph.cpp
-  view/src/map_viewport.cpp
+  scene_graph/src/scene_node.cpp
+  view/src/message_queue.cpp
+  view/src/native_window.cpp
+  view/src/map_view.cpp
+  view/src/win32/map_host_win32.cpp
+  view/src/win32/native_window_win32.cpp
+  render/src/renderer.cpp
   render/src/map_gpu.cpp
   render/src/map_gpu_d2d.cpp
   render/src/map_gpu_bgfx.cpp
-  gis_file_io/src/gis_xml.cpp
-  gis_file_io/src/gis_project_xml.cpp
+  io_gis/src/gis_xml.cpp
+  io_gis/src/gis_project_xml.cpp
+  io/src/io.cpp
   engine/src/map_engine.cpp
 )
 if(AGIS_MAP_ENGINE_SHARED)
@@ -46,12 +56,14 @@ endif()
 target_include_directories(agis_map_engine
   PUBLIC
     "${_ME_ROOT}/layer/include"
-    "${_ME_ROOT}/document/include"
+    "${_ME_ROOT}/map/include"
     "${_ME_ROOT}/projection/include"
     "${_ME_ROOT}/scene_graph/include"
     "${_ME_ROOT}/view/include"
+    "${_ME_ROOT}/view/src/win32"
     "${_ME_ROOT}/render/include"
-    "${_ME_ROOT}/gis_file_io/include"
+    "${_ME_ROOT}/io_gis/include"
+    "${_ME_ROOT}/io/include"
     "${_ME_ROOT}/engine/include"
   PRIVATE
     "${_ME_ROOT}/layer/src"

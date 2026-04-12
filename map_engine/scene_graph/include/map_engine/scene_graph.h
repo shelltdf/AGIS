@@ -1,8 +1,12 @@
 #pragma once
 
+#include "map_engine/scene_node.h"
+
+#include <memory>
+#include <vector>
+
 /**
- * 场景图（功能组占位）：后续可承载节点树、局部/世界变换、可见性裁剪与拾取遍历，
- * 与 ``layer`` / ``render`` 等模块对接。
+ * 场景图容器：持有若干根 ``SceneNode``，供 ``Renderer::cull`` 遍历整树。
  */
 class SceneGraph {
  public:
@@ -13,4 +17,11 @@ class SceneGraph {
   SceneGraph& operator=(const SceneGraph&) = delete;
   SceneGraph(SceneGraph&&) = default;
   SceneGraph& operator=(SceneGraph&&) = default;
+
+  void addRoot(std::unique_ptr<SceneNode> node);
+  std::vector<std::unique_ptr<SceneNode>>& roots() { return roots_; }
+  const std::vector<std::unique_ptr<SceneNode>>& roots() const { return roots_; }
+
+ private:
+  std::vector<std::unique_ptr<SceneNode>> roots_;
 };

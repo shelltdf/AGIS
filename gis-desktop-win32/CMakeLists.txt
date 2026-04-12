@@ -795,12 +795,16 @@ endif()
 
 # map_engine：独立演示（顶层 Map 宿主 + GDI+ / agis_common）。
 if(WIN32)
-  set(_map_engine_demo_sources ${AGIS_MAP_ENGINE_DIR}/demo/src/map_engine_demo_main.cpp)
+  set(_map_engine_demo_sources
+    ${AGIS_MAP_ENGINE_DIR}/demo/src/entry.cpp
+    ${AGIS_MAP_ENGINE_DIR}/demo/src/demo.cpp
+    ${AGIS_MAP_ENGINE_DIR}/platform/src/win32.cpp)
   if(NOT AGIS_MAP_ENGINE_SHARED)
     list(APPEND _map_engine_demo_sources ${_agis_workbench_imgui_sources})
   endif()
   add_executable(map_engine_demo WIN32 ${_map_engine_demo_sources})
   target_include_directories(map_engine_demo PRIVATE
+    ${AGIS_MAP_ENGINE_DIR}/platform/include
     ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/app
