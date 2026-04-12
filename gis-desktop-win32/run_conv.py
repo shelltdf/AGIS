@@ -9,18 +9,20 @@ from typing import Optional
 from agis_build_util import ensure_project_built
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.normpath(os.path.join(ROOT, ".."))
+BUILD_ROOT = os.path.join(REPO_ROOT, "build")
 
 
 def find_exe() -> Optional[str]:
     patterns = [
-        os.path.join(ROOT, "build", "Release", "AGIS-Convert.exe"),
-        os.path.join(ROOT, "build", "Debug", "AGIS-Convert.exe"),
-        os.path.join(ROOT, "build", "AGIS-Convert.exe"),
+        os.path.join(BUILD_ROOT, "Release", "AGIS-Convert.exe"),
+        os.path.join(BUILD_ROOT, "Debug", "AGIS-Convert.exe"),
+        os.path.join(BUILD_ROOT, "AGIS-Convert.exe"),
     ]
     for p in patterns:
         if os.path.isfile(p):
             return p
-    for path in glob.glob(os.path.join(ROOT, "build", "**", "AGIS-Convert.exe"), recursive=True):
+    for path in glob.glob(os.path.join(BUILD_ROOT, "**", "AGIS-Convert.exe"), recursive=True):
         return path
     return None
 

@@ -23,7 +23,7 @@ CMake 通过 `gis-desktop-win32/cmake/AGISBundledDraco.cmake` 检测该路径；
 
 ## 头文件生成说明
 
-配置工程后，Draco 会在 **`gis-desktop-win32/build/draco/draco_features.h`** 生成特性头文件；`gis-desktop-win32/CMakeLists.txt` 已将 **`${CMAKE_BINARY_DIR}`** 加入 `agis_desktop` 的 include（与 Draco 上游 CMake 行为一致）。
+配置工程后，Draco 会在 **`<仓库根>/build/draco/draco_features.h`**（默认 out-of-source 构建目录）生成特性头文件；`gis-desktop-win32/CMakeLists.txt` 已将 **`${CMAKE_BINARY_DIR}`** 加入 `agis_desktop` 的 include（与 Draco 上游 CMake 行为一致）。
 
 ## 下载失败（Windows）
 

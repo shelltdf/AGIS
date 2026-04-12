@@ -7,7 +7,7 @@
       "displayName": "Windows VS2022 (inherits repo default: bundled DLL + ui_engine DLL)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build"
+      "binaryDir": "${sourceDir}/../build"
     },
     {
       "name": "release-static",
@@ -24,7 +24,7 @@
       "name": "win-ninja",
       "displayName": "Windows Ninja（单配置，增量编译通常快于 VS 多工程；需安装 ninja）",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-ninja",
+      "binaryDir": "${sourceDir}/../build-ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }

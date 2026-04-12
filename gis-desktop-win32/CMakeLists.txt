@@ -360,12 +360,7 @@ add_library(agis_workbench_app STATIC
   src/app/workbench/main_chrome.cpp
   src/app/workbench/main_debug.cpp
   src/app/workbench/main_panels.cpp
-  src/app/converter/main_convert.cpp
-  src/app/preview/model_preview/main_model_preview.cpp
-  src/app/preview/model_preview/model_preview_bgfx.cpp
-  src/app/preview/model_preview/tiles_gltf_loader.cpp
-  src/app/preview/tile_preview/tile_raster_preview.cpp
-  src/app/preview/tile_preview/tile_preview_protocol_picker.cpp
+  src/app/workbench/workbench_tool_launch.cpp
   src/app/workbench/help_data_drivers.cpp
 )
 if(NOT AGIS_MAP_ENGINE_SHARED)
@@ -386,12 +381,99 @@ target_include_directories(agis_workbench_app PRIVATE
   ${AGIS_BGFX_DIR}/examples/common/imgui
   ${AGIS_BGFX_DIR}/examples/common/debugdraw
   ${AGIS_THIRDPARTY_ROOT}
-  ${AGIS_THIRDPARTY_ROOT}/tinygltf
 )
 target_link_libraries(agis_workbench_app PRIVATE agis_common agis_ui_engine agis_bgfx_vendor)
 target_link_libraries(agis_workbench_app PUBLIC agis_map_engine)
 target_compile_definitions(agis_workbench_app PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_compile_features(agis_workbench_app PRIVATE cxx_std_20)
+
+# 模型 / 瓦片预览：仅编入独立 exe，不进入 AGIS 主程序。
+add_library(agis_model_preview_lib STATIC
+  src/app/preview/model_preview/main_model_preview.cpp
+  src/app/preview/model_preview/model_preview_bgfx.cpp
+  src/app/preview/model_preview/tiles_gltf_loader.cpp
+)
+# 须始终编入 bgfx 的 imgui 封装（含 imguiCreate），与 model_preview_bgfx 内 bgfx::init 同属 exe 内静态链。
+# 若改从 agis_map_engine.dll 导入 ImGui，则会调用 DLL 内另一份未 init 的 bgfx，加载完成弹 ImGui 时崩溃。
+target_sources(agis_model_preview_lib PRIVATE ${_agis_workbench_imgui_sources})
+target_include_directories(agis_model_preview_lib PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
+  ${AGIS_BX_DIR}/include
+  $<$<AND:$<PLATFORM_ID:Windows>,$<CXX_COMPILER_ID:MSVC>>:${AGIS_BX_DIR}/include/compat/msvc>
+  ${AGIS_BX_DIR}/3rdparty
+  ${AGIS_BGFX_DIR}/include
+  ${AGIS_BGFX_DIR}/3rdparty
+  ${AGIS_BGFX_DIR}/3rdparty/khronos
+  ${AGIS_BGFX_DIR}/examples/17-drawstress
+  ${AGIS_BGFX_DIR}/examples/common
+  ${AGIS_BGFX_DIR}/examples/common/imgui
+  ${AGIS_BGFX_DIR}/examples/common/debugdraw
+  ${AGIS_THIRDPARTY_ROOT}
+  ${AGIS_THIRDPARTY_ROOT}/tinygltf
+)
+target_link_libraries(agis_model_preview_lib PRIVATE agis_common agis_ui_engine agis_bgfx_vendor)
+target_compile_definitions(agis_model_preview_lib PRIVATE
+  UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs}
+  AGIS_USE_BGFX=1 BX_CONFIG_DEBUG=0
+)
+target_compile_features(agis_model_preview_lib PRIVATE cxx_std_20)
+if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_model_preview_lib PRIVATE GDAL::GDAL)
+  if(TARGET PROJ::proj)
+    target_link_libraries(agis_model_preview_lib PRIVATE PROJ::proj)
+  endif()
+endif()
+if(AGIS_HAVE_DRACO)
+  target_compile_definitions(agis_model_preview_lib PRIVATE TINYGLTF_ENABLE_DRACO=1)
+  target_link_libraries(agis_model_preview_lib PRIVATE draco::draco)
+  target_include_directories(agis_model_preview_lib PRIVATE
+    "${AGIS_THIRDPARTY_ROOT}/draco/src"
+    "${CMAKE_BINARY_DIR}")
+endif()
+if(AGIS_HAVE_LASZIP)
+  target_compile_definitions(agis_model_preview_lib PRIVATE AGIS_HAVE_LASZIP=1)
+  target_include_directories(agis_model_preview_lib PRIVATE
+    "${AGIS_LASZIP_ROOT}/dll"
+    "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
+  target_link_libraries(agis_model_preview_lib PRIVATE "${AGIS_LASZIP_TARGET}")
+endif()
+if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_model_preview_lib PRIVATE AGIS_HAVE_BASISU=1)
+else()
+  target_compile_definitions(agis_model_preview_lib PRIVATE AGIS_HAVE_BASISU=0)
+endif()
+if(MSVC)
+  target_compile_options(agis_model_preview_lib PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+endif()
+
+add_library(agis_tile_preview_lib STATIC
+  src/app/preview/tile_preview/tile_raster_preview.cpp
+  src/app/preview/tile_preview/tile_preview_protocol_picker.cpp
+)
+target_include_directories(agis_tile_preview_lib PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/app
+  ${AGIS_UI_ENGINE_PUBLIC_INCLUDES}
+)
+target_link_libraries(agis_tile_preview_lib PRIVATE agis_common agis_ui_engine)
+target_compile_definitions(agis_tile_preview_lib PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
+target_compile_features(agis_tile_preview_lib PRIVATE cxx_std_20)
+if(AGIS_USE_GDAL AND GDAL_FOUND)
+  target_link_libraries(agis_tile_preview_lib PRIVATE GDAL::GDAL)
+  if(TARGET PROJ::proj)
+    target_link_libraries(agis_tile_preview_lib PRIVATE PROJ::proj)
+  endif()
+endif()
+if(AGIS_HAVE_BASISU)
+  target_compile_definitions(agis_tile_preview_lib PRIVATE AGIS_HAVE_BASISU=1)
+else()
+  target_compile_definitions(agis_tile_preview_lib PRIVATE AGIS_HAVE_BASISU=0)
+endif()
+if(MSVC)
+  target_compile_options(agis_tile_preview_lib PRIVATE /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+endif()
 
 add_library(agis_converter_app STATIC
   src/app/common/gis_document/main_gis_xml.cpp
@@ -449,16 +531,7 @@ target_include_directories(agis_desktop PRIVATE
   ${AGIS_BGFX_DIR}/examples/common/debugdraw
   # 须置于 bgfx「examples/common」之后，否则会优先命中仓库根 3rdparty/imgui（无 imguiCreate 封装）
   ${AGIS_THIRDPARTY_ROOT}
-  ${AGIS_THIRDPARTY_ROOT}/tinygltf
 )
-if(AGIS_HAVE_DRACO)
-  target_compile_definitions(agis_desktop PRIVATE TINYGLTF_ENABLE_DRACO=1)
-  target_link_libraries(agis_desktop PRIVATE draco::draco)
-  # Draco 源码 `#include "draco/..."`：`src/` + 配置时生成的 `build/draco/draco_features.h`（Draco 用顶层 CMAKE_BINARY_DIR）
-  target_include_directories(agis_desktop PRIVATE
-    "${AGIS_THIRDPARTY_ROOT}/draco/src"
-    "${CMAKE_BINARY_DIR}")
-endif()
 # bx/bgfx 头文件要求 C++20（与 agis_bgfx_vendor 一致）
 target_compile_features(agis_desktop PRIVATE cxx_std_20)
 
@@ -470,39 +543,18 @@ if(AGIS_USE_GDAL AND GDAL_FOUND)
     target_link_libraries(agis_desktop PRIVATE PROJ::proj)
   endif()
 endif()
-if(AGIS_HAVE_DRACO)
-  target_compile_definitions(agis_workbench_app PRIVATE TINYGLTF_ENABLE_DRACO=1)
-  target_link_libraries(agis_workbench_app PRIVATE draco::draco)
-  target_include_directories(agis_workbench_app PRIVATE
-    "${AGIS_THIRDPARTY_ROOT}/draco/src"
-    "${CMAKE_BINARY_DIR}")
-endif()
 
 if(AGIS_HAVE_LASZIP)
-  target_compile_definitions(agis_workbench_app PRIVATE AGIS_HAVE_LASZIP=1)
   target_compile_definitions(agis_converter_app PRIVATE AGIS_HAVE_LASZIP=1)
-  target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_LASZIP=1)
-  target_include_directories(agis_workbench_app PRIVATE
-    "${AGIS_LASZIP_ROOT}/dll"
-    "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
-  target_link_libraries(agis_workbench_app PRIVATE "${AGIS_LASZIP_TARGET}")
   target_include_directories(agis_converter_app PRIVATE
     "${AGIS_LASZIP_ROOT}/dll"
     "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
   target_link_libraries(agis_converter_app PRIVATE "${AGIS_LASZIP_TARGET}")
-  target_include_directories(agis_desktop PRIVATE
-    "${AGIS_LASZIP_ROOT}/dll"
-    "${CMAKE_BINARY_DIR}/agis_bundled_laszip/include")
-  target_link_libraries(agis_desktop PRIVATE "${AGIS_LASZIP_TARGET}")
 endif()
 if(AGIS_HAVE_BASISU)
-  target_compile_definitions(agis_workbench_app PRIVATE AGIS_HAVE_BASISU=1)
   target_compile_definitions(agis_converter_app PRIVATE AGIS_HAVE_BASISU=1)
-  target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=1)
 else()
-  target_compile_definitions(agis_workbench_app PRIVATE AGIS_HAVE_BASISU=0)
   target_compile_definitions(agis_converter_app PRIVATE AGIS_HAVE_BASISU=0)
-  target_compile_definitions(agis_desktop PRIVATE AGIS_HAVE_BASISU=0)
 endif()
 
 add_executable(agis_convert_gui WIN32
@@ -563,7 +615,7 @@ set_target_properties(agis_model_preview_gui PROPERTIES
 )
 target_compile_definitions(agis_model_preview_gui PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_link_libraries(agis_model_preview_gui PRIVATE
-  agis_workbench_app
+  agis_model_preview_lib
   agis_common
   agis_bgfx_vendor
   agis_ui_engine
@@ -607,9 +659,8 @@ set_target_properties(agis_tile_preview_gui PROPERTIES
 )
 target_compile_definitions(agis_tile_preview_gui PRIVATE UNICODE _UNICODE NOMINMAX ${_agis_gdal_defs})
 target_link_libraries(agis_tile_preview_gui PRIVATE
-  agis_workbench_app
+  agis_tile_preview_lib
   agis_common
-  agis_bgfx_vendor
   agis_ui_engine
   comctl32
   comdlg32
@@ -617,10 +668,6 @@ target_link_libraries(agis_tile_preview_gui PRIVATE
   gdi32
   gdiplus
   shell32
-  d3d11
-  dxgi
-  d3dcompiler
-  opengl32
 )
 if(AGIS_USE_GDAL AND GDAL_FOUND)
   target_link_libraries(agis_tile_preview_gui PRIVATE GDAL::GDAL)
@@ -664,7 +711,7 @@ if(WIN32 AND AGIS_UI_ENGINE_SHARED)
 endif()
 
 if(WIN32 AND AGIS_MAP_ENGINE_SHARED)
-  foreach(_agis_me_exe IN ITEMS agis_desktop agis_convert_gui agis_model_preview_gui agis_tile_preview_gui)
+  foreach(_agis_me_exe IN ITEMS agis_desktop agis_convert_gui)
     add_custom_command(TARGET ${_agis_me_exe} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:agis_map_engine>
@@ -673,6 +720,12 @@ if(WIN32 AND AGIS_MAP_ENGINE_SHARED)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:agis_common>
         $<TARGET_FILE_DIR:${_agis_me_exe}>)
+  endforeach()
+  foreach(_agis_copy_common IN ITEMS agis_model_preview_gui agis_tile_preview_gui)
+    add_custom_command(TARGET ${_agis_copy_common} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:agis_common>
+        $<TARGET_FILE_DIR:${_agis_copy_common}>)
   endforeach()
 endif()
 
@@ -967,7 +1020,7 @@ if(WIN32 AND AGIS_USE_GDAL AND GDAL_FOUND AND AGIS_GDAL_BUNDLED AND TARGET gener
   endif()
 endif()
 
-add_dependencies(agis_desktop ${_agis_convert_tools})
+add_dependencies(agis_desktop ${_agis_convert_tools} agis_convert_gui agis_model_preview_gui agis_tile_preview_gui)
 if(WIN32)
   foreach(_tool IN LISTS _agis_convert_tools)
     add_custom_command(TARGET agis_desktop POST_BUILD

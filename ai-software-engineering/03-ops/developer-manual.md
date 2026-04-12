@@ -35,14 +35,22 @@ cmake --build build --config Release
 python build.py
 ```
 
-或直接：
+或直接（**构建目录在仓库根**，与 `CMakePresets.json` / `build.py` 一致）：
 
 ```text
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# 在仓库根目录
+cmake -S gis-desktop-win32 -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-- Visual Studio 多配置生成器下，可执行文件通常在 `build/Release/AGIS.exe`（以 `CMakeLists.txt` 中输出名为准）。
+或在 `gis-desktop-win32/` 下：
+
+```text
+cmake -B ../build -DCMAKE_BUILD_TYPE=Release
+cmake --build ../build --config Release
+```
+
+- Visual Studio 多配置生成器下，可执行文件通常在 **仓库根** `build/Release/AGIS.exe`（以 `CMakeLists.txt` 中输出名为准）。
 
 ## 3. 运行与测试
 

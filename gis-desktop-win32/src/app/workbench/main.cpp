@@ -466,7 +466,12 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
       }
       if (id == ID_TOOL_DATA_CONVERT) {
-        ShowDataConvertWindow(hwnd);
+        if (!AgisLaunchSiblingToolExe(hwnd, L"AGIS-Convert.exe", nullptr)) {
+          MessageBoxW(hwnd,
+                      AgisPickUiLang(L"无法启动 AGIS-Convert.exe。\n请确认其与 AGIS.exe 位于同一输出目录。",
+                                     L"Could not start AGIS-Convert.exe.\nMake sure it sits next to AGIS.exe in the same output folder."),
+                      AgisTr(AgisUiStr::MenuToolsConvert), MB_OK | MB_ICONWARNING);
+        }
         return 0;
       }
       if (id == ID_HELP_DATA_DRIVERS) {
@@ -494,7 +499,6 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         AgisSaveUiLanguagePreference();
         AgisReapplyWorkbenchMenu(hwnd);
         ApplyWorkbenchPanelsL10n();
-        RefreshConvertWindowL10nIfOpen();
         if (g_hwndMap && IsWindow(g_hwndMap)) {
           MapEngine::Instance().ApplyMapHostUiLanguage(g_hwndMap);
         }
@@ -658,27 +662,6 @@ bool RegisterClasses(HINSTANCE inst) {
   if (!RegisterClassW(&wc)) {
     return false;
   }
-  wc.lpfnWndProc = ConvertWndProc;
-  wc.lpszClassName = kConvertClass;
-  wc.style = 0;
-  if (!RegisterClassW(&wc)) {
-    return false;
-  }
-  wc.lpfnWndProc = ModelPreviewWndProc;
-  wc.lpszClassName = kModelPreviewClass;
-  wc.style = CS_OWNDC;
-  wc.hbrBackground = nullptr;
-  if (!RegisterClassW(&wc)) {
-    return false;
-  }
-  wc.lpfnWndProc = TilePreviewWndProc;
-  wc.lpszClassName = kTilePreviewClass;
-  wc.style = 0;
-  // 避免 WM_ERASEBKGND 先擦除再 WM_PAINT 导致的 XYZ/瓦片预览闪烁；擦除在 WM_PAINT 内与内容一并绘制
-  wc.hbrBackground = nullptr;
-  if (!RegisterClassW(&wc)) {
-    return false;
-  }
   return true;
 }
 
@@ -739,33 +722,12 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int cmdShow) {
   }
   AgisUiDebugPickInit(hInst);
   MSG msg{};
-  msg.wParam = 0;
-  bool quit = false;
-  while (!quit) {
-    if (HWND pw = FindWindowW(kModelPreviewClass, nullptr); pw && IsWindow(pw)) {
-      ModelPreviewPumpPriorityLoadMessages(pw);
+  while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+    if (AgisUiDebugPickHandleMessage(&msg)) {
+      continue;
     }
-    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-      if (msg.message == WM_QUIT) {
-        quit = true;
-        break;
-      }
-      if (AgisUiDebugPickHandleMessage(&msg)) {
-        continue;
-      }
-      TranslateMessage(&msg);
-      DispatchMessageW(&msg);
-    }
-    if (quit) {
-      break;
-    }
-    HWND pw = FindWindowW(kModelPreviewClass, nullptr);
-    if (pw && IsWindow(pw)) {
-      ModelPreviewFrameStep(pw);
-    }
-    if (!PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
-      (void)MsgWaitForMultipleObjectsEx(0, nullptr, 50, QS_ALLINPUT, 0);
-    }
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
   }
   AgisUiDebugPickShutdown();
   UiGdiplusShutdown();

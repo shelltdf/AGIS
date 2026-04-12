@@ -4,7 +4,7 @@
 调用顺序固定：**先** ``cmake -B`` **再** ``cmake --build``；增量编译由 **MSBuild / Ninja** 等后端决定。**并行度**：默认 ``cmake --build --parallel <逻辑核数>``；可用 ``AGIS_BUILD_JOBS`` 或 ``CMAKE_BUILD_PARALLEL_LEVEL`` 覆盖。
 
 - **快速迭代**：``--quick`` 仅构建 ``agis_desktop``（依赖仍会增量编译），明显缩短改代码后的等待；发版/全量仍用默认（不传 ``--quick``）。也可用环境变量 ``AGIS_BUILD_TARGETS=agis_desktop,map_engine_demo``（逗号分隔）覆盖目标列表。
-- **Ninja**：``--ninja`` 使用生成器 Ninja 与 ``build-ninja`` 目录（需 ``ninja`` 在 PATH）；常与更快增量搭配。也可使用预设 ``cmake --preset win-ninja`` 后 ``cmake --build build-ninja``。
+- **Ninja**：``--ninja`` 使用生成器 Ninja 与仓库根目录下 ``build-ninja``（需 ``ninja`` 在 PATH）。也可 ``cmake --preset win-ninja`` 后 ``cmake --build ../build-ninja``（在 ``gis-desktop-win32`` 下配置时）。
 - **IDE**：配置时开启 ``CMAKE_EXPORT_COMPILE_COMMANDS``，并把 ``compile_commands.json`` 复制到仓库根，便于 clangd / Cursor C++ 索引。
 - **MSVC**：顶层 CMake 为 C/CXX 开启 ``/MP``（单 cl 内多文件并行），缩短大目标的编译阶段。
 
@@ -22,8 +22,9 @@ from typing import Optional
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(ROOT, ".."))
-BUILD_VS = os.path.join(ROOT, "build")
-BUILD_NINJA = os.path.join(ROOT, "build-ninja")
+# 构建树放在仓库根目录，避免与源码目录混杂、便于多工具共用同一 out-of-source build。
+BUILD_VS = os.path.join(REPO_ROOT, "build")
+BUILD_NINJA = os.path.join(REPO_ROOT, "build-ninja")
 
 # 与 CMakeLists.txt 中 add_executable 对齐；新增 exe 时请同步更新。
 _AGIS_CONVERT_CLI = (
@@ -144,7 +145,7 @@ def _reconfigure_gdal_after_bundled_deps(cmake: str, cfg: list[str], jobs: int, 
     if r.returncode != 0:
         print(
             "warning: prebuild of agis_sqlite3/expat failed; OGR OSM/GPKG or Expat-based drivers may remain disabled. "
-            "Build those targets manually then run `cmake -B build ...` again.",
+            "Build those targets manually then re-run `python build.py` or `cmake -B <repo>/build ...` again.",
             file=sys.stderr,
         )
         return
@@ -185,7 +186,7 @@ def main() -> int:
     parser.add_argument(
         "--ninja",
         action="store_true",
-        help="使用 Ninja + gis-desktop-win32/build-ninja（需 ninja 在 PATH；与 Visual Studio 的 build/ 互不兼容）",
+        help="使用 Ninja + 仓库根目录 build-ninja（需 ninja 在 PATH；与 Visual Studio 的 build/ 互不兼容）",
     )
     args = parser.parse_args()
 

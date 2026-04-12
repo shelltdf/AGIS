@@ -47,6 +47,9 @@ void GisOpenFromPath(HWND owner, const std::wstring& path);
 void GisSaveAs(HWND owner);
 void GisSave(HWND owner);
 
+/// 启动与当前进程同目录下的工具 exe（如 ``AGIS-Convert.exe``）；``params`` 可为空。
+bool AgisLaunchSiblingToolExe(HWND owner, const wchar_t* exeName, const wchar_t* params = nullptr);
+
 void WriteConvertLog(HWND hwnd, const wchar_t* line);
 void LayoutConvertWindow(HWND hwnd);
 void FillConvertTypeCombo(HWND combo);

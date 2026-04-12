@@ -61,7 +61,7 @@ def _cmake_prefix_path(desktop: str) -> Optional[str]:
 
 def main() -> int:
     desktop = _desktop_project_dir()
-    build = os.path.join(desktop, "build")
+    build = os.path.normpath(os.path.join(desktop, "..", "build"))
     cmake = shutil.which("cmake")
     if not cmake:
         print("cmake not found in PATH", file=sys.stderr)

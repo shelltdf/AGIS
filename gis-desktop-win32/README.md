@@ -13,7 +13,7 @@ set AGIS_USE_GDAL=off
 python build.py
 ```
 
-产物：`build/Release/AGIS.exe`。
+产物：仓库根目录下 `../build/Release/AGIS.exe`（相对本目录）。
 
 ## GDAL / PROJ（捆绑源码）
 
