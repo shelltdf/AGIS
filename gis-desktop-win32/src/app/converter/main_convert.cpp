@@ -40,6 +40,7 @@
 #include "utils/ui_theme.h"
 #include "utils/agis_ui_l10n.h"
 #include "common/app_core/main_app.h"
+#include "common/app_core/satellite_app_menu.h"
 #include "core/main_globals.h"
 #include "common/gis_document/main_gis_xml.h"
 #include "map_engine/map_engine.h"
@@ -94,6 +95,12 @@ LRESULT CALLBACK ConvertPanelForwardSubclass(HWND hwnd, UINT msg, WPARAM wParam,
     FillRect(hdc, &rc, brush);
     DeleteObject(brush);
     return 1;
+  }
+  // 子控件挂在分组框/面板上时，WM_CTLCOLOR* 发到面板而非根对话框；必须转发才能套用 ConvertWndProc 里的暗色刷。
+  if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN || msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX) {
+    if (HWND root = GetAncestor(hwnd, GA_ROOT)) {
+      return SendMessageW(root, msg, wParam, lParam);
+    }
   }
   if (msg == WM_COMMAND || msg == WM_VSCROLL || msg == WM_HSCROLL) {
     if (HWND parent = GetParent(hwnd)) {
@@ -1323,8 +1330,8 @@ void ShowConvertHelpDialog(HWND hwnd, bool inputSide, bool typeHelp) {
 void SyncConvertInfoByType(HWND hwnd, bool inputSide) {
   const int typeId = inputSide ? IDC_CONV_INPUT_TYPE : IDC_CONV_OUTPUT_TYPE;
   const int infoId = inputSide ? IDC_CONV_INPUT_INFO : IDC_CONV_OUTPUT_INFO;
-  HWND hType = GetDlgItem(hwnd, typeId);
-  HWND hInfo = GetDlgItem(hwnd, infoId);
+  HWND hType = FindConvertCtrl(hwnd, typeId);
+  HWND hInfo = FindConvertCtrl(hwnd, infoId);
   if (!hType || !hInfo) {
     return;
   }
@@ -2362,7 +2369,8 @@ std::wstring AssembleConvertProcessCommandLine(HWND hwnd) {
   if (!v.pair_supported) {
     std::wstring why;
     IsConvertPairSupportedBySubtype(hwnd, &why);
-    return why.empty() ? L"<当前输入/输出组合不支持>" : (L"<不支持: " + why + L">");
+    return why.empty() ? std::wstring(AgisPickUiLang(L"<当前输入/输出组合不支持>", L"<This input/output pair is not supported>"))
+                       : (std::wstring(AgisPickUiLang(L"<不支持: ", L"<Not supported: ")) + why + L">");
   }
   const int inMajor = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_INPUT_TYPE), CB_GETCURSEL, 0, 0));
   const int outMajor = static_cast<int>(SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_OUTPUT_TYPE), CB_GETCURSEL, 0, 0));
@@ -2374,7 +2382,9 @@ std::wstring AssembleConvertProcessCommandLine(HWND hwnd) {
   if (slash != std::wstring::npos) {
     exeDir.resize(slash + 1);
   }
-  const std::wstring exePath = exeName ? (exeDir + exeName) : L"<请选择不同输入/输出类型>";
+  const std::wstring exePath =
+      exeName ? (exeDir + exeName)
+              : std::wstring(AgisPickUiLang(L"<请选择不同输入/输出类型>", L"<Pick different input/output types>"));
   wchar_t inPath[1024]{};
   wchar_t outPath[1024]{};
   GetWindowTextW(FindConvertCtrl(hwnd, IDC_CONV_INPUT_PATH), inPath, 1024);
@@ -2907,6 +2917,20 @@ void ShowDataConvertWindow(HWND owner) {
   }
 }
 
+static void SyncConvertProgressBarForTheme(HWND hwnd) {
+  HWND pb = FindConvertCtrl(hwnd, IDC_CONV_PROGRESS);
+  if (!pb || !IsWindow(pb)) {
+    return;
+  }
+  if (AgisEffectiveUiDark()) {
+    SendMessageW(pb, PBM_SETBKCOLOR, 0, RGB(52, 54, 60));
+    SendMessageW(pb, PBM_SETBARCOLOR, 0, RGB(100, 160, 255));
+  } else {
+    SendMessageW(pb, PBM_SETBKCOLOR, 0, static_cast<COLORREF>(0xFF000000));  // CLR_DEFAULT
+    SendMessageW(pb, PBM_SETBARCOLOR, 0, static_cast<COLORREF>(0xFF000000));
+  }
+}
+
 LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   static HBRUSH s_bgLight = nullptr;
   static HBRUSH s_editLight = nullptr;
@@ -3263,6 +3287,7 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       }
       SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_PROGRESS), PBM_SETRANGE, 0, MAKELPARAM(0, 100));
       SendMessageW(FindConvertCtrl(hwnd, IDC_CONV_PROGRESS), PBM_SETPOS, 0, 0);
+      SyncConvertProgressBarForTheme(hwnd);
       s_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
                               WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                               CW_USEDEFAULT, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -3290,8 +3315,23 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       g_convertMidViewportH = 0;
       UpdateConvertCmdlinePreview(hwnd);
       LayoutConvertWindow(hwnd);
+      AgisSetSatelliteLangThemeMenu(hwnd);
+      AgisApplyTheme(hwnd);
+      SyncConvertProgressBarForTheme(hwnd);
       return 0;
     }
+    case WM_INITMENUPOPUP:
+      AgisOnSatelliteLangThemeMenuPopup(hwnd, reinterpret_cast<HMENU>(wParam));
+      return 0;
+    case WM_SETTINGCHANGE:
+      if (lParam && wcscmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0 &&
+          g_themeMenu == AgisThemeMenu::kFollowSystem) {
+        AgisApplyTheme(hwnd);
+        SyncConvertProgressBarForTheme(hwnd);
+        RedrawWindow(hwnd, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+      }
+      break;
     case WM_CTLCOLORDLG: {
       if (AgisEffectiveUiDark()) {
         if (!s_bgDark) {
@@ -3367,6 +3407,24 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       SetBkColor(hdc, RGB(255, 255, 255));
       SetTextColor(hdc, RGB(28, 36, 52));
       return reinterpret_cast<INT_PTR>(s_editLight);
+    }
+    case WM_CTLCOLORBTN: {
+      HDC hdc = reinterpret_cast<HDC>(wParam);
+      SetBkMode(hdc, OPAQUE);
+      if (AgisEffectiveUiDark()) {
+        if (!s_bgDark) {
+          s_bgDark = CreateSolidBrush(RGB(40, 42, 48));
+        }
+        SetBkColor(hdc, RGB(40, 42, 48));
+        SetTextColor(hdc, RGB(210, 212, 220));
+        return reinterpret_cast<INT_PTR>(s_bgDark);
+      }
+      if (!s_bgLight) {
+        s_bgLight = CreateSolidBrush(RGB(245, 248, 252));
+      }
+      SetBkColor(hdc, RGB(245, 248, 252));
+      SetTextColor(hdc, RGB(30, 42, 62));
+      return reinterpret_cast<INT_PTR>(s_bgLight);
     }
     case WM_SIZE:
       LayoutConvertWindow(hwnd);
@@ -3450,6 +3508,25 @@ LRESULT CALLBACK ConvertWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       return 0;
     }
     case WM_COMMAND:
+      if (HIWORD(wParam) == 0 || HIWORD(wParam) == 1) {
+        if (AgisTryHandleSatelliteLangThemeMenuCommand(
+                hwnd, LOWORD(wParam),
+                [](HWND h) {
+                  ApplyConvertWindowChromeAndCombosL10n(h);
+                  RefreshConvertSettingPanels(h);
+                  SyncConvertInfoByType(h, true);
+                  SyncConvertInfoByType(h, false);
+                  UpdateConvertCmdlinePreview(h);
+                  LayoutConvertWindow(h);
+                },
+                [](HWND h) {
+                  SyncConvertProgressBarForTheme(h);
+                  RedrawWindow(h, nullptr, nullptr,
+                               RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+                })) {
+          return 0;
+        }
+      }
       if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CONV_INPUT_TYPE) {
         RebuildConvertSubtypeComboForSide(hwnd, true);
         SyncConvertInfoByType(hwnd, true);

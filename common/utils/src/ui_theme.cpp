@@ -64,13 +64,53 @@ AGIS_COMMON_API bool AgisWindowsPrefersDarkApps() {
 
 AGIS_COMMON_API bool AgisEffectiveUiDark() {
   switch (g_themeMenu) {
-    case AgisThemeMenu::kDark:
-      return true;
-    case AgisThemeMenu::kLight:
-      return false;
-    default:
-      return AgisWindowsPrefersDarkApps();
+  case AgisThemeMenu::kDark:
+    return true;
+  case AgisThemeMenu::kLight:
+    return false;
+  default:
+    return AgisWindowsPrefersDarkApps();
   }
+}
+
+/// uxtheme 未文档化导出：让菜单栏等与进程首选模式一致（Win10 1903+ / Win11 常见组合）。
+static void AgisSyncPreferredAppModeForProcess(bool dark) {
+  HMODULE ux = GetModuleHandleW(L"uxtheme.dll");
+  if (!ux) {
+    return;
+  }
+  using SetPreferredAppModeFn = int(WINAPI*)(int);
+  using FlushMenuThemesFn = void(WINAPI*)();
+  auto setPm = reinterpret_cast<SetPreferredAppModeFn>(GetProcAddress(ux, MAKEINTRESOURCEA(135)));
+  auto flush = reinterpret_cast<FlushMenuThemesFn>(GetProcAddress(ux, MAKEINTRESOURCEA(141)));
+  if (!setPm) {
+    return;
+  }
+  // 0=Default, 1=AllowDark — 暗色时允许系统绘制暗色菜单/部分壳控件
+  setPm(dark ? 1 : 0);
+  if (flush) {
+    flush();
+  }
+}
+
+namespace {
+
+BOOL CALLBACK AgisThemeEnumChildProc(HWND hwnd, LPARAM lpDark) {
+  ApplySetWindowTheme(hwnd, lpDark != 0);
+  EnumChildWindows(hwnd, AgisThemeEnumChildProc, lpDark);
+  return TRUE;
+}
+
+}  // namespace
+
+AGIS_COMMON_API void AgisApplyExplorerDarkThemeToTree(HWND root) {
+  if (!root || !IsWindow(root)) {
+    return;
+  }
+  const bool dark = AgisEffectiveUiDark();
+  const LPARAM lp = dark ? 1 : 0;
+  ApplySetWindowTheme(root, dark);
+  EnumChildWindows(root, AgisThemeEnumChildProc, lp);
 }
 
 AGIS_COMMON_API void AgisApplyDwmDark(HWND hwnd, bool dark) {
@@ -84,24 +124,16 @@ AGIS_COMMON_API void AgisApplyDwmDark(HWND hwnd, bool dark) {
 
 AGIS_COMMON_API void AgisApplyTheme(HWND mainHwnd) {
   const bool dark = AgisEffectiveUiDark();
+  AgisSyncPreferredAppModeForProcess(dark);
   UiSetPanelThemeDark(dark);
   RecreateMainClientBrush(dark);
 
   if (mainHwnd && IsWindow(mainHwnd)) {
     AgisApplyDwmDark(mainHwnd, dark);
 
-    if (g_hwndToolbar) {
-      ApplySetWindowTheme(g_hwndToolbar, dark);
-    }
-    if (g_hwndStatus) {
-      ApplySetWindowTheme(g_hwndStatus, dark);
-    }
-    if (g_hwndLayerStrip) {
-      ApplySetWindowTheme(g_hwndLayerStrip, dark);
-    }
-    if (g_hwndPropsStrip) {
-      ApplySetWindowTheme(g_hwndPropsStrip, dark);
-    }
+    // 主框架 / 转换 / 预览等：对根窗口及全部子控件应用 Explorer 暗色主题（原仅对白名单窗口调用，SDI 主窗漏掉）。
+    AgisApplyExplorerDarkThemeToTree(mainHwnd);
+
     if (g_hwndMapShell && IsWindow(g_hwndMapShell)) {
       AgisApplyDwmDark(g_hwndMapShell, dark);
     }
@@ -127,6 +159,7 @@ AGIS_COMMON_API void AgisApplyTheme(HWND mainHwnd) {
   }
   if (g_hwndConvertDlg && IsWindow(g_hwndConvertDlg)) {
     AgisApplyDwmDark(g_hwndConvertDlg, dark);
+    AgisApplyExplorerDarkThemeToTree(g_hwndConvertDlg);
     RedrawWindow(g_hwndConvertDlg, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
   }
   if (g_hwndHelpDataDriversDlg && IsWindow(g_hwndHelpDataDriversDlg)) {

@@ -6,7 +6,9 @@
 
 #include "common/app_core/main_app.h"
 #include "core/main_globals.h"
+#include "utils/agis_ui_l10n.h"
 #include "utils/ui_font.h"
+#include "utils/ui_theme.h"
 #include "debug/ui_debug_pick.h"
 #include "ui_engine/gdiplus_ui.h"
 
@@ -27,6 +29,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
   InitCommonControlsEx(&icc);
   UiGdiplusInit();
   UiFontInit();
+  AgisLoadUiLanguagePreference();
+  AgisLoadThemePreference();
   if (!RegisterTilePreviewClass(hInst)) {
     UiFontShutdown();
     UiGdiplusShutdown();

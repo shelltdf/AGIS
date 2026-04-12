@@ -389,6 +389,7 @@ target_compile_features(agis_workbench_app PRIVATE cxx_std_20)
 
 # 模型 / 瓦片预览：仅编入独立 exe，不进入 AGIS 主程序。
 add_library(agis_model_preview_lib STATIC
+  src/app/common/app_core/satellite_app_menu.cpp
   src/app/preview/model_preview/main_model_preview.cpp
   src/app/preview/model_preview/model_preview_bgfx.cpp
   src/app/preview/model_preview/tiles_gltf_loader.cpp
@@ -449,6 +450,7 @@ if(MSVC)
 endif()
 
 add_library(agis_tile_preview_lib STATIC
+  src/app/common/app_core/satellite_app_menu.cpp
   src/app/preview/tile_preview/tile_raster_preview.cpp
   src/app/preview/tile_preview/tile_preview_protocol_picker.cpp
 )
@@ -476,6 +478,7 @@ if(MSVC)
 endif()
 
 add_library(agis_converter_app STATIC
+  src/app/common/app_core/satellite_app_menu.cpp
   src/app/common/gis_document/main_gis_xml.cpp
   src/app/converter/main_convert.cpp
 )

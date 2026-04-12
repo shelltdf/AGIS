@@ -43,7 +43,9 @@
 #include <gdiplus.h>
 #include "utils/ui_font.h"
 #include "utils/agis_ui_l10n.h"
+#include "utils/ui_theme.h"
 #include "common/app_core/main_app.h"
+#include "common/app_core/satellite_app_menu.h"
 #include "core/main_globals.h"
 
 #ifndef GIS_DESKTOP_HAVE_GDAL
@@ -177,6 +179,8 @@ struct ModelPreviewState {
   /// LAZ 经 GDAL 打开失败时由 CPL/实现侧填写的说明（LAS 路径通常为空）。
   std::wstring lazPreviewDiag;
   bool loadAs3DTiles = false;
+  /// 与 ``OpenModelPreviewWindow`` / ``OpenModelPreviewWindow3DTiles`` 的标题一致，供切换语言时 ``SetWindowText``。
+  bool windowTitleIs3DTiles = false;
   bool sourceIs3DTiles = false;
   std::wstring tilesLoadDiag;
   /// 资源类失败（如 std::bad_alloc）；与解析错误文案区分。
@@ -1660,13 +1664,14 @@ POINT ProjectPoint(const PreviewVec3& v, float rotX, float rotY, float zoom, con
 void DrawModelPreview(HDC hdc, const RECT& rc, const ModelPreviewState& st) {
   // OpenGL 风格：偏清亮底色 + 蓝色实体；DX11 风格：偏深底色 + 青蓝线框。
   const bool glStyle = st.backend == PreviewRenderBackend::kOpenGL;
-  const COLORREF bgColor = glStyle ? RGB(245, 248, 252) : RGB(31, 35, 42);
-  const COLORREF edgeColor = glStyle ? RGB(36, 82, 156) : RGB(112, 196, 255);
+  const bool uiDark = AgisEffectiveUiDark();
+  const COLORREF bgColor =
+      glStyle ? (uiDark ? RGB(34, 38, 46) : RGB(245, 248, 252)) : RGB(31, 35, 42);
+  const COLORREF edgeColor =
+      glStyle ? (uiDark ? RGB(130, 175, 235) : RGB(36, 82, 156)) : RGB(112, 196, 255);
   const COLORREF fillColor =
       RGB(static_cast<int>(st.model.kdR * 255.0f), static_cast<int>(st.model.kdG * 255.0f), static_cast<int>(st.model.kdB * 255.0f));
-  HBRUSH bg = CreateSolidBrush(RGB(245, 248, 252));
-  DeleteObject(bg);
-  bg = CreateSolidBrush(bgColor);
+  HBRUSH bg = CreateSolidBrush(bgColor);
   FillRect(hdc, &rc, bg);
   DeleteObject(bg);
   HPEN pen = CreatePen(PS_SOLID, glStyle ? 1 : 2, edgeColor);
@@ -1721,7 +1726,11 @@ void DrawModelPreviewOpenGL(HWND hwnd, const RECT& rc, const ModelPreviewState& 
   if (vpW < 1) vpW = 1;
   if (vpH < 1) vpH = 1;
   glViewport(0, 0, vpW, vpH);
-  glClearColor(0.10f, 0.12f, 0.16f, 1.0f);
+  if (AgisEffectiveUiDark()) {
+    glClearColor(0.10f, 0.12f, 0.16f, 1.0f);
+  } else {
+    glClearColor(0.96f, 0.973f, 0.988f, 1.0f);
+  }
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
   glMatrixMode(GL_PROJECTION);
@@ -3048,6 +3057,30 @@ void ModelPreviewFrameStep(HWND hwnd) {
 }
 #endif
 
+void AgisModelPreviewOnLanguageChanged(HWND hwnd) {
+  auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  const wchar_t* cap = (st && st->windowTitleIs3DTiles)
+                             ? AgisPickUiLang(L"3D Tiles 预览", L"3D Tiles preview")
+                             : AgisPickUiLang(L"模型数据预览", L"Model preview");
+  SetWindowTextW(hwnd, cap);
+  if (st) {
+    st->runtimeHudText =
+        AgisGetUiLanguage() == AgisUiLanguage::kEn
+            ? L"FPS: -- | frame: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | bottleneck: -- | frame curve --"
+            : L"FPS: -- | 帧时: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | 瓶颈: -- | 帧时曲线 --";
+    if (st->loading && !st->loadFailed) {
+      bool noPath = st->path.empty();
+#if AGIS_USE_BGFX
+      noPath = noPath && st->pendingCliAutoLoadPath.empty();
+#endif
+      st->infoPanelText = ModelPreviewInfoPanelLoadingOrEmpty(noPath);
+    } else {
+      st->infoPanelText = BuildModelPreviewInfoText(*st);
+    }
+  }
+  InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_CREATE: {
@@ -3055,6 +3088,7 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       st->path = g_pendingPreviewModelPath;
       st->loadAs3DTiles = g_pendingPreviewLoadAs3DTiles;
       g_pendingPreviewLoadAs3DTiles = false;
+      st->windowTitleIs3DTiles = st->loadAs3DTiles;
       st->lastFpsTick = GetTickCount();
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
       st->infoPanelText = ModelPreviewInfoPanelLoadingOrEmpty(false);
@@ -3064,6 +3098,8 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
               : L"FPS: -- | 帧时: -- ms | CPU: -- ms | GPU: -- ms | Draw: -- | 瓶颈: -- | 帧时曲线 --";
       FitPreviewCamera(st);
       SetFocus(hwnd);
+      AgisSetSatelliteLangThemeMenu(hwnd);
+      AgisApplyTheme(hwnd);
 #if AGIS_USE_BGFX
       // 先起空场景 + 进度条 → kPreviewLoadedMsg → ImGui 同步创建；命令行第二段加载在首帧 ModelPreviewFrameStep 末尾再 Start（避免同批消息在首帧前 teardown）。
       // 与「Open Model」一样走主线程 teardown + 工作线程读盘，避免首帧直接卡在读盘/GPU 上。
@@ -3219,6 +3255,25 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
       }
       return 0;
     }
+    case WM_INITMENUPOPUP:
+      AgisOnSatelliteLangThemeMenuPopup(hwnd, reinterpret_cast<HMENU>(wParam));
+      return 0;
+    case WM_SETTINGCHANGE:
+      if (lParam && wcscmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0 &&
+          g_themeMenu == AgisThemeMenu::kFollowSystem) {
+        AgisApplyTheme(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      break;
+    case WM_COMMAND:
+      if (HIWORD(wParam) == 0 || HIWORD(wParam) == 1) {
+        if (AgisTryHandleSatelliteLangThemeMenuCommand(
+                hwnd, LOWORD(wParam), AgisModelPreviewOnLanguageChanged,
+                [](HWND h) { InvalidateRect(h, nullptr, FALSE); })) {
+          return 0;
+        }
+      }
+      break;
     case kPreviewLoadedMsg: {
       auto* st = reinterpret_cast<ModelPreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
       if (!st) return 0;
@@ -3549,18 +3604,19 @@ LRESULT CALLBACK ModelPreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 #endif
           HFONT uiFont = UiGetAppFont();
           HFONT oldFont = uiFont ? reinterpret_cast<HFONT>(SelectObject(hdc, uiFont)) : nullptr;
-          HBRUSH bg = CreateSolidBrush(RGB(188, 200, 218));
+          const bool loadUiDark = AgisEffectiveUiDark();
+          HBRUSH bg = CreateSolidBrush(loadUiDark ? RGB(32, 36, 44) : RGB(188, 200, 218));
           FillRect(hdc, &vrc, bg);
           DeleteObject(bg);
           const int vw = (std::max)(1L, vrc.right - vrc.left);
           const int vh = (std::max)(1L, vrc.bottom - vrc.top);
           const RECT panel{vrc.left + vw / 2 - 220, vrc.top + vh / 2 - 60, vrc.left + vw / 2 + 220, vrc.top + vh / 2 + 60};
-          HBRUSH panelBrush = CreateSolidBrush(RGB(210, 220, 236));
+          HBRUSH panelBrush = CreateSolidBrush(loadUiDark ? RGB(42, 48, 58) : RGB(210, 220, 236));
           FillRect(hdc, &panel, panelBrush);
           DeleteObject(panelBrush);
           FrameRect(hdc, &panel, reinterpret_cast<HBRUSH>(GetStockObject(GRAY_BRUSH)));
           SetBkMode(hdc, TRANSPARENT);
-          SetTextColor(hdc, RGB(28, 40, 56));
+          SetTextColor(hdc, loadUiDark ? RGB(224, 228, 236) : RGB(28, 40, 56));
           const bool lasWait = PreviewPathIsPointCloudFile(st->path);
           const bool uiEn = AgisGetUiLanguage() == AgisUiLanguage::kEn;
           const std::wstring line =

@@ -50,6 +50,11 @@ void GisSave(HWND owner);
 /// 启动与当前进程同目录下的工具 exe（如 ``AGIS-Convert.exe``）；``params`` 可为空。
 bool AgisLaunchSiblingToolExe(HWND owner, const wchar_t* exeName, const wchar_t* params = nullptr);
 
+/// 模型预览窗：切换界面语言后更新标题并重绘（由卫星菜单回调）。
+void AgisModelPreviewOnLanguageChanged(HWND hwnd);
+/// 瓦片预览窗：切换界面语言后更新标题并重绘。
+void AgisTilePreviewOnLanguageChanged(HWND hwnd);
+
 void WriteConvertLog(HWND hwnd, const wchar_t* line);
 void LayoutConvertWindow(HWND hwnd);
 void FillConvertTypeCombo(HWND combo);

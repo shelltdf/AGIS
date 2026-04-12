@@ -37,7 +37,9 @@ constexpr Gdiplus::PixelFormat k24bppRgb = static_cast<Gdiplus::PixelFormat>(0x2
 
 #include "utils/ui_font.h"
 #include "utils/agis_ui_l10n.h"
+#include "utils/ui_theme.h"
 #include "common/app_core/main_app.h"
+#include "common/app_core/satellite_app_menu.h"
 #include "core/main_globals.h"
 
 // `tile_preview/`：本地磁盘上的瓦片/栅格信息采样预览（目录 z/x/y、TMS、本地 tileset.json 元数据、单图、MBTiles/GPKG 等）。
@@ -1046,6 +1048,21 @@ static void TileFillRectSemi(HDC hdc, int x, int y, int w, int h, BYTE a, BYTE r
   gx.FillRectangle(&br, x, y, w, h);
 }
 
+static bool TilePreviewUiDark() { return AgisEffectiveUiDark(); }
+
+/// 文字衬底（半透明矩形）在亮/暗主题下的 RGB。
+static void TilePreviewTextBackdropRgb(BYTE* r, BYTE* g, BYTE* b) {
+  if (TilePreviewUiDark()) {
+    *r = 40;
+    *g = 44;
+    *b = 54;
+  } else {
+    *r = 251;
+    *g = 253;
+    *b = 255;
+  }
+}
+
 /// 在半透明衬底上绘制多行文字（GDI），避免与底图混在一起。
 static void TileDrawTextBlockSemiBg(HDC hdc, const wchar_t* text, RECT boxRc, int pad, BYTE bgAlpha) {
   if (!text) {
@@ -1061,7 +1078,9 @@ static void TileDrawTextBlockSemiBg(HDC hdc, const wchar_t* text, RECT boxRc, in
   if (bgRc.bottom > boxRc.bottom) {
     bgRc.bottom = boxRc.bottom;
   }
-  TileFillRectSemi(hdc, bgRc.left, bgRc.top, bgRc.right - bgRc.left, bgRc.bottom - bgRc.top, bgAlpha, 250, 252, 255);
+  BYTE br = 0, bg = 0, bb = 0;
+  TilePreviewTextBackdropRgb(&br, &bg, &bb);
+  TileFillRectSemi(hdc, bgRc.left, bgRc.top, bgRc.right - bgRc.left, bgRc.bottom - bgRc.top, bgAlpha, br, bg, bb);
   RECT drawRc = measureRc;
   if (drawRc.right > boxRc.right) {
     drawRc.right = boxRc.right;
@@ -1083,7 +1102,9 @@ static void TileDrawTextLineSemiBg(HDC hdc, const wchar_t* text, RECT lineRc, in
   tr.bottom = lineRc.bottom;
   DrawTextW(hdc, text, -1, &tr, DT_CALCRECT | DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
   InflateRect(&tr, padH, padV);
-  TileFillRectSemi(hdc, tr.left, tr.top, tr.right - tr.left, tr.bottom - tr.top, bgAlpha, 252, 254, 255);
+  BYTE lr = 0, lg = 0, lb = 0;
+  TilePreviewTextBackdropRgb(&lr, &lg, &lb);
+  TileFillRectSemi(hdc, tr.left, tr.top, tr.right - tr.left, tr.bottom - tr.top, bgAlpha, lr, lg, lb);
   DrawTextW(hdc, text, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
@@ -1257,15 +1278,20 @@ static void TilePaintSlippyOptionsPanel(HDC hdc, RECT cr, TilePreviewState* st) 
     return;
   }
   const RECT prc = TileSlippyOptionsPanelRect(cr);
-  TileFillRectSemi(hdc, prc.left, prc.top, prc.right - prc.left, prc.bottom - prc.top, 250, 252, 254, 255);
-  HBRUSH frameBr = CreateSolidBrush(RGB(186, 198, 218));
+  const bool dark = TilePreviewUiDark();
+  if (dark) {
+    TileFillRectSemi(hdc, prc.left, prc.top, prc.right - prc.left, prc.bottom - prc.top, 250, 34, 38, 48);
+  } else {
+    TileFillRectSemi(hdc, prc.left, prc.top, prc.right - prc.left, prc.bottom - prc.top, 250, 252, 254, 255);
+  }
+  HBRUSH frameBr = CreateSolidBrush(dark ? RGB(72, 80, 98) : RGB(186, 198, 218));
   FrameRect(hdc, &prc, frameBr);
   DeleteObject(frameBr);
   if (HFONT f = UiGetAppFont()) {
     SelectObject(hdc, f);
   }
   SetBkMode(hdc, TRANSPARENT);
-  SetTextColor(hdc, RGB(28, 36, 52));
+  SetTextColor(hdc, dark ? RGB(230, 234, 242) : RGB(28, 36, 52));
   RECT titleRc{prc.left + 10, prc.top + 6, prc.right - 10, prc.top + 22};
   DrawTextW(hdc,
             AgisPickUiLang(L"输入源投影 → 算法 → 显示 → 屏幕",
@@ -3224,7 +3250,7 @@ static void TileFillSlippyLetterboxGaps(HDC hdc, const RECT& full, const RECT& i
   if (full.left == inner.left && full.right == inner.right && full.top == inner.top && full.bottom == inner.bottom) {
     return;
   }
-  HBRUSH br = CreateSolidBrush(RGB(236, 240, 245));
+  HBRUSH br = CreateSolidBrush(TilePreviewUiDark() ? RGB(22, 24, 30) : RGB(236, 240, 245));
   if (inner.top > full.top) {
     RECT r{full.left, full.top, full.right, inner.top};
     FillRect(hdc, &r, br);
@@ -3261,7 +3287,7 @@ static void TilePaintSlippyTiles(HDC hdc, TilePreviewState* st, const TileSlippy
   g.SetCompositingQuality(Gdiplus::CompositingQualityHighSpeed);
   g.SetClip(Gdiplus::Rect(static_cast<INT>(imgArea.left), static_cast<INT>(imgArea.top),
                           static_cast<INT>((std::max)(1, lay.aw)), static_cast<INT>((std::max)(1, lay.ah))));
-  Gdiplus::SolidBrush miss(Gdiplus::Color(255, 238, 240, 245));
+  Gdiplus::SolidBrush miss(TilePreviewUiDark() ? Gdiplus::Color(255, 44, 48, 60) : Gdiplus::Color(255, 238, 240, 245));
   if (st->slippyProjection == TileSlippyProjection::kWebMercatorGrid) {
     for (int ty = lay.ty0; ty <= lay.ty1; ++ty) {
       for (int tx = lay.tx0; tx <= lay.tx1; ++tx) {
@@ -3314,7 +3340,7 @@ static void TilePaintSlippyHud(HDC hdc, TilePreviewState* st, const TileSlippyPa
     SelectObject(hdc, f);
   }
   SetBkMode(hdc, TRANSPARENT);
-  SetTextColor(hdc, RGB(28, 36, 52));
+  SetTextColor(hdc, TilePreviewUiDark() ? RGB(230, 234, 242) : RGB(28, 36, 52));
 
   wchar_t status[768]{};
   if (lay.tooMany) {
@@ -3450,8 +3476,29 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         TilePreviewShowLoadError(hwnd, loadRep);
       }
       DragAcceptFiles(hwnd, TRUE);
+      AgisSetSatelliteLangThemeMenu(hwnd);
+      AgisApplyTheme(hwnd);
       return 0;
     }
+    case WM_INITMENUPOPUP:
+      AgisOnSatelliteLangThemeMenuPopup(hwnd, reinterpret_cast<HMENU>(wParam));
+      return 0;
+    case WM_SETTINGCHANGE:
+      if (lParam && wcscmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0 &&
+          g_themeMenu == AgisThemeMenu::kFollowSystem) {
+        AgisApplyTheme(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      break;
+    case WM_COMMAND:
+      if (HIWORD(wParam) == 0 || HIWORD(wParam) == 1) {
+        if (AgisTryHandleSatelliteLangThemeMenuCommand(
+                hwnd, LOWORD(wParam), AgisTilePreviewOnLanguageChanged,
+                [](HWND h) { InvalidateRect(h, nullptr, FALSE); })) {
+          return 0;
+        }
+      }
+      break;
     case WM_SIZE:
       return 0;
     case WM_LBUTTONDOWN: {
@@ -3565,7 +3612,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         st->pointerGeoValid = false;
         st->lastPointerQuantX = INT_MIN;
         st->lastPointerQuantY = INT_MIN;
-        st->tilePointerStatusLine = L"鼠标已离开窗口";
+        st->tilePointerStatusLine = AgisPickUiLang(L"鼠标已离开窗口", L"Pointer left the window");
         InvalidateRect(hwnd, nullptr, FALSE);
       }
       return 0;
@@ -3646,7 +3693,8 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       HDC hdc = CreateCompatibleDC(hdcWnd);
       HBITMAP memBmp = CreateCompatibleBitmap(hdcWnd, cw, ch);
       HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(hdc, memBmp));
-      HBRUSH bg = CreateSolidBrush(RGB(252, 252, 252));
+      const bool uiDark = TilePreviewUiDark();
+      HBRUSH bg = CreateSolidBrush(uiDark ? RGB(30, 30, 34) : RGB(252, 252, 252));
       FillRect(hdc, &cr, bg);
       DeleteObject(bg);
       if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
@@ -3660,22 +3708,24 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
           SelectObject(hdc, f);
         }
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(32, 42, 64));
+        SetTextColor(hdc, uiDark ? RGB(224, 228, 236) : RGB(32, 42, 64));
         RECT openRc = TileOpenButtonRect(cr);
-        HBRUSH btnBg = CreateSolidBrush(RGB(232, 240, 252));
+        HBRUSH btnBg = CreateSolidBrush(uiDark ? RGB(52, 62, 84) : RGB(232, 240, 252));
         FillRect(hdc, &openRc, btnBg);
         DeleteObject(btnBg);
         Rectangle(hdc, openRc.left, openRc.top, openRc.right, openRc.bottom);
         DrawTextW(hdc, AgisPickUiLang(L"打开…", L"Open…"), -1, &openRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         RECT closeRc = TileCloseButtonRect(cr);
-        HBRUSH closeBg = CreateSolidBrush(RGB(252, 236, 236));
+        HBRUSH closeBg = CreateSolidBrush(uiDark ? RGB(72, 42, 42) : RGB(252, 236, 236));
         FillRect(hdc, &closeRc, closeBg);
         DeleteObject(closeBg);
         Rectangle(hdc, closeRc.left, closeRc.top, closeRc.right, closeRc.bottom);
         DrawTextW(hdc, AgisPickUiLang(L"关闭", L"Close"), -1, &closeRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         if (st->mode == TilePreviewState::Mode::kSlippyQuadtree) {
           RECT optBtnRc = TileOptionsButtonRect(cr);
-          HBRUSH optBg = CreateSolidBrush(st->showOptionsPanel ? RGB(200, 216, 248) : RGB(236, 242, 252));
+          HBRUSH optBg = CreateSolidBrush(
+              st->showOptionsPanel ? (uiDark ? RGB(72, 88, 120) : RGB(200, 216, 248))
+                                   : (uiDark ? RGB(44, 50, 64) : RGB(236, 242, 252)));
           FillRect(hdc, &optBtnRc, optBg);
           DeleteObject(optBg);
           Rectangle(hdc, optBtnRc.left, optBtnRc.top, optBtnRc.right, optBtnRc.bottom);
@@ -3683,7 +3733,7 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         if (TilePreviewHasLoadedPreviewContent(st)) {
           RECT copyBtnRc = TileCopySceneInfoButtonRect(cr, st);
-          HBRUSH copyBg = CreateSolidBrush(RGB(236, 242, 252));
+          HBRUSH copyBg = CreateSolidBrush(uiDark ? RGB(44, 50, 64) : RGB(236, 242, 252));
           FillRect(hdc, &copyBtnRc, copyBg);
           DeleteObject(copyBg);
           Rectangle(hdc, copyBtnRc.left, copyBtnRc.top, copyBtnRc.right, copyBtnRc.bottom);
@@ -3782,6 +3832,66 @@ LRESULT CALLBACK TilePreviewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       break;
   }
   return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/// 切换界面语言后刷新主说明区 / 底部状态条文案（不重扫磁盘瓦片索引）。
+static void TilePreviewRebuildLocalizedStrings(HWND hwnd, TilePreviewState* st) {
+  if (!hwnd || !st) {
+    return;
+  }
+  st->tilePointerStatusLine = AgisPickUiLang(L"移动鼠标查看坐标", L"Move the pointer to see coordinates");
+  TilePreviewUpdatePointerGeo(st, hwnd, st->lastPointerClient);
+
+  if (st->rootPath.empty()) {
+    st->hint = AgisPickUiLang(
+        L"请使用「Open…」、拖放或命令行传入本机路径：XYZ/TMS 目录、单张栅格、本地 tileset.json（3D Tiles 元数据）、或 .mbtiles/.gpkg（需 GDAL）。不支持 http(s)/WMTS 等网络地址。",
+        L"Use Open…, drag-drop, or a command-line path: XYZ/TMS folder, single raster, local tileset.json (3D Tiles "
+        L"metadata), or .mbtiles/.gpkg (needs GDAL). http(s)/WMTS and other network URLs are not supported.");
+    return;
+  }
+
+  if (st->mode == TilePreviewState::Mode::kSlippyQuadtree && st->tileCount >= 1) {
+    std::wostringstream hs;
+    if (AgisGetUiLanguage() == AgisUiLanguage::kEn) {
+      hs << L"[Slippy quadtree / XYZ] Indexed " << st->tileCount
+         << L" tiles. Drag to pan, wheel changes Z, Ctrl+wheel changes tile pixel size.";
+#if GIS_DESKTOP_HAVE_GDAL
+      hs << L"\nWith GDAL: equirectangular / equal-area display uses PROJ (display CRS → EPSG:3857) per-pixel resampling.";
+#endif
+    } else {
+      hs << L"【平面四叉树 / XYZ】已索引 " << st->tileCount
+         << L" 个图块。拖拽平移，滚轮换级，Ctrl+滚轮改片元尺度。"
+#if GIS_DESKTOP_HAVE_GDAL
+         << L"\n启用 GDAL 时：等经纬 / 等积圆柱显示由 PROJ（显示 CRS→EPSG:3857）逐像素重采样。"
+#endif
+          ;
+    }
+    st->hint = hs.str();
+    return;
+  }
+
+  if (st->mode == TilePreviewState::Mode::kThreeDTilesMeta) {
+    if (const auto tilesetPathOpt = FindTilesetJsonPath(st->rootPath)) {
+      st->hint = BuildThreeDTilesDashboard(st->rootPath, *tilesetPathOpt, st->bvHint);
+    }
+    return;
+  }
+
+  if (!st->samplePath.empty() && st->bmp && st->bmp->GetLastStatus() == Gdiplus::Ok) {
+    st->hint = std::wstring(AgisPickUiLang(L"单图采样预览：\n", L"Single-image sample preview:\n")) + st->samplePath;
+    return;
+  }
+
+  TilePreviewLoadFromPath(hwnd, st, st->rootPath, nullptr);
+}
+
+void AgisTilePreviewOnLanguageChanged(HWND hwnd) {
+  SetWindowTextW(hwnd, AgisPickUiLang(L"本地瓦片预览 · XYZ / 3D Tiles 元数据",
+                                       L"Local tile preview · XYZ / 3D Tiles metadata"));
+  if (auto* st = reinterpret_cast<TilePreviewState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) {
+    TilePreviewRebuildLocalizedStrings(hwnd, st);
+  }
+  InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 void OpenTileRasterPreviewWindow(HWND owner, const std::wstring& path) {

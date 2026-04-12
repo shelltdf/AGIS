@@ -7,6 +7,7 @@
 #include "utils/ui_font.h"
 #include "debug/ui_debug_pick.h"
 #include "utils/ui_theme.h"
+#include "utils/agis_ui_l10n.h"
 #include "common/app_core/main_app.h"
 #include "core/main_globals.h"
 
@@ -53,6 +54,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
   INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES | ICC_PROGRESS_CLASS};
   InitCommonControlsEx(&icc);
   UiFontInit();
+  AgisLoadUiLanguagePreference();
+  AgisLoadThemePreference();
   if (!RegisterConvertClass(hInst)) {
     UiFontShutdown();
     return 1;

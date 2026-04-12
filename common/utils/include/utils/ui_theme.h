@@ -24,6 +24,9 @@ AGIS_COMMON_API void AgisApplyTheme(HWND mainHwnd);
 /** 仅同步 DWM 沉浸式暗色标题栏（弹出窗在 `WM_CREATE` 末尾调用）。 */
 AGIS_COMMON_API void AgisApplyDwmDark(HWND hwnd, bool dark);
 
+/** 对 `root` 及其全部子窗口应用 Explorer 亮/暗视觉（`SetWindowTheme`），使按钮、分组框、下拉框等与主题一致。 */
+AGIS_COMMON_API void AgisApplyExplorerDarkThemeToTree(HWND root);
+
 AGIS_COMMON_API void AgisLoadThemePreference();
 AGIS_COMMON_API void AgisSaveThemePreference();
 

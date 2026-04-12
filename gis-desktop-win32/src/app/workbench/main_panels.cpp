@@ -57,6 +57,9 @@ void CopyTextToClipboard(HWND owner, const std::wstring& text) {
 }
 constexpr UINT_PTR kLayerListSubclassId = 5;
 
+static HBRUSH g_layerListBoxBgDark = nullptr;
+static HBRUSH g_layerListBoxBgLight = nullptr;
+
 static void LayerListSyncUiAfterOp(HWND listbox, HWND mainFrame, int newSelIndex) {
   MapEngine::Instance().RefreshLayerList(listbox);
   const int n = MapEngine::Instance().GetLayerCount();
@@ -245,6 +248,25 @@ LRESULT CALLBACK LayerPaneProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         return TRUE;
       }
       break;
+    }
+    case WM_CTLCOLORLISTBOX: {
+      HDC hdc = reinterpret_cast<HDC>(wParam);
+      const bool d = AgisEffectiveUiDark();
+      SetBkMode(hdc, OPAQUE);
+      if (d) {
+        if (!g_layerListBoxBgDark) {
+          g_layerListBoxBgDark = CreateSolidBrush(RGB(34, 38, 46));
+        }
+        SetBkColor(hdc, RGB(34, 38, 46));
+        SetTextColor(hdc, RGB(220, 222, 228));
+        return reinterpret_cast<LRESULT>(g_layerListBoxBgDark);
+      }
+      if (!g_layerListBoxBgLight) {
+        g_layerListBoxBgLight = CreateSolidBrush(RGB(252, 252, 255));
+      }
+      SetBkColor(hdc, RGB(252, 252, 255));
+      SetTextColor(hdc, RGB(28, 36, 52));
+      return reinterpret_cast<LRESULT>(g_layerListBoxBgLight);
     }
     case WM_ERASEBKGND:
       return 1;
